@@ -1,4 +1,0 @@
-    Updating crates.io index
-error: no matching package named `soroban-token-contract` found
-location searched: crates.io index
-required by package `acbu_minting v0.1.0 (C:\Users\USER\ACBU\acbu-smart-contract\acbu_minting)`

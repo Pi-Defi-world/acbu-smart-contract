@@ -1,11 +1,12 @@
 #![cfg(test)]
 
-use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env, String as SorobanString};
+use acbu_minting::{MintingContract, MintingContractClient};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 
 #[test]
 fn test_initialize() {
     let env = Env::default();
+    env.mock_all_auths();
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
     let reserve_tracker = Address::generate(&env);
@@ -26,13 +27,14 @@ fn test_initialize() {
     );
 
     assert_eq!(client.get_fee_rate(), fee_rate);
-    assert_eq!(client.is_paused(), false);
+    assert!(!client.is_paused());
 }
 
 #[test]
 #[should_panic(expected = "Contract already initialized")]
 fn test_initialize_twice() {
     let env = Env::default();
+    env.mock_all_auths();
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
     let reserve_tracker = Address::generate(&env);
@@ -52,7 +54,6 @@ fn test_initialize_twice() {
         &fee_rate,
     );
 
-    // Try to initialize again
     client.initialize(
         &admin,
         &oracle,
@@ -66,6 +67,7 @@ fn test_initialize_twice() {
 #[test]
 fn test_pause_unpause() {
     let env = Env::default();
+    env.mock_all_auths();
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
     let reserve_tracker = Address::generate(&env);
@@ -85,18 +87,17 @@ fn test_pause_unpause() {
         &fee_rate,
     );
 
-    assert_eq!(client.is_paused(), false);
-
+    assert!(!client.is_paused());
     client.pause();
-    assert_eq!(client.is_paused(), true);
-
+    assert!(client.is_paused());
     client.unpause();
-    assert_eq!(client.is_paused(), false);
+    assert!(!client.is_paused());
 }
 
 #[test]
 fn test_set_fee_rate() {
     let env = Env::default();
+    env.mock_all_auths();
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
     let reserve_tracker = Address::generate(&env);

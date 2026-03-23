@@ -1,7 +1,5 @@
 #![no_std]
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,6 +31,7 @@ pub struct DepositEvent {
 pub struct WithdrawEvent {
     pub user: Address,
     pub amount: i128,
+    pub fee_amount: i128,
     pub yield_amount: i128,
     pub timestamp: u64,
 }
@@ -47,12 +46,16 @@ impl SavingsVault {
         if env.storage().instance().has(&DATA_KEY.admin) {
             panic!("Contract already initialized");
         }
-        if fee_rate_bps < 0 || fee_rate_bps > 10_000 {
+        if !(0..=10_000).contains(&fee_rate_bps) {
             panic!("Invalid fee rate");
         }
         env.storage().instance().set(&DATA_KEY.admin, &admin);
-        env.storage().instance().set(&DATA_KEY.acbu_token, &acbu_token);
-        env.storage().instance().set(&DATA_KEY.fee_rate, &fee_rate_bps);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.acbu_token, &acbu_token);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.fee_rate, &fee_rate_bps);
         env.storage().instance().set(&DATA_KEY.paused, &false);
     }
 
@@ -79,13 +82,15 @@ impl SavingsVault {
     .expect("acbu_token not set — contract not initialized");
         let client = soroban_sdk::token::Client::new(&env, &acbu);
         client.transfer(&user, &env.current_contract_address(), &amount);
+
         let key = (user.clone(), term_seconds);
         let existing: i128 = env.storage().temporary().get(&key).unwrap_or(0);
         env.storage().temporary().set(&key, &(existing + amount));
+
         env.events().publish(
             (symbol_short!("Deposit"), user.clone()),
             DepositEvent {
-                user: user.clone(),
+                user,
                 amount,
                 term_seconds,
                 timestamp: env.ledger().timestamp(),
@@ -94,7 +99,7 @@ impl SavingsVault {
         Ok(existing + amount)
     }
 
-    /// Withdraw (unlock) ACBU after term. Contract transfers ACBU back to user.
+    /// Withdraw (unlock) ACBU after term. Applies the stored protocol fee.
     pub fn withdraw(env: Env, user: Address, term_seconds: u64, amount: i128) -> Result<(), soroban_sdk::Error> {
         /// verify user auth before transferring tokens to prevent griefing attacks where attacker tries to transfer from random user and fails but still causes state changes and events
         user.require_auth();
@@ -108,7 +113,11 @@ impl SavingsVault {
         }
 
         let key = (user.clone(), term_seconds);
-        let balance: i128 = env.storage().temporary().get(&key).ok_or(soroban_sdk::Error::from_contract_error(1003))?;
+        let balance: i128 = env
+            .storage()
+            .temporary()
+            .get(&key)
+            .ok_or(soroban_sdk::Error::from_contract_error(1003))?;
         if balance < amount {
             return Err(soroban_sdk::Error::from_contract_error(1004));
         }
@@ -117,12 +126,18 @@ impl SavingsVault {
         let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token)
     .expect("acbu_token not set — contract not initialized");
         let client = soroban_sdk::token::Client::new(&env, &acbu);
-        client.transfer(&env.current_contract_address(), &user, &amount);
+        client.transfer(&env.current_contract_address(), &user, &net_amount);
+        if fee_amount > 0 {
+            let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap().unwrap();
+            client.transfer(&env.current_contract_address(), &admin, &fee_amount);
+        }
+
         env.events().publish(
             (symbol_short!("Withdraw"), user.clone()),
             WithdrawEvent {
-                user: user.clone(),
+                user,
                 amount,
+                fee_amount,
                 yield_amount: 0,
                 timestamp: env.ledger().timestamp(),
             },
@@ -137,14 +152,14 @@ impl SavingsVault {
     }
 
     pub fn pause(env: Env) -> Result<(), soroban_sdk::Error> {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap().unwrap();
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &true);
         Ok(())
     }
 
     pub fn unpause(env: Env) -> Result<(), soroban_sdk::Error> {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap().unwrap();
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &false);
         Ok(())
