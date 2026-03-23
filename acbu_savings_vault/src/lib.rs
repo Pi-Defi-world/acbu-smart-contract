@@ -63,14 +63,20 @@ impl SavingsVault {
         amount: i128,
         term_seconds: u64,
     ) -> Result<i128, soroban_sdk::Error> {
+        /// verify user auth before transferring tokens to prevent griefing attacks where attacker tries to transfer from random user and fails but still causes state changes and events
+        user.require_auth();
         let paused: bool = env.storage().instance().get(&DATA_KEY.paused).unwrap_or(false);
         if paused {
             return Err(soroban_sdk::Error::from_contract_error(1001));
         }
         if amount <= 0 {
             return Err(soroban_sdk::Error::from_contract_error(1002));
+        
         }
-        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap().unwrap();
+        
+        /// double unwrap resolve
+        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token)
+    .expect("acbu_token not set — contract not initialized");
         let client = soroban_sdk::token::Client::new(&env, &acbu);
         client.transfer(&user, &env.current_contract_address(), &amount);
         let key = (user.clone(), term_seconds);
@@ -90,6 +96,9 @@ impl SavingsVault {
 
     /// Withdraw (unlock) ACBU after term. Contract transfers ACBU back to user.
     pub fn withdraw(env: Env, user: Address, term_seconds: u64, amount: i128) -> Result<(), soroban_sdk::Error> {
+        /// verify user auth before transferring tokens to prevent griefing attacks where attacker tries to transfer from random user and fails but still causes state changes and events
+        user.require_auth();
+
         let paused: bool = env.storage().instance().get(&DATA_KEY.paused).unwrap_or(false);
         if paused {
             return Err(soroban_sdk::Error::from_contract_error(1001));
@@ -97,13 +106,16 @@ impl SavingsVault {
         if amount <= 0 {
             return Err(soroban_sdk::Error::from_contract_error(1002));
         }
+
         let key = (user.clone(), term_seconds);
         let balance: i128 = env.storage().temporary().get(&key).ok_or(soroban_sdk::Error::from_contract_error(1003))?;
         if balance < amount {
             return Err(soroban_sdk::Error::from_contract_error(1004));
         }
+        
         env.storage().temporary().set(&key, &(balance - amount));
-        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap().unwrap();
+        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token)
+    .expect("acbu_token not set — contract not initialized");
         let client = soroban_sdk::token::Client::new(&env, &acbu);
         client.transfer(&env.current_contract_address(), &user, &amount);
         env.events().publish(
