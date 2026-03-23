@@ -1,4 +1,8 @@
 #![no_std]
+extern crate alloc;
+
+use alloc::string::String as RustString;
+use core::fmt::Write;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Env, String as SorobanString,
     Symbol,
@@ -130,7 +134,7 @@ impl MintingContract {
         let fee = calculate_fee(usdc_amount, fee_rate);
 
         // Emit MintEvent
-        let tx_id = SorobanString::from_str(&format!("mint_{}", env.ledger().sequence()));
+        let tx_id = Self::generate_transaction_id(&env, "mint_");
         let mint_event = MintEvent {
             transaction_id: tx_id,
             user: recipient.clone(),
@@ -195,7 +199,7 @@ impl MintingContract {
         let fee = calculate_fee(usd_value, fee_rate);
 
         // Emit MintEvent
-        let tx_id = SorobanString::from_str(&format!("mint_fiat_{}", fintech_tx_id));
+        let tx_id = Self::generate_transaction_id(&env, "mint_fiat_");
         let mint_event = MintEvent {
             transaction_id: tx_id,
             user: recipient.clone(),
@@ -266,6 +270,18 @@ impl MintingContract {
         if invoker != admin && invoker != *user {
             panic!("Unauthorized");
         }
+    }
+
+    fn generate_transaction_id(env: &Env, prefix: &str) -> SorobanString {
+        let entropy: [u8; 16] = env.prng().gen();
+        let mut transaction_id = RustString::with_capacity(prefix.len() + (entropy.len() * 2));
+        transaction_id.push_str(prefix);
+
+        for byte in entropy {
+            write!(&mut transaction_id, "{byte:02x}").unwrap();
+        }
+
+        SorobanString::from_str(env, &transaction_id)
     }
 }
 
