@@ -113,6 +113,15 @@ impl ReserveTrackerContract {
         total_reserve_value * 10_000 >= total_acbu_supply * min_ratio
     }
 
+    /// Verify reserves meet the minimum collateral ratio for the given circulating ACBU supply.
+    ///
+    /// `total_acbu_supply` must be total outstanding ACBU in 7-decimal fixed-point units (1 whole
+    /// token = 10_000_000), for example from an indexer or summed balances off-chain.
+    /// Do not use this contract's own token balance: the reserve tracker does not custody ACBU.
+    pub fn verify_reserves(env: Env, total_acbu_supply: i128) -> bool {
+        Self::is_reserve_sufficient(env, total_acbu_supply)
+    }
+
     // Private helper functions
     fn check_admin(env: &Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
