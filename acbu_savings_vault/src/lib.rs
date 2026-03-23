@@ -31,6 +31,7 @@ pub struct DepositEvent {
 pub struct WithdrawEvent {
     pub user: Address,
     pub amount: i128,
+    pub fee_amount: i128,
     pub yield_amount: i128,
     pub timestamp: u64,
 }
@@ -89,7 +90,7 @@ impl SavingsVault {
         env.events().publish(
             (symbol_short!("Deposit"), user.clone()),
             DepositEvent {
-                user: user.clone(),
+                user,
                 amount,
                 term_seconds,
                 timestamp: env.ledger().timestamp(),
@@ -98,18 +99,9 @@ impl SavingsVault {
         Ok(existing + amount)
     }
 
-    /// Withdraw (unlock) ACBU after term. Contract transfers ACBU back to user.
-    pub fn withdraw(
-        env: Env,
-        user: Address,
-        term_seconds: u64,
-        amount: i128,
-    ) -> Result<(), soroban_sdk::Error> {
-        let paused: bool = env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.paused)
-            .unwrap_or(false);
+    /// Withdraw (unlock) ACBU after term. Applies the stored protocol fee.
+    pub fn withdraw(env: Env, user: Address, term_seconds: u64, amount: i128) -> Result<(), soroban_sdk::Error> {
+        let paused: bool = env.storage().instance().get(&DATA_KEY.paused).unwrap_or(false);
         if paused {
             return Err(soroban_sdk::Error::from_contract_error(1001));
         }
@@ -117,7 +109,6 @@ impl SavingsVault {
             return Err(soroban_sdk::Error::from_contract_error(1002));
         }
         user.require_auth();
-
         let key = (user.clone(), term_seconds);
         let balance: i128 = env
             .storage()
@@ -129,15 +120,24 @@ impl SavingsVault {
         }
         env.storage().temporary().set(&key, &(balance - amount));
 
-        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let fee_rate: i128 = env.storage().instance().get(&DATA_KEY.fee_rate).unwrap_or(0);
+        let fee_amount: i128 = (amount * fee_rate) / 10_000;
+        let net_amount: i128 = amount - fee_amount;
+
+        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap().unwrap();
         let client = soroban_sdk::token::Client::new(&env, &acbu);
-        client.transfer(&env.current_contract_address(), &user, &amount);
+        client.transfer(&env.current_contract_address(), &user, &net_amount);
+        if fee_amount > 0 {
+            let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap().unwrap();
+            client.transfer(&env.current_contract_address(), &admin, &fee_amount);
+        }
 
         env.events().publish(
             (symbol_short!("Withdraw"), user.clone()),
             WithdrawEvent {
-                user: user.clone(),
+                user,
                 amount,
+                fee_amount,
                 yield_amount: 0,
                 timestamp: env.ledger().timestamp(),
             },
