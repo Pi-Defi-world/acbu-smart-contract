@@ -41,7 +41,16 @@ pub struct AccountDetails {
     pub currency: CurrencyCode,
 }
 
-/// Mint event data
+/// Mint event payload emitted by the minting contract.
+///
+/// **Contract topics (Soroban):** `(Symbol \"mint\", Address recipient)` — the `user` field below
+/// is always the mint recipient (same as the topic address).
+///
+/// **Backend / indexer alignment:** Map XDR or RPC event fields to these names in order. All
+/// `i128` amounts use **7 decimal places** (`DECIMALS` = 10_000_000 per whole unit). `rate` is
+/// the ACBU/USD rate in the same fixed-point form. `usdc_amount` is USDC in 7 decimals for
+/// `mint_from_usdc`; for `mint_from_fiat` it carries the USD-equivalent value after conversion
+/// (still 7-decimal fixed point), not on-chain USDC.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MintEvent {
@@ -54,7 +63,15 @@ pub struct MintEvent {
     pub timestamp: u64,
 }
 
-/// Burn event data
+/// Burn event payload emitted by the burning contract.
+///
+/// **Contract topics (Soroban):** `(Symbol \"burn\", Address user)` — matches the `user` field.
+///
+/// **Backend / indexer alignment:** Same field order as XDR struct encoding. Amounts (`acbu_amount`,
+/// `local_amount`, `fee`, `rate`) are **7-decimal fixed point** (`DECIMALS`). `currency` is
+/// [`CurrencyCode`] (string code such as `\"NGN\"`). For `burn_for_basket`, one event is emitted per
+/// recipient slice; `acbu_amount` and `fee` are the portions for that slice, not necessarily the
+/// full transaction totals.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct BurnEvent {
