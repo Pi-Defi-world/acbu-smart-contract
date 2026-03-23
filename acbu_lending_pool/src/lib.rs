@@ -66,7 +66,7 @@ impl LendingPool {
         if amount <= 0 {
             return Err(soroban_sdk::Error::from_contract_error(2002));
         }
-        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap().unwrap();
+        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
         let client = soroban_sdk::token::Client::new(&env, &acbu);
         client.transfer(&lender, &env.current_contract_address(), &amount);
         let existing: i128 = env.storage().temporary().get(&lender).unwrap_or(0);
@@ -88,7 +88,7 @@ impl LendingPool {
             return Err(soroban_sdk::Error::from_contract_error(2004));
         }
         env.storage().temporary().set(&lender, &(balance - amount));
-        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap().unwrap();
+        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
         let client = soroban_sdk::token::Client::new(&env, &acbu);
         client.transfer(&env.current_contract_address(), &lender, &amount);
         Ok(())
@@ -100,14 +100,14 @@ impl LendingPool {
     }
 
     pub fn pause(env: Env) -> Result<(), soroban_sdk::Error> {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap().unwrap();
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &true);
         Ok(())
     }
 
     pub fn unpause(env: Env) -> Result<(), soroban_sdk::Error> {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap().unwrap();
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &false);
         Ok(())
