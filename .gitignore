@@ -1,0 +1,6 @@
+target/
+Cargo.lock
+**/*.rs.bk
+.soroban/
+.stellar/
+test_snapshots/
