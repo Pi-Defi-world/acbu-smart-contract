@@ -162,10 +162,10 @@ impl BurningContract {
             panic!("Invalid burn amount");
         }
 
-        let num_recipients = recipient_accounts.len() as i128;
-        if num_recipients == 0 {
+        if recipient_accounts.is_empty() {
             panic!("No recipient accounts provided");
         }
+        let num_recipients = recipient_accounts.len() as i128;
 
         // Get contract addresses
         let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
