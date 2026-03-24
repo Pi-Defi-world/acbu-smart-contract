@@ -174,7 +174,7 @@ impl OracleContract {
             currency: currency.clone(),
             rate: median_rate,
             timestamp: current_time,
-            validators: Vec::new(&env),
+            validators,
         };
         env.events()
             .publish((symbol_short!("rate_upd"), currency.clone()), event);

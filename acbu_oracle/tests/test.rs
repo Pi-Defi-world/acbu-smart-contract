@@ -1,10 +1,11 @@
 #![cfg(test)]
 
 use acbu_oracle::{OracleContract, OracleContractClient};
-use shared::CurrencyCode;
+use shared::{CurrencyCode, RateUpdateEvent};
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
-    Address, Env, Map, Vec,
+    symbol_short,
+    testutils::{Address as _, Events, Ledger},
+    Address, Env, FromVal, IntoVal, Map, Symbol, Vec,
 };
 
 #[test]
@@ -56,9 +57,13 @@ fn test_update_rate() {
     env.ledger().with_mut(|l| l.timestamp = 1_000_000); // Exceed 6h interval
     let admin = Address::generate(&env);
     let validator = Address::generate(&env);
+    let validator2 = Address::generate(&env);
+    let validator3 = Address::generate(&env);
 
     let mut validators = Vec::new(&env);
     validators.push_back(validator.clone());
+    validators.push_back(validator2);
+    validators.push_back(validator3);
 
     let min_signatures = 1u32;
 
@@ -90,4 +95,24 @@ fn test_update_rate() {
 
     let stored_rate = client.get_rate(&ngn);
     assert_eq!(stored_rate, 1235000);
+
+    let events = env.events().all();
+    let mut found = false;
+    for event in events.iter() {
+        if event.0 != contract_id {
+            continue;
+        }
+        let topics = event.1;
+        if !topics.is_empty()
+            && Symbol::from_val(&env, &topics.get(0).unwrap()) == symbol_short!("rate_upd")
+        {
+            let event_data: RateUpdateEvent = event.2.into_val(&env);
+            assert_eq!(event_data.currency, ngn.clone());
+            assert_eq!(event_data.rate, 1235000);
+            assert_eq!(event_data.validators, validators);
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "expected rate_upd event");
 }
