@@ -4,8 +4,8 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_deviation, median, CurrencyCode, RateData, RateUpdateEvent, EMERGENCY_THRESHOLD_BPS,
-    UPDATE_INTERVAL_SECONDS,
+    calculate_deviation, median, CurrencyCode, OutlierDetectionEvent, RateData, RateUpdateEvent,
+    EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, UPDATE_INTERVAL_SECONDS,
 };
 
 mod shared {
@@ -148,6 +148,25 @@ impl OracleContract {
 
         // Calculate median from sources
         let median_rate = median(sources.clone()).unwrap_or(rate);
+
+        // Detect outliers in the source rates
+        for i in 0..sources.len() {
+            let source_rate = sources.get(i).unwrap();
+            let deviation_bps = calculate_deviation(source_rate, median_rate);
+            
+            if deviation_bps > OUTLIER_THRESHOLD_BPS {
+                // Emit outlier detection event
+                let outlier_event = OutlierDetectionEvent {
+                    currency: currency.clone(),
+                    median_rate,
+                    outlier_rate: source_rate,
+                    deviation_bps,
+                    timestamp: current_time,
+                };
+                env.events()
+                    .publish((symbol_short!("outlier"), currency.clone()), outlier_event);
+            }
+        }
 
         // Create rate data
         let rate_data = RateData {

@@ -97,6 +97,17 @@ pub struct RateUpdateEvent {
     pub validators: soroban_sdk::Vec<Address>,
 }
 
+/// Outlier detection event data
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OutlierDetectionEvent {
+    pub currency: CurrencyCode,
+    pub median_rate: i128,
+    pub outlier_rate: i128,
+    pub deviation_bps: i128,
+    pub timestamp: u64,
+}
+
 /// Error types
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -172,3 +183,4 @@ pub fn calculate_deviation(value1: i128, value2: i128) -> i128 {
     };
     (diff * BASIS_POINTS) / value2
 }
+
