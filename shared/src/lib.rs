@@ -1,3 +1,5 @@
+#![no_std]
+
 use soroban_sdk::{contracttype, Address, String as SorobanString};
 
 /// Currency code type (e.g., "NGN", "KES", "RWF")

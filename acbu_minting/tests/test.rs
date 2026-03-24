@@ -154,7 +154,7 @@ fn test_mint_from_usdc() {
     let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token_id);
 
     // Seed User: 100 USDC (7 decimals)
-    let usdc_amount = 100 * 10_000_000; 
+    let usdc_amount = 100 * 10_000_000;
     usdc_token_client.mint(&user, &usdc_amount);
 
     client.initialize(
@@ -230,18 +230,13 @@ fn test_mint_from_fiat() {
         &fee_rate,
     );
 
-    let fiat_amount = 1000 * 10_000_000; 
+    let fiat_amount = 1000 * 10_000_000;
     let currency = SorobanString::from_str(&env, "NGN");
     let fintech_tx_id = SorobanString::from_str(&env, "partner_id_001");
 
     // Must be admin to initiate fiat mint simulation
-    let acbu_minted = client.mint_from_fiat(
-        &admin,
-        &currency,
-        &fiat_amount,
-        &recipient,
-        &fintech_tx_id,
-    );
+    let acbu_minted =
+        client.mint_from_fiat(&admin, &currency, &fiat_amount, &recipient, &fintech_tx_id);
 
     // Verification
     // 0.2% fee on 1000 = 2. 1000 - 2 = 998
@@ -262,7 +257,10 @@ fn test_mint_from_fiat() {
         {
             let event_data: MintEvent = event.2.into_val(&env);
             assert_eq!(event_data.acbu_amount, expected_acbu);
-            assert!(event_data.transaction_id.to_string().contains("mint_fiat_tx"));
+            assert!(event_data
+                .transaction_id
+                .to_string()
+                .contains("mint_fiat_tx"));
             found = true;
             break;
         }
@@ -303,13 +301,7 @@ fn test_mint_from_fiat_exceeds_max() {
     let fintech_tx_id = SorobanString::from_str(&env, "tx_max");
     let too_large = MAX_MINT_AMOUNT + 1;
 
-    client.mint_from_fiat(
-        &admin,
-        &currency,
-        &too_large,
-        &recipient,
-        &fintech_tx_id,
-    );
+    client.mint_from_fiat(&admin, &currency, &too_large, &recipient, &fintech_tx_id);
 }
 
 #[test]
@@ -346,7 +338,7 @@ fn test_unauthorized_mint_panic() {
 
     // Use attacker's client to simulate unauthorized call
     let attacker_client = MintingContractClient::new(&env, &contract_id);
-    
+
     // In soroban testing, the last generated address or current setup sets the invoker.
     // If check_admin_or_user runs, it will compare the invoker (Address 0 or similar) against admin/user.
     // To ensure it fails, we assume it's checking env.invoker()
