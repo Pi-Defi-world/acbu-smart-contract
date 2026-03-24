@@ -16,6 +16,15 @@ pub struct DataKey {
     pub min_reserve_ratio: Symbol,
 }
 
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ReserveUpdateEvent {
+    pub currency: CurrencyCode,
+    pub amount: i128,
+    pub value_usd: i128,
+    pub timestamp: u64,
+}
+
 const DATA_KEY: DataKey = DataKey {
     admin: symbol_short!("ADMIN"),
     oracle: symbol_short!("ORACLE"),
@@ -70,8 +79,23 @@ impl ReserveTrackerContract {
             value_usd,
             timestamp: env.ledger().timestamp(),
         };
-        reserves.set(currency, reserve_data);
+
+        // Update reserves map
+        let mut reserves: Map<CurrencyCode, ReserveData> =
+            env.storage().instance().get(&DATA_KEY.reserves).unwrap_or(Map::new(&env));
+        reserves.set(currency.clone(), reserve_data);
         env.storage().instance().set(&DATA_KEY.reserves, &reserves);
+
+        // Emit Event
+        env.events().publish(
+            (symbol_short!("reserve"), currency.clone()),
+            ReserveUpdateEvent {
+                currency,
+                amount,
+                value_usd,
+                timestamp: current_time,
+            },
+        );
     }
 
     /// Get current reserves for all currencies
