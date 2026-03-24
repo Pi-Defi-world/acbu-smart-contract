@@ -18,3 +18,9 @@ Cargo.lock
 # OS files
 .DS_Store
 Thumbs.db
+target/
+Cargo.lock
+**/*.rs.bk
+.soroban/
+.stellar/
+test_snapshots/
