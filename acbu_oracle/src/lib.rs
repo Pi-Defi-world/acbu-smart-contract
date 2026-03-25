@@ -1,7 +1,8 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, Map, Symbol, Vec,
+    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol, Vec,
 };
+
 
 use shared::{
     calculate_deviation, median, CurrencyCode, OutlierDetectionEvent, RateData, RateUpdateEvent,
@@ -35,6 +36,9 @@ const DATA_KEY: DataKey = DataKey {
     update_interval: symbol_short!("UPD_INT"),
     basket_weights: symbol_short!("BSK_WTS"),
 };
+
+const VERSION: u32 = 1;
+
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -314,4 +318,15 @@ impl OracleContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
     }
+
+    pub fn version(_env: Env) -> u32 {
+        VERSION
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
 }
+

@@ -1,8 +1,9 @@
 #![no_std]
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Env, String as SorobanString,
-    Symbol,
+    Symbol, BytesN
 };
+
 
 use shared::{
     calculate_amount_after_fee, calculate_fee, MintEvent, BASIS_POINTS, DECIMALS, MAX_MINT_AMOUNT,
@@ -38,6 +39,9 @@ const DATA_KEY: DataKey = DataKey {
     min_mint_amount: symbol_short!("MIN_MINT"),
     max_mint_amount: symbol_short!("MAX_MINT"),
 };
+
+const VERSION: u32 = 1;
+
 
 #[contract]
 pub struct MintingContract;
@@ -283,4 +287,15 @@ impl MintingContract {
             panic!("Unauthorized: admin only");
         }
     }
+
+    pub fn version(_env: Env) -> u32 {
+        VERSION
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
 }
+

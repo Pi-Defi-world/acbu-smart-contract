@@ -1,5 +1,6 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol};
+
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -14,6 +15,9 @@ const DATA_KEY: DataKey = DataKey {
     acbu_token: symbol_short!("ACBU_TKN"),
     paused: symbol_short!("PAUSED"),
 };
+
+const VERSION: u32 = 1;
+
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -229,4 +233,19 @@ impl Escrow {
         env.storage().instance().set(&DATA_KEY.paused, &false);
         Ok(())
     }
+
+    pub fn version(_env: Env) -> u32 {
+        VERSION
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.admin)
+            .expect("admin not set — contract not initialized");
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
 }
+

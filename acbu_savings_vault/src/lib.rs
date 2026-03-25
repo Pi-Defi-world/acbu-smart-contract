@@ -1,5 +1,6 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol, Vec};
+
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -21,6 +22,8 @@ const DATA_KEY: DataKey = DataKey {
 
 const DEPOSIT_KEY: Symbol = symbol_short!("DEPOSITS");
 const SECONDS_PER_YEAR: i128 = 31_536_000;
+const VERSION: u32 = 1;
+
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -281,4 +284,15 @@ impl SavingsVault {
         env.storage().instance().set(&DATA_KEY.paused, &false);
         Ok(())
     }
+
+    pub fn version(_env: Env) -> u32 {
+        VERSION
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
 }
+
