@@ -10,6 +10,7 @@ pub struct DataKey {
     pub fee_rate: Symbol,
     pub yield_rate: Symbol,
     pub paused: Symbol,
+    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -18,6 +19,7 @@ const DATA_KEY: DataKey = DataKey {
     fee_rate: symbol_short!("FEE_RATE"),
     yield_rate: symbol_short!("YLD_RATE"),
     paused: symbol_short!("PAUSED"),
+    version: symbol_short!("VERSION"),
 };
 
 const DEPOSIT_KEY: Symbol = symbol_short!("DEPOSITS");
@@ -85,6 +87,7 @@ impl SavingsVault {
             .instance()
             .set(&DATA_KEY.yield_rate, &yield_rate_bps);
         env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.version, &VERSION);
     }
 
     /// Deposit (lock) ACBU for a term. User transfers ACBU to this contract.
@@ -306,6 +309,19 @@ impl SavingsVault {
 
     pub fn version(_env: Env) -> u32 {
         VERSION
+    }
+
+    pub fn migrate(env: Env) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+
+        let current_version = VERSION;
+        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
+        if stored_version < current_version {
+            env.storage()
+                .instance()
+                .set(&DATA_KEY.version, &current_version);
+        }
     }
 
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {

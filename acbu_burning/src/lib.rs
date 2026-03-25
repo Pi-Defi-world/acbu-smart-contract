@@ -33,6 +33,7 @@ pub struct DataKey {
     pub fee_rate: Symbol,
     pub paused: Symbol,
     pub min_burn_amount: Symbol,
+    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -44,6 +45,7 @@ const DATA_KEY: DataKey = DataKey {
     fee_rate: symbol_short!("FEE_RATE"),
     paused: symbol_short!("PAUSED"),
     min_burn_amount: symbol_short!("MIN_BURN"),
+    version: symbol_short!("VERSION"),
 };
 
 const VERSION: u32 = 1;
@@ -93,6 +95,7 @@ impl BurningContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.min_burn_amount, &MIN_BURN_AMOUNT);
+        env.storage().instance().set(&DATA_KEY.version, &VERSION);
     }
 
     /// Burn ACBU for single currency redemption
@@ -292,6 +295,17 @@ impl BurningContract {
 
     pub fn version(_env: Env) -> u32 {
         VERSION
+    }
+
+    pub fn migrate(env: Env) {
+        Self::check_admin(&env);
+        let current_version = VERSION;
+        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
+        if stored_version < current_version {
+            env.storage()
+                .instance()
+                .set(&DATA_KEY.version, &current_version);
+        }
     }
 
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {

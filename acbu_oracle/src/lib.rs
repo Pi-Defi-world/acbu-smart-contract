@@ -24,6 +24,7 @@ pub struct DataKey {
     pub last_update: Symbol,
     pub update_interval: Symbol,
     pub basket_weights: Symbol,
+    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -35,6 +36,7 @@ const DATA_KEY: DataKey = DataKey {
     last_update: symbol_short!("LAST_UPD"),
     update_interval: symbol_short!("UPD_INT"),
     basket_weights: symbol_short!("BSK_WTS"),
+    version: symbol_short!("VERSION"),
 };
 
 const VERSION: u32 = 1;
@@ -97,6 +99,7 @@ impl OracleContract {
         let rates: Map<CurrencyCode, RateData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.rates, &rates);
         env.storage().instance().set(&DATA_KEY.last_update, &0u64);
+        env.storage().instance().set(&DATA_KEY.version, &VERSION);
     }
 
     /// Update rate for a currency (validator function)
@@ -321,6 +324,17 @@ impl OracleContract {
 
     pub fn version(_env: Env) -> u32 {
         VERSION
+    }
+
+    pub fn migrate(env: Env) {
+        Self::check_admin(&env);
+        let current_version = VERSION;
+        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
+        if stored_version < current_version {
+            env.storage()
+                .instance()
+                .set(&DATA_KEY.version, &current_version);
+        }
     }
 
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
