@@ -1,5 +1,6 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol};
+
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -7,13 +8,18 @@ pub struct DataKey {
     pub admin: Symbol,
     pub acbu_token: Symbol,
     pub paused: Symbol,
+    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
     admin: symbol_short!("ADMIN"),
     acbu_token: symbol_short!("ACBU_TKN"),
     paused: symbol_short!("PAUSED"),
+    version: symbol_short!("VERSION"),
 };
+
+const VERSION: u32 = 1;
+
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,6 +68,7 @@ impl Escrow {
             .instance()
             .set(&DATA_KEY.acbu_token, &acbu_token);
         env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.version, &VERSION);
     }
 
     /// Create escrow: payer deposits ACBU, payee can claim after release
@@ -229,4 +236,36 @@ impl Escrow {
         env.storage().instance().set(&DATA_KEY.paused, &false);
         Ok(())
     }
+
+    pub fn version(_env: Env) -> u32 {
+        VERSION
+    }
+
+    pub fn migrate(env: Env) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.admin)
+            .expect("admin not set — contract not initialized");
+        admin.require_auth();
+
+        let current_version = VERSION;
+        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
+        if stored_version < current_version {
+            env.storage()
+                .instance()
+                .set(&DATA_KEY.version, &current_version);
+        }
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.admin)
+            .expect("admin not set — contract not initialized");
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
 }
+

@@ -171,3 +171,38 @@ fn test_burn_for_basket_dust_handling() {
         "Every single unit of ACBU (including dust) must be accounted for in events"
     );
 }
+
+#[test]
+fn test_migrate_and_versioning() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let reserve_tracker = Address::generate(&env);
+    let acbu_token = Address::generate(&env);
+    let withdrawal_processor = Address::generate(&env);
+    let fee_rate = 300;
+
+    let contract_id = env.register_contract(None, BurningContract);
+    let client = BurningContractClient::new(&env, &contract_id);
+
+    client.initialize(
+        &admin,
+        &oracle,
+        &reserve_tracker,
+        &acbu_token,
+        &withdrawal_processor,
+        &fee_rate,
+    );
+
+    // Initial version should be 1
+    assert_eq!(client.version(), 1);
+
+    // Call migrate (as admin)
+    client.migrate();
+
+    // Still version 1 (since we haven't bumped it in code yet)
+    assert_eq!(client.version(), 1);
+}
+

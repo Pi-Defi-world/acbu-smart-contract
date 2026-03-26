@@ -1,5 +1,6 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Map, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol};
+
 
 use shared::{CurrencyCode, ReserveData};
 
@@ -22,6 +23,7 @@ pub struct DataKey {
     pub oracle: Symbol,
     pub reserves: Symbol,
     pub min_reserve_ratio: Symbol,
+    pub version: Symbol,
 }
 
 #[contracttype]
@@ -38,7 +40,11 @@ const DATA_KEY: DataKey = DataKey {
     oracle: symbol_short!("ORACLE"),
     reserves: symbol_short!("RESERVES"),
     min_reserve_ratio: symbol_short!("MIN_RES"),
+    version: symbol_short!("VERSION"),
 };
+
+const VERSION: u32 = 1;
+
 
 #[contract]
 pub struct ReserveTrackerContract;
@@ -62,6 +68,7 @@ impl ReserveTrackerContract {
         // Initialize reserves map
         let reserves: Map<CurrencyCode, ReserveData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.reserves, &reserves);
+        env.storage().instance().set(&DATA_KEY.version, &VERSION);
     }
 
     /// Update reserve amount for a currency (admin or authorized address)
@@ -158,4 +165,26 @@ impl ReserveTrackerContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
     }
+
+    pub fn version(_env: Env) -> u32 {
+        VERSION
+    }
+
+    pub fn migrate(env: Env) {
+        Self::check_admin(&env);
+        let current_version = VERSION;
+        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
+        if stored_version < current_version {
+            env.storage()
+                .instance()
+                .set(&DATA_KEY.version, &current_version);
+        }
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
 }
+
