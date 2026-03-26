@@ -1,12 +1,7 @@
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
+    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol,
 };
 
-use shared::BASIS_POINTS;
-
-mod shared {
-    pub use shared::*;
-}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,6 +10,7 @@ pub struct DataKey {
     pub acbu_token: Symbol,
     pub fee_rate: Symbol,
     pub paused: Symbol,
+    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -22,7 +18,11 @@ const DATA_KEY: DataKey = DataKey {
     acbu_token: symbol_short!("ACBU_TKN"),
     fee_rate: symbol_short!("FEE_RATE"),
     paused: symbol_short!("PAUSED"),
+    version: symbol_short!("VERSION"),
 };
+
+const VERSION: u32 = 1;
+
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -60,6 +60,7 @@ impl LendingPool {
         env.storage().instance().set(&DATA_KEY.acbu_token, &acbu_token);
         env.storage().instance().set(&DATA_KEY.fee_rate, &fee_rate_bps);
         env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.version, &VERSION);
     }
 
     /// Deposit ACBU into the pool (lender supplies liquidity)
@@ -121,4 +122,28 @@ impl LendingPool {
         env.storage().instance().set(&DATA_KEY.paused, &false);
         Ok(())
     }
+
+    pub fn version(_env: Env) -> u32 {
+        VERSION
+    }
+
+    pub fn migrate(env: Env) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+
+        let current_version = VERSION;
+        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
+        if stored_version < current_version {
+            env.storage()
+                .instance()
+                .set(&DATA_KEY.version, &current_version);
+        }
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
 }
+

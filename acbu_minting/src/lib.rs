@@ -4,6 +4,7 @@ use soroban_sdk::{
     IntoVal, String as SorobanString, Symbol,
 };
 
+
 use shared::{
     calculate_amount_after_fee, calculate_fee, MintEvent, BASIS_POINTS, DECIMALS, MAX_MINT_AMOUNT,
     MIN_MINT_AMOUNT,
@@ -34,6 +35,7 @@ pub struct DataKey {
     pub min_mint_amount: Symbol,
     pub max_mint_amount: Symbol,
     pub total_supply: Symbol,
+    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -47,7 +49,11 @@ const DATA_KEY: DataKey = DataKey {
     min_mint_amount: symbol_short!("MIN_MINT"),
     max_mint_amount: symbol_short!("MAX_MINT"),
     total_supply: symbol_short!("SUPPLY"),
+    version: symbol_short!("VERSION"),
 };
+
+const VERSION: u32 = 1;
+
 
 #[contract]
 pub struct MintingContract;
@@ -97,6 +103,7 @@ impl MintingContract {
             .instance()
             .set(&DATA_KEY.max_mint_amount, &MAX_MINT_AMOUNT);
         env.storage().instance().set(&DATA_KEY.total_supply, &0i128);
+        env.storage().instance().set(&DATA_KEY.version, &VERSION);
     }
 
     /// Mint ACBU from USDC deposit.
@@ -371,4 +378,28 @@ impl MintingContract {
             panic!("Unauthorized: admin only");
         }
     }
+
+    pub fn version(_env: Env) -> u32 {
+        VERSION
+    }
+
+    pub fn migrate(env: Env) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+
+        let current_version = VERSION;
+        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
+        if stored_version < current_version {
+            env.storage()
+                .instance()
+                .set(&DATA_KEY.version, &current_version);
+        }
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
 }
+
