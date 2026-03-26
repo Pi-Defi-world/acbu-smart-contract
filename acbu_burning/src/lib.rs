@@ -1,8 +1,9 @@
 #![no_std]
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Env, String as SorobanString,
-    Symbol, Vec,
+    Symbol, Vec, BytesN
 };
+
 
 use shared::{
     calculate_amount_after_fee, calculate_fee, AccountDetails, BurnEvent, CurrencyCode,
@@ -11,6 +12,14 @@ use shared::{
 
 mod shared {
     pub use shared::*;
+}
+
+#[allow(dead_code)]
+pub mod token_contract {
+    soroban_sdk::contractimport!(
+        file = "../soroban_token_contract.wasm",
+        sha256 = "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"
+    );
 }
 
 #[contracttype]
@@ -24,6 +33,7 @@ pub struct DataKey {
     pub fee_rate: Symbol,
     pub paused: Symbol,
     pub min_burn_amount: Symbol,
+    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -35,7 +45,11 @@ const DATA_KEY: DataKey = DataKey {
     fee_rate: symbol_short!("FEE_RATE"),
     paused: symbol_short!("PAUSED"),
     min_burn_amount: symbol_short!("MIN_BURN"),
+    version: symbol_short!("VERSION"),
 };
+
+const VERSION: u32 = 1;
+
 
 #[contract]
 pub struct BurningContract;
@@ -81,6 +95,7 @@ impl BurningContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.min_burn_amount, &MIN_BURN_AMOUNT);
+        env.storage().instance().set(&DATA_KEY.version, &VERSION);
     }
 
     /// Burn ACBU for single currency redemption
@@ -114,8 +129,8 @@ impl BurningContract {
 
         // Calculate local currency amount
         let acbu_after_fee = calculate_amount_after_fee(acbu_amount, fee_rate);
-        let usd_value = (acbu_after_fee * DECIMALS) / DECIMALS; // Assuming 1:1 ACBU:USD
-        let local_amount = (usd_value * DECIMALS) / currency_rate;
+        // 1:1 ACBU:USD at current fixed rate (`currency_rate == DECIMALS`)
+        let local_amount = (acbu_after_fee * DECIMALS) / currency_rate;
 
         // Burn ACBU from user
         let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token);
@@ -162,10 +177,10 @@ impl BurningContract {
             panic!("Invalid burn amount");
         }
 
-        let num_recipients = recipient_accounts.len() as i128;
-        if num_recipients == 0 {
+        if recipient_accounts.is_empty() {
             panic!("No recipient accounts provided");
         }
+        let num_recipients = recipient_accounts.len() as i128;
 
         // Get contract addresses
         let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
@@ -277,4 +292,26 @@ impl BurningContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
     }
+
+    pub fn version(_env: Env) -> u32 {
+        VERSION
+    }
+
+    pub fn migrate(env: Env) {
+        Self::check_admin(&env);
+        let current_version = VERSION;
+        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
+        if stored_version < current_version {
+            env.storage()
+                .instance()
+                .set(&DATA_KEY.version, &current_version);
+        }
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
 }
+

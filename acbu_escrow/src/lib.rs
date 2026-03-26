@@ -1,5 +1,6 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol};
+
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -7,13 +8,18 @@ pub struct DataKey {
     pub admin: Symbol,
     pub acbu_token: Symbol,
     pub paused: Symbol,
+    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
     admin: symbol_short!("ADMIN"),
     acbu_token: symbol_short!("ACBU_TKN"),
     paused: symbol_short!("PAUSED"),
+    version: symbol_short!("VERSION"),
 };
+
+const VERSION: u32 = 1;
+
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,9 +68,11 @@ impl Escrow {
             .instance()
             .set(&DATA_KEY.acbu_token, &acbu_token);
         env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.version, &VERSION);
     }
 
     /// Create escrow: payer deposits ACBU, payee can claim after release
+    /// Escrow ID is unique per payer and provided by caller to prevent collisions
     pub fn create(
         env: Env,
         payer: Address,
@@ -84,30 +92,34 @@ impl Escrow {
             return Err(soroban_sdk::Error::from_contract_error(3002));
         }
         payer.require_auth();
-
         let key = EscrowId(payer.clone(), escrow_id);
+
         if env.storage().temporary().has(&key) {
             return Err(soroban_sdk::Error::from_contract_error(3005));
         }
 
-        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let acbu: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.acbu_token)
+            .expect("acbu_token not set — contract not initialized");
         let client = soroban_sdk::token::Client::new(&env, &acbu);
         client.transfer(&payer, &env.current_contract_address(), &amount);
 
         env.storage()
             .temporary()
             .set(&key, &(payer.clone(), payee.clone(), amount));
-
         env.events().publish(
-            (symbol_short!("EscrowCrt"), payer.clone()),
+            (symbol_short!("esc_crtd"), escrow_id),
             EscrowCreatedEvent {
                 escrow_id,
-                payer: payer.clone(),
-                payee: payee.clone(),
+                payer,
+                payee,
                 amount,
                 timestamp: env.ledger().timestamp(),
             },
         );
+
         Ok(())
     }
 
@@ -123,12 +135,8 @@ impl Escrow {
 }
 
     /// Release escrow: payee receives ACBU (caller must be admin or authorized)
-    pub fn release(
-        env: Env,
-        admin: Address,
-        escrow_id: u64,
-        payer: Address,
-    ) -> Result<(), soroban_sdk::Error> {
+    /// caller must supply payer and escrow_id to identify which escrow to release
+    pub fn release(env: Env, escrow_id: u64, payer: Address) -> Result<(), soroban_sdk::Error> {
         let paused: bool = env
             .storage()
             .instance()
@@ -137,39 +145,53 @@ impl Escrow {
         if paused {
             return Err(soroban_sdk::Error::from_contract_error(3001));
         }
+
+        // only admain can trigger release
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.admin)
+            .expect("admin not set — contract not initialized");
         admin.require_auth();
-        Self::check_admin(&env, &admin);
 
         let key = EscrowId(payer.clone(), escrow_id);
-        let (_p, payee, amount): (Address, Address, i128) = env
+        let (_stored_payer, payee, amount): (Address, Address, i128) = env
             .storage()
             .temporary()
             .get(&key)
             .ok_or(soroban_sdk::Error::from_contract_error(3003))?;
 
-        env.storage().temporary().remove(&key);
-
-        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let acbu: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.acbu_token)
+            .expect("acbu_token not set — contract not initialized");
         let client = soroban_sdk::token::Client::new(&env, &acbu);
         client.transfer(&env.current_contract_address(), &payee, &amount);
 
+        env.storage().temporary().remove(&key);
         env.events().publish(
-            (symbol_short!("EscrowRel"), payee.clone()),
+            (symbol_short!("esc_rel"), escrow_id),
             EscrowReleasedEvent {
                 escrow_id,
-                payee: payee.clone(),
+                payee,
                 amount,
                 timestamp: env.ledger().timestamp(),
             },
         );
+
         Ok(())
     }
 
     /// Refund escrow: payer gets ACBU back (admin or dispute resolution)
     /// key is same as release since it identifies which escrow to refund
     pub fn refund(env: Env, escrow_id: u64, payer: Address) -> Result<(), soroban_sdk::Error> {
-    let admin: Address = env.storage().instance().get(&DATA_KEY.admin)
-    .expect("admin not set — contract not initialized");
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.admin)
+            .expect("admin not set — contract not initialized");
+        admin.require_auth();
 
         let key = EscrowId(payer.clone(), escrow_id);
         let (stored_payer, _payee, amount): (Address, Address, i128) = env
@@ -182,45 +204,79 @@ impl Escrow {
             return Err(soroban_sdk::Error::from_contract_error(3004));
         }
 
-        env.storage().temporary().remove(&key);
-
-        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let acbu: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.acbu_token)
+            .expect("acbu_token not set — contract not initialized");
         let client = soroban_sdk::token::Client::new(&env, &acbu);
         client.transfer(&env.current_contract_address(), &payer, &amount);
 
+        env.storage().temporary().remove(&key);
         env.events().publish(
-            (symbol_short!("EscrowRef"), payer.clone()),
+            (symbol_short!("esc_ref"), escrow_id),
             EscrowRefundedEvent {
                 escrow_id,
-                payer: payer.clone(),
+                payer,
                 amount,
                 timestamp: env.ledger().timestamp(),
             },
         );
+
         Ok(())
     }
 
     pub fn pause(env: Env) -> Result<(), soroban_sdk::Error> {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin)
-    .expect("admin not set — contract not initialized");
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.admin)
+            .expect("admin not set — contract not initialized");
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &true);
         Ok(())
     }
 
     pub fn unpause(env: Env) -> Result<(), soroban_sdk::Error> {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin)
-    .expect("admin not set — contract not initialized");
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.admin)
+            .expect("admin not set — contract not initialized");
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &false);
         Ok(())
     }
 
-    // Private helper functions
-    fn check_admin(env: &Env, admin_to_check: &Address) {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        if admin != *admin_to_check {
-            panic!("Unauthorized: admin only");
+    pub fn version(_env: Env) -> u32 {
+        VERSION
+    }
+
+    pub fn migrate(env: Env) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.admin)
+            .expect("admin not set — contract not initialized");
+        admin.require_auth();
+
+        let current_version = VERSION;
+        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
+        if stored_version < current_version {
+            env.storage()
+                .instance()
+                .set(&DATA_KEY.version, &current_version);
         }
     }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.admin)
+            .expect("admin not set — contract not initialized");
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
 }
+
