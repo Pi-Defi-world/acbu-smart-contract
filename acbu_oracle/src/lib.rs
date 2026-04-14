@@ -24,6 +24,8 @@ pub struct DataKey {
     pub last_update: Symbol,
     pub update_interval: Symbol,
     pub basket_weights: Symbol,
+    /// Afreum (or other) Soroban SAC addresses per basket currency code
+    pub s_tokens: Symbol,
     pub version: Symbol,
 }
 
@@ -36,6 +38,7 @@ const DATA_KEY: DataKey = DataKey {
     last_update: symbol_short!("LAST_UPD"),
     update_interval: symbol_short!("UPD_INT"),
     basket_weights: symbol_short!("BSK_WTS"),
+    s_tokens: symbol_short!("S_TOKNS"),
     version: symbol_short!("VERSION"),
 };
 
@@ -91,6 +94,10 @@ impl OracleContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.basket_weights, &basket_weights);
+        let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.s_tokens, &s_tokens_empty);
         env.storage()
             .instance()
             .set(&DATA_KEY.update_interval, &UPDATE_INTERVAL_SECONDS);
@@ -245,6 +252,47 @@ impl OracleContract {
 
         // Normalize to ensure weights sum to 100%
         (weighted_sum * 10_000) / total_weight
+    }
+
+    /// Basket currencies in declaration order (for S-token mint/burn loops).
+    pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
+        env.storage().instance().get(&DATA_KEY.currencies).unwrap()
+    }
+
+    /// Weight in basis points for a basket member (0 if not in basket).
+    pub fn get_basket_weight(env: Env, currency: CurrencyCode) -> i128 {
+        let basket_weights: Map<CurrencyCode, i128> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.basket_weights)
+            .unwrap();
+        basket_weights.get(currency).unwrap_or(0)
+    }
+
+    /// Configure Soroban token contract address for an Afreum-style S-token (admin).
+    pub fn set_s_token_address(env: Env, currency: CurrencyCode, token_address: Address) {
+        Self::check_admin(&env);
+        let mut m: Map<CurrencyCode, Address> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.s_tokens)
+            .unwrap_or(Map::new(&env));
+        m.set(currency, token_address);
+        env.storage().instance().set(&DATA_KEY.s_tokens, &m);
+    }
+
+    /// Resolved S-token contract for a basket currency.
+    pub fn get_s_token_address(env: Env, currency: CurrencyCode) -> Address {
+        let m: Map<CurrencyCode, Address> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.s_tokens)
+            .unwrap_or(Map::new(&env));
+        if let Some(addr) = m.get(currency.clone()) {
+            addr
+        } else {
+            panic!("S-token not configured for currency");
+        }
     }
 
     /// Add validator (admin only)

@@ -5,20 +5,47 @@ use shared::{MintEvent, DECIMALS};
 use soroban_sdk::{
     contract, contractimpl, symbol_short,
     testutils::{Address as _, Events},
-    Address, Env, FromVal, IntoVal, String as SorobanString, Symbol,
+    Address, Env, FromVal, IntoVal, Symbol, Vec,
 };
 
 // --- Mocks ---
 
 mod oracle_mock {
     use super::*;
+    use shared::CurrencyCode;
+
     #[contract]
     pub struct MockOracle;
 
     #[contractimpl]
     impl MockOracle {
         pub fn get_acbu_usd_rate(_env: Env) -> i128 {
-            DECIMALS // 1:1 rate
+            DECIMALS
+        }
+
+        pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
+            let mut v = Vec::new(&env);
+            v.push_back(CurrencyCode::new(&env, "NGN"));
+            v
+        }
+
+        pub fn get_basket_weight(_env: Env, _c: CurrencyCode) -> i128 {
+            10_000
+        }
+
+        pub fn get_rate(_env: Env, _c: CurrencyCode) -> i128 {
+            DECIMALS
+        }
+
+        pub fn get_s_token_address(env: Env, _c: CurrencyCode) -> Address {
+            env.storage()
+                .instance()
+                .get(&symbol_short!("STK"))
+                .expect("seed_stoken not called in test")
+        }
+
+        pub fn seed_stoken(env: Env, stoken: Address) {
+            env.storage().instance().set(&symbol_short!("STK"), &stoken);
         }
     }
 }
@@ -49,18 +76,42 @@ mod failing_reserve_mock {
     }
 }
 
+fn init_mint_client(
+    _env: &Env,
+    client: &MintingContractClient,
+    admin: &Address,
+    oracle: &Address,
+    reserve_tracker: &Address,
+    acbu_token: &Address,
+    usdc_token: &Address,
+    vault: &Address,
+    treasury: &Address,
+    fee_rate: i128,
+    fee_single: i128,
+) {
+    client.initialize(
+        admin,
+        oracle,
+        reserve_tracker,
+        acbu_token,
+        usdc_token,
+        vault,
+        treasury,
+        &fee_rate,
+        &fee_single,
+    );
+}
+
 // --- Setup ---
 
 fn setup_test(env: &Env) -> (Address, Address, Address, Address, Address, MintingContractClient) {
     let admin = Address::generate(env);
     let oracle = env.register_contract(None, oracle_mock::MockOracle);
     let reserve_tracker = env.register_contract(None, reserve_mock::MockReserveTracker);
-    
-    // The MintingContract must be the admin of the ACBU token to be able to mint it.
+
     let contract_id = env.register_contract(None, MintingContract);
     let acbu_token = env.register_stellar_asset_contract_v2(contract_id.clone()).address();
-    
-    // USDC token can be admin'd by a random address (e.g. the test admin)
+
     let usdc_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
 
     let client = MintingContractClient::new(env, &contract_id);
@@ -73,18 +124,25 @@ fn test_initialize() {
     let env = Env::default();
     env.mock_all_auths();
     let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
-    let fee_rate = 300; // 0.3%
+    let fee_rate = 300;
+    let fee_single = 100;
 
-    client.initialize(
+    init_mint_client(
+        &env,
+        &client,
         &admin,
         &oracle,
         &reserve_tracker,
         &acbu_token,
         &usdc_token,
-        &fee_rate,
+        &admin,
+        &admin,
+        fee_rate,
+        fee_single,
     );
 
     assert_eq!(client.get_fee_rate(), fee_rate);
+    assert_eq!(client.get_fee_single(), fee_single);
     assert_eq!(client.get_total_supply(), 0);
     assert!(!client.is_paused());
 }
@@ -96,23 +154,34 @@ fn test_initialize_twice() {
     env.mock_all_auths();
     let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
     let fee_rate = 300;
+    let fee_single = 100;
 
-    client.initialize(
+    init_mint_client(
+        &env,
+        &client,
         &admin,
         &oracle,
         &reserve_tracker,
         &acbu_token,
         &usdc_token,
-        &fee_rate,
+        &admin,
+        &admin,
+        fee_rate,
+        fee_single,
     );
 
-    client.initialize(
+    init_mint_client(
+        &env,
+        &client,
         &admin,
         &oracle,
         &reserve_tracker,
         &acbu_token,
         &usdc_token,
-        &fee_rate,
+        &admin,
+        &admin,
+        fee_rate,
+        fee_single,
     );
 }
 
@@ -124,29 +193,34 @@ fn test_mint_from_usdc() {
     let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
     let user = Address::generate(&env);
     let fee_rate = 300;
+    let fee_single = 100;
 
     let usdc_token_client = soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token_id);
     let usdc_client = soroban_sdk::token::Client::new(&env, &usdc_token_id);
     let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token_id);
 
-    // Initial USDC for user
     let usdc_amount = 100 * 10_000_000;
     usdc_token_client.mint(&user, &usdc_amount);
 
-    client.initialize(
+    init_mint_client(
+        &env,
+        &client,
         &admin,
         &oracle,
         &reserve_tracker,
         &acbu_token_id,
         &usdc_token_id,
-        &fee_rate,
+        &admin,
+        &admin,
+        fee_rate,
+        fee_single,
     );
 
     let mint_amount = 50 * 10_000_000;
     let acbu_minted = client.mint_from_usdc(&user, &mint_amount, &user);
 
-    let expected_fee = 15_000_000; // 0.3% of 50
-    let expected_acbu = 485_000_000; // 48.5 (since 1.5 is fee)
+    let expected_fee = 15_000_000;
+    let expected_acbu = 485_000_000;
 
     assert_eq!(acbu_minted, expected_acbu);
     assert_eq!(acbu_client.balance(&user), expected_acbu);
@@ -175,36 +249,37 @@ fn test_mint_from_usdc() {
 }
 
 #[test]
-fn test_mint_from_fiat() {
+fn test_mint_from_basket() {
     let env = Env::default();
     env.mock_all_auths();
 
     let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
-    let recipient = Address::generate(&env);
-    let fee_rate = 20;
+    let user = Address::generate(&env);
 
-    let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token_id);
+    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
+    stoken_sac.mint(&user, &(1_000 * DECIMALS));
 
-    client.initialize(
+    oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken_id);
+
+    init_mint_client(
+        &env,
+        &client,
         &admin,
         &oracle,
         &reserve_tracker,
         &acbu_token_id,
         &usdc_token_id,
-        &fee_rate,
+        &admin,
+        &admin,
+        50,
+        100,
     );
 
-    let fiat_amount = 1000 * 10_000_000;
-    let currency = SorobanString::from_str(&env, "NGN");
-    let fintech_tx_id = SorobanString::from_str(&env, "fiat_tx_001");
-
-    let acbu_minted =
-        client.mint_from_fiat(&admin, &currency, &fiat_amount, &recipient, &fintech_tx_id);
-
-    let expected_acbu = 998 * 10_000_000;
-    assert_eq!(acbu_minted, expected_acbu);
-    assert_eq!(acbu_client.balance(&recipient), expected_acbu);
-    assert_eq!(client.get_total_supply(), expected_acbu);
+    let acbu_amt = 100 * DECIMALS;
+    let net = client.mint_from_basket(&user, &user, &acbu_amt);
+    assert!(net > 0);
+    assert_eq!(client.get_total_supply(), acbu_amt);
 }
 
 #[test]
@@ -216,20 +291,25 @@ fn test_mint_insufficient_reserves() {
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, oracle_mock::MockOracle);
     let reserve_tracker = env.register_contract(None, failing_reserve_mock::MockFailingReserveTracker);
-    
+
     let contract_id = env.register_contract(None, MintingContract);
     let acbu_token = env.register_stellar_asset_contract_v2(contract_id.clone()).address();
     let usdc_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
 
     let client = MintingContractClient::new(&env, &contract_id);
 
-    client.initialize(
+    init_mint_client(
+        &env,
+        &client,
         &admin,
         &oracle,
         &reserve_tracker,
         &acbu_token,
         &usdc_token,
-        &0,
+        &admin,
+        &admin,
+        0,
+        100,
     );
 
     let user = Address::generate(&env);

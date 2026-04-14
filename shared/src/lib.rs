@@ -51,8 +51,8 @@ pub struct AccountDetails {
 /// **Backend / indexer alignment:** Map XDR or RPC event fields to these names in order. All
 /// `i128` amounts use **7 decimal places** (`DECIMALS` = 10_000_000 per whole unit). `rate` is
 /// the ACBU/USD rate in the same fixed-point form. `usdc_amount` is USDC in 7 decimals for
-/// `mint_from_usdc`; for `mint_from_fiat` it carries the USD-equivalent value after conversion
-/// (still 7-decimal fixed point), not on-chain USDC.
+/// `mint_from_usdc`; for Afreum S-token mint paths it carries the USD-equivalent notional
+/// (still 7-decimal fixed point).
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct MintEvent {

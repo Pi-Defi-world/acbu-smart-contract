@@ -1,6 +1,9 @@
+#![no_std]
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol,
 };
+
+use shared::BASIS_POINTS;
 
 
 #[contracttype]
@@ -23,15 +26,37 @@ const DATA_KEY: DataKey = DataKey {
 
 const VERSION: u32 = 1;
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoanId(pub Address, pub u64);
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct LoanData {
+    pub borrower: Address,
+    pub amount: i128,
+    pub collateral_amount: i128,
+    pub start_timestamp: u64,
+}
 
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct LoanCreatedEvent {
+    pub loan_id: u64,
     pub lender: Address,
     pub borrower: Address,
     pub amount: i128,
     pub interest_bps: i128,
     pub term_seconds: u64,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct LoanRepaidEvent {
+    pub loan_id: u64,
+    pub borrower: Address,
+    pub amount: i128,
     pub timestamp: u64,
 }
 
@@ -107,6 +132,101 @@ impl LendingPool {
     /// Get lender balance
     pub fn get_balance(env: Env, lender: Address) -> i128 {
         env.storage().temporary().get(&lender).unwrap_or(0)
+    }
+
+    /// Borrow ACBU from the pool
+    pub fn borrow(
+        env: Env,
+        borrower: Address,
+        amount: i128,
+        collateral_amount: i128,
+        loan_id: u64,
+    ) -> Result<(), soroban_sdk::Error> {
+        borrower.require_auth();
+        let paused: bool = env.storage().instance().get(&DATA_KEY.paused).unwrap_or(false);
+        if paused {
+            return Err(soroban_sdk::Error::from_contract_error(2001));
+        }
+
+        let key = LoanId(borrower.clone(), loan_id);
+        if env.storage().temporary().has(&key) {
+            return Err(soroban_sdk::Error::from_contract_error(2005));
+        }
+
+        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let client = soroban_sdk::token::Client::new(&env, &acbu);
+
+        // In MVP, we just transfer ACBU to borrower. 
+        // Real logic would check collateral value via oracle.
+        client.transfer(&env.current_contract_address(), &borrower, &amount);
+
+        let loan = LoanData {
+            borrower: borrower.clone(),
+            amount,
+            collateral_amount,
+            start_timestamp: env.ledger().timestamp(),
+        };
+
+        env.storage().temporary().set(&key, &loan);
+
+        env.events().publish(
+            (symbol_short!("loan_crt"), borrower.clone()),
+            LoanCreatedEvent {
+                loan_id,
+                lender: env.current_contract_address(),
+                borrower,
+                amount,
+                interest_bps: 0, // MVP
+                term_seconds: 0, // MVP
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Repay a loan
+    pub fn repay(
+        env: Env,
+        borrower: Address,
+        amount: i128,
+        loan_id: u64,
+    ) -> Result<(), soroban_sdk::Error> {
+        borrower.require_auth();
+
+        let key = LoanId(borrower.clone(), loan_id);
+        let mut loan: LoanData = env
+            .storage()
+            .temporary()
+            .get(&key)
+            .ok_or(soroban_sdk::Error::from_contract_error(2003))?;
+
+        if amount > loan.amount {
+            return Err(soroban_sdk::Error::from_contract_error(2006));
+        }
+
+        let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let client = soroban_sdk::token::Client::new(&env, &acbu);
+        client.transfer(&borrower, &env.current_contract_address(), &amount);
+
+        loan.amount -= amount;
+        if loan.amount == 0 {
+            env.storage().temporary().remove(&key);
+        } else {
+            env.storage().temporary().set(&key, &loan);
+        }
+
+        env.events().publish(
+            (symbol_short!("repay"), borrower.clone()),
+            LoanRepaidEvent {
+                loan_id,
+                borrower,
+                amount,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
     }
 
     pub fn pause(env: Env) -> Result<(), soroban_sdk::Error> {

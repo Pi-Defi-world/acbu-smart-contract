@@ -123,17 +123,6 @@ impl Escrow {
         Ok(())
     }
 
-    /// double unwrap resolve
-    let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token)
-    .expect("acbu_token not set — contract not initialized");
-    let client = soroban_sdk::token::Client::new(&env, &acbu);
-    client.transfer(&payer, &env.current_contract_address(), &amount);
-
-    env.storage().temporary().set(&key, &(payer.clone(), payee.clone(), amount));
-    // ... events unchanged
-    Ok(())
-}
-
     /// Release escrow: payee receives ACBU (caller must be admin or authorized)
     /// caller must supply payer and escrow_id to identify which escrow to release
     pub fn release(env: Env, escrow_id: u64, payer: Address) -> Result<(), soroban_sdk::Error> {

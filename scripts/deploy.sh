@@ -59,7 +59,7 @@ echo -e "${GREEN}Building contracts...${NC}"
 cd "$CONTRACTS_DIR"
 cargo build --target wasm32-unknown-unknown --release
 
-# Deploy contracts in order: Oracle -> Reserve Tracker -> Minting -> Burning
+# Deploy contracts in order: Oracle -> Reserve Tracker -> Minting -> Burning -> Lending Pool -> Escrow
 echo -e "${GREEN}Deploying contracts...${NC}"
 
 # Deploy Oracle
@@ -106,6 +106,28 @@ BURNING_ID=$(soroban contract deploy \
 
 echo -e "${GREEN}Burning deployed: $BURNING_ID${NC}"
 
+# Deploy Lending Pool
+echo -e "${YELLOW}Deploying Lending Pool contract...${NC}"
+LENDING_WASM="$CONTRACTS_DIR/target/wasm32-unknown-unknown/release/acbu_lending_pool.wasm"
+LENDING_ID=$(soroban contract deploy \
+    --wasm "$LENDING_WASM" \
+    --network "$NETWORK" \
+    --source "$STELLAR_SECRET_KEY" \
+    | grep -oP 'Contract ID: \K[^\s]+')
+
+echo -e "${GREEN}Lending Pool deployed: $LENDING_ID${NC}"
+
+# Deploy Escrow
+echo -e "${YELLOW}Deploying Escrow contract...${NC}"
+ESCROW_WASM="$CONTRACTS_DIR/target/wasm32-unknown-unknown/release/acbu_escrow.wasm"
+ESCROW_ID=$(soroban contract deploy \
+    --wasm "$ESCROW_WASM" \
+    --network "$NETWORK" \
+    --source "$STELLAR_SECRET_KEY" \
+    | grep -oP 'Contract ID: \K[^\s]+')
+
+echo -e "${GREEN}Escrow deployed: $ESCROW_ID${NC}"
+
 # Save contract addresses
 DEPLOYMENT_FILE="$CONTRACTS_DIR/.soroban/deployment_${NETWORK}.json"
 mkdir -p "$(dirname "$DEPLOYMENT_FILE")"
@@ -117,12 +139,98 @@ cat > "$DEPLOYMENT_FILE" << EOF
     "oracle": "$ORACLE_ID",
     "reserve_tracker": "$RESERVE_ID",
     "minting": "$MINTING_ID",
-    "burning": "$BURNING_ID"
+    "burning": "$BURNING_ID",
+    "lending_pool": "$LENDING_ID",
+    "escrow": "$ESCROW_ID"
   }
 }
 EOF
 
-echo -e "${GREEN}Deployment complete!${NC}"
+# Initialize contracts (Note: Placeholder addresses for tokens and admin)
+ADMIN_ADDRESS=$(soroban keys address "$STELLAR_SECRET_KEY")
+ACBU_TOKEN_ID="TODO_ACBU_TOKEN_ID"
+USDC_TOKEN_ID="TODO_USDC_TOKEN_ID"
+VAULT_ADDRESS="TODO_VAULT_ADDRESS"
+TREASURY_ADDRESS="TODO_TREASURY_ADDRESS"
+WD_PROC_ADDRESS="TODO_WD_PROC_ADDRESS"
+
+echo -e "${YELLOW}Initializing contracts...${NC}"
+
+# Initialize Oracle
+soroban contract invoke \
+    --id "$ORACLE_ID" \
+    --network "$NETWORK" \
+    --source "$STELLAR_SECRET_KEY" \
+    -- \
+    initialize \
+    --admin "$ADMIN_ADDRESS"
+
+# Initialize Reserve Tracker
+soroban contract invoke \
+    --id "$RESERVE_ID" \
+    --network "$NETWORK" \
+    --source "$STELLAR_SECRET_KEY" \
+    -- \
+    initialize \
+    --admin "$ADMIN_ADDRESS" \
+    --oracle "$ORACLE_ID" \
+    --acbu_token "$ACBU_TOKEN_ID" \
+    --min_ratio 10200
+
+# Initialize Minting
+soroban contract invoke \
+    --id "$MINTING_ID" \
+    --network "$NETWORK" \
+    --source "$STELLAR_SECRET_KEY" \
+    -- \
+    initialize \
+    --admin "$ADMIN_ADDRESS" \
+    --oracle "$ORACLE_ID" \
+    --reserve_tracker "$RESERVE_ID" \
+    --acbu_token "$ACBU_TOKEN_ID" \
+    --usdc_token "$USDC_TOKEN_ID" \
+    --vault "$VAULT_ADDRESS" \
+    --treasury "$TREASURY_ADDRESS" \
+    --fee_rate_bps 30 \
+    --fee_single_bps 50
+
+# Initialize Burning
+soroban contract invoke \
+    --id "$BURNING_ID" \
+    --network "$NETWORK" \
+    --source "$STELLAR_SECRET_KEY" \
+    -- \
+    initialize \
+    --admin "$ADMIN_ADDRESS" \
+    --oracle "$ORACLE_ID" \
+    --reserve_tracker "$RESERVE_ID" \
+    --acbu_token "$ACBU_TOKEN_ID" \
+    --withdrawal_processor "$WD_PROC_ADDRESS" \
+    --vault "$VAULT_ADDRESS" \
+    --fee_rate_bps 30 \
+    --fee_single_redeem_bps 100
+
+# Initialize Lending Pool
+soroban contract invoke \
+    --id "$LENDING_ID" \
+    --network "$NETWORK" \
+    --source "$STELLAR_SECRET_KEY" \
+    -- \
+    initialize \
+    --admin "$ADMIN_ADDRESS" \
+    --acbu_token "$ACBU_TOKEN_ID"
+
+# Initialize Escrow
+soroban contract invoke \
+    --id "$ESCROW_ID" \
+    --network "$NETWORK" \
+    --source "$STELLAR_SECRET_KEY" \
+    -- \
+    initialize \
+    --admin "$ADMIN_ADDRESS" \
+    --acbu_token "$ACBU_TOKEN_ID"
+
+echo -e "${GREEN}Deployment and initialization complete!${NC}"
 echo -e "${GREEN}Contract addresses saved to: $DEPLOYMENT_FILE${NC}"
 echo ""
 echo "Contract Addresses:"
