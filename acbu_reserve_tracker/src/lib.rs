@@ -100,15 +100,7 @@ impl ReserveTrackerContract {
         reserves.set(currency.clone(), reserve_data);
         env.storage().instance().set(&DATA_KEY.reserves, &reserves);
 
-        // Emit Event (avoid complex contracttype values in topics for compatibility).
-        env.events().publish(
-            (symbol_short!("reserve"),),
-            ReserveUpdateEvent {
-                currency,
-                amount,
-                value_usd,
-                timestamp: current_time,
-            },
+        env.events().publish((symbol_short!("reserve"), currency.clone()), reserve_data.clone());
         );
     }
 
@@ -125,7 +117,7 @@ impl ReserveTrackerContract {
         Self::check_admin(&env);
         let reserves: Map<CurrencyCode, ReserveData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.reserves, &reserves);
-    }
+    env.events().publish((symbol_short!("reset"),), ());}
 
     /// Get total reserve value in USD
     pub fn get_total_reserve_value(env: Env) -> i128 {
