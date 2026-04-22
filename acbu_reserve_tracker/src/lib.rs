@@ -1,6 +1,7 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol};
-
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol,
+};
 
 use shared::{CurrencyCode, ReserveData};
 
@@ -23,7 +24,16 @@ pub struct DataKey {
     pub oracle: Symbol,
     pub reserves: Symbol,
     pub min_reserve_ratio: Symbol,
+    pub acbu_token: Symbol,
     pub version: Symbol,
+}
+
+#[allow(dead_code)]
+pub mod token_contract {
+    soroban_sdk::contractimport!(
+        file = "../soroban_token_contract.wasm",
+        sha256 = "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"
+    );
 }
 
 #[contracttype]
@@ -40,11 +50,11 @@ const DATA_KEY: DataKey = DataKey {
     oracle: symbol_short!("ORACLE"),
     reserves: symbol_short!("RESERVES"),
     min_reserve_ratio: symbol_short!("MIN_RES"),
+    acbu_token: symbol_short!("ACBU_TKN"),
     version: symbol_short!("VERSION"),
 };
 
-const VERSION: u32 = 4;
-
+const VERSION: u32 = 5;
 
 #[contract]
 pub struct ReserveTrackerContract;
@@ -52,11 +62,37 @@ pub struct ReserveTrackerContract;
 #[contractimpl]
 impl ReserveTrackerContract {
     /// Initialize the reserve tracker contract
-    pub fn initialize(env: Env, admin: Address, oracle: Address, min_reserve_ratio_bps: i128) {
-        // Check if already initialized
+pub fn initialize(env: Env, admin: Address, oracle: Address, acbu_token: Address, min_reserve_ratio_bps: i128) {
         if env.storage().instance().has(&DATA_KEY.admin) {
             panic!("Contract already initialized");
         }
+
+        env.storage().instance().set(&DATA_KEY.admin, &admin);
+        env.storage().instance().set(&DATA_KEY.oracle, &oracle);
+        env.storage().instance().set(&DATA_KEY.acbu_token, &acbu_token);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.min_reserve_ratio, &min_reserve_ratio_bps);
+
+        let reserves: Map<CurrencyCode, ReserveData> = Map::new(&env);
+        env.storage().instance().set(&DATA_KEY.reserves, &reserves);
+        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+    }
+
+    pub fn get_total_supply_from_token(env: &Env) -> i128 {
+        let acbu_token_addr: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let token = soroban_sdk::token::Client::new(env, &acbu_token_addr);
+        token.total_supply()
+    }
+
+    pub fn verify_reserves(env: Env) -> bool {
+        let total_acbu_supply = Self::get_total_supply_from_token(&env);
+        Self::is_reserve_sufficient(env, total_acbu_supply)
+    }
+
+    pub fn verify_reserves_manual(env: Env, total_acbu_supply: i128) -> bool {
+        Self::is_reserve_sufficient(env, total_acbu_supply)
+    }
 
         // Store configuration
         env.storage().instance().set(&DATA_KEY.admin, &admin);
@@ -213,4 +249,3 @@ impl ReserveTrackerContract {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 }
-

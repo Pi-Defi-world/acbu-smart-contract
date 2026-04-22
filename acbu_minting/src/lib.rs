@@ -1,12 +1,12 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env, IntoVal, String as SorobanString,
-    Symbol,
+    contract, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env, IntoVal,
+    String as SorobanString, Symbol,
 };
 
 use shared::{
-    calculate_amount_after_fee, calculate_fee, CurrencyCode, MintEvent, BASIS_POINTS, DECIMALS, MAX_MINT_AMOUNT,
-    MIN_MINT_AMOUNT,
+    calculate_amount_after_fee, calculate_fee, CurrencyCode, MintEvent, BASIS_POINTS, DECIMALS,
+    MAX_MINT_AMOUNT, MIN_MINT_AMOUNT,
 };
 
 mod shared {
@@ -19,6 +19,14 @@ pub mod token_contract {
         file = "../soroban_token_contract.wasm",
         sha256 = "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"
     );
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettlementProof {
+    pub proof_id: String,
+    pub settled: bool,
+    pub timestamp: u64,
 }
 
 #[contracttype]
@@ -38,8 +46,8 @@ pub struct DataKey {
     pub max_mint_amount: Symbol,
     pub total_supply: Symbol,
     pub version: Symbol,
-    /// Backend / relayer key allowed to pull custodial demo fiat from this contract into the vault.
     pub operator: Symbol,
+    pub used_proofs: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -58,9 +66,37 @@ const DATA_KEY: DataKey = DataKey {
     total_supply: symbol_short!("SUPPLY"),
     version: symbol_short!("VERSION"),
     operator: symbol_short!("OPERTR"),
+    used_proofs: symbol_short!("PRF_SET"),
 };
 
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
+
+fn check_proof_unused(env: &Env, proof_id: &SorobanString) -> bool {
+    let used_proofs: soroban_sdk::Vec<SorobanString> = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY.used_proofs)
+        .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+
+    for i in 0..used_proofs.len() {
+        if used_proofs.get(i) == *proof_id {
+            return false;
+        }
+    }
+    true
+}
+
+fn mark_proof_used(env: &Env, proof_id: &SorobanString) {
+    let mut used_proofs: soroban_sdk::Vec<SorobanString> = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY.used_proofs)
+        .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+    used_proofs.push_back(proof_id.clone());
+    env.storage()
+        .instance()
+        .set(&DATA_KEY.used_proofs, &used_proofs);
+}
 
 #[contract]
 pub struct MintingContract;
@@ -176,7 +212,9 @@ impl MintingContract {
         }
 
         total_supply += acbu_amount;
-        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         let usdc_client = soroban_sdk::token::Client::new(&env, &usdc_token);
         usdc_client.transfer(&user, &env.current_contract_address(), &usdc_amount);
@@ -204,7 +242,12 @@ impl MintingContract {
 
     /// Mint ACBU by depositing Afreum-style S-tokens in full basket proportions (lower fee tier).
     /// Pulls each S-token from `user` into `vault` per oracle weights and rates.
-    pub fn mint_from_basket(env: Env, user: Address, recipient: Address, acbu_amount: i128) -> i128 {
+    pub fn mint_from_basket(
+        env: Env,
+        user: Address,
+        recipient: Address,
+        acbu_amount: i128,
+    ) -> i128 {
         Self::check_paused(&env);
         user.require_auth();
 
@@ -299,7 +342,9 @@ impl MintingContract {
         }
 
         total_supply += acbu_amount;
-        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &net_mint);
@@ -320,7 +365,8 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
-        net_mint
+        mark_proof_used(&env, &proof_id);
+        acbu_amount
     }
 
     /// Single S-token deposit: Afreum ramp delivers one S-token; fee tier is `fee_single_bps`.
@@ -404,7 +450,9 @@ impl MintingContract {
         token.transfer(&user, &vault, &s_token_amount);
 
         total_supply += acbu_amount;
-        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &acbu_amount);
@@ -434,6 +482,7 @@ impl MintingContract {
         recipient: Address,
         currency: CurrencyCode,
         fiat_amount: i128,
+        proof_id: SorobanString,
     ) -> i128 {
         Self::check_paused(&env);
         let expected_operator: Address = Self::get_operator(env.clone());
@@ -441,6 +490,10 @@ impl MintingContract {
             panic!("Unauthorized operator");
         }
         operator.require_auth();
+
+        if !check_proof_unused(&env, &proof_id) {
+            panic!("Proof already used");
+        }
 
         let min_amount: i128 = env
             .storage()
@@ -511,7 +564,9 @@ impl MintingContract {
         token.transfer(&custody, &vault, &fiat_amount);
 
         total_supply += acbu_amount;
-        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &acbu_amount);
@@ -584,11 +639,16 @@ impl MintingContract {
     pub fn sync_supply(env: Env, new_supply: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.total_supply, &new_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &new_supply);
     }
 
     pub fn get_total_supply(env: Env) -> i128 {
-        env.storage().instance().get(&DATA_KEY.total_supply).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.total_supply)
+            .unwrap_or(0)
     }
 
     pub fn pause(env: Env) {

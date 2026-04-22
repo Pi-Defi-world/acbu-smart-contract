@@ -5,13 +5,13 @@ use soroban_sdk::{
 
 use shared::BASIS_POINTS;
 
-
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataKey {
     pub admin: Symbol,
     pub acbu_token: Symbol,
     pub fee_rate: Symbol,
+    pub treasury: Symbol,
     pub paused: Symbol,
     pub version: Symbol,
 }
@@ -20,6 +20,7 @@ const DATA_KEY: DataKey = DataKey {
     admin: symbol_short!("ADMIN"),
     acbu_token: symbol_short!("ACBU_TKN"),
     fee_rate: symbol_short!("FEE_RATE"),
+    treasury: symbol_short!("TRSY"),
     paused: symbol_short!("PAUSED"),
     version: symbol_short!("VERSION"),
 };
@@ -65,6 +66,15 @@ pub struct LoanRepaidEvent {
 pub struct RepaymentEvent {
     pub borrower: Address,
     pub amount: i128,
+    pub fee: i128,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeCollectedEvent {
+    pub treasury: Address,
+    pub amount: i128,
     pub timestamp: u64,
 }
 
@@ -74,7 +84,7 @@ pub struct LendingPool;
 #[contractimpl]
 impl LendingPool {
     /// Initialize the lending pool contract
-    pub fn initialize(env: Env, admin: Address, acbu_token: Address, fee_rate_bps: i128) {
+pub fn initialize(env: Env, admin: Address, acbu_token: Address, fee_rate_bps: i128, treasury: Address) {
         if env.storage().instance().has(&DATA_KEY.admin) {
             panic!("Contract already initialized");
         }
@@ -84,6 +94,20 @@ impl LendingPool {
         env.storage().instance().set(&DATA_KEY.admin, &admin);
         env.storage().instance().set(&DATA_KEY.acbu_token, &acbu_token);
         env.storage().instance().set(&DATA_KEY.fee_rate, &fee_rate_bps);
+        env.storage().instance().set(&DATA_KEY.treasury, &treasury);
+        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+    }
+        if fee_rate_bps < 0 || fee_rate_bps > BASIS_POINTS {
+            panic!("Invalid fee rate");
+        }
+        env.storage().instance().set(&DATA_KEY.admin, &admin);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.acbu_token, &acbu_token);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.fee_rate, &fee_rate_bps);
         env.storage().instance().set(&DATA_KEY.paused, &false);
         env.storage().instance().set(&DATA_KEY.version, &VERSION);
     }
@@ -92,7 +116,11 @@ impl LendingPool {
     pub fn deposit(env: Env, lender: Address, amount: i128) -> Result<i128, soroban_sdk::Error> {
         // Auth first: caller must be the lender themselves
         lender.require_auth();
-        let paused: bool = env.storage().instance().get(&DATA_KEY.paused).unwrap_or(false);
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.paused)
+            .unwrap_or(false);
         if paused {
             return Err(soroban_sdk::Error::from_contract_error(2001));
         }
@@ -111,14 +139,22 @@ impl LendingPool {
     pub fn withdraw(env: Env, lender: Address, amount: i128) -> Result<(), soroban_sdk::Error> {
         // Auth first: caller must be the lender themselves
         lender.require_auth();
-        let paused: bool = env.storage().instance().get(&DATA_KEY.paused).unwrap_or(false);
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.paused)
+            .unwrap_or(false);
         if paused {
             return Err(soroban_sdk::Error::from_contract_error(2001));
         }
         if amount <= 0 {
             return Err(soroban_sdk::Error::from_contract_error(2002));
         }
-        let balance: i128 = env.storage().temporary().get(&lender).ok_or(soroban_sdk::Error::from_contract_error(2003))?;
+        let balance: i128 = env
+            .storage()
+            .temporary()
+            .get(&lender)
+            .ok_or(soroban_sdk::Error::from_contract_error(2003))?;
         if balance < amount {
             return Err(soroban_sdk::Error::from_contract_error(2004));
         }
@@ -143,7 +179,11 @@ impl LendingPool {
         loan_id: u64,
     ) -> Result<(), soroban_sdk::Error> {
         borrower.require_auth();
-        let paused: bool = env.storage().instance().get(&DATA_KEY.paused).unwrap_or(false);
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.paused)
+            .unwrap_or(false);
         if paused {
             return Err(soroban_sdk::Error::from_contract_error(2001));
         }
@@ -156,7 +196,7 @@ impl LendingPool {
         let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
         let client = soroban_sdk::token::Client::new(&env, &acbu);
 
-        // In MVP, we just transfer ACBU to borrower. 
+        // In MVP, we just transfer ACBU to borrower.
         // Real logic would check collateral value via oracle.
         client.transfer(&env.current_contract_address(), &borrower, &amount);
 
@@ -205,9 +245,35 @@ impl LendingPool {
             return Err(soroban_sdk::Error::from_contract_error(2006));
         }
 
+        let fee_rate: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.fee_rate)
+            .unwrap_or(0);
+        let treasury: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.treasury)
+            .unwrap_or(env.current_contract_address());
         let acbu: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
         let client = soroban_sdk::token::Client::new(&env, &acbu);
-        client.transfer(&borrower, &env.current_contract_address(), &amount);
+
+        let fee = (amount * fee_rate) / 10_000;
+        let net_amount = amount - fee;
+
+        client.transfer(&borrower, &env.current_contract_address(), &net_amount);
+        if fee > 0 {
+            client.transfer(&borrower, &treasury, &fee);
+
+            env.events().publish(
+                (symbol_short!("fee_col"),),
+                FeeCollectedEvent {
+                    treasury,
+                    amount: fee,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
+        }
 
         loan.amount -= amount;
         if loan.amount == 0 {
@@ -266,4 +332,3 @@ impl LendingPool {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 }
-
