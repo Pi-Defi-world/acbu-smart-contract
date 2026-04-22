@@ -2,6 +2,14 @@
 
 use soroban_sdk::{contracttype, Address, String as SorobanString, Vec};
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    Version,
+}
+
+pub const CONTRACT_VERSION: u32 = 1;
+
 /// Currency code type (e.g., "NGN", "KES", "RWF")
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

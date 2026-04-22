@@ -6,7 +6,8 @@ use soroban_sdk::{
 
 use shared::{
     calculate_deviation, median, CurrencyCode, OutlierDetectionEvent, RateData, RateUpdateEvent,
-    DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, UPDATE_INTERVAL_SECONDS,
+    BASIS_POINTS, CONTRACT_VERSION, DECIMALS, DataKey as SharedDataKey, EMERGENCY_THRESHOLD_BPS,
+    OUTLIER_THRESHOLD_BPS, UPDATE_INTERVAL_SECONDS,
 };
 
 mod shared {
@@ -26,7 +27,6 @@ pub struct DataKey {
     pub basket_weights: Symbol,
     /// Afreum (or other) Soroban SAC addresses per basket currency code
     pub s_tokens: Symbol,
-    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -39,10 +39,9 @@ const DATA_KEY: DataKey = DataKey {
     update_interval: symbol_short!("UPD_INT"),
     basket_weights: symbol_short!("BSK_WTS"),
     s_tokens: symbol_short!("S_TOKNS"),
-    version: symbol_short!("VERSION"),
 };
 
-const VERSION: u32 = 8;
+// CONTRACT_VERSION is imported from shared
 
 
 #[contracttype]
@@ -106,7 +105,7 @@ impl OracleContract {
         let rates: Map<CurrencyCode, RateData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.rates, &rates);
         env.storage().instance().set(&DATA_KEY.last_update, &0u64);
-        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Update rate for a currency (validator function)
@@ -428,61 +427,34 @@ impl OracleContract {
         admin.require_auth();
     }
 
-    pub fn version(_env: Env) -> u32 {
-        VERSION
+    pub fn get_version(env: Env) -> u32 {
+        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
     }
 
-    pub fn migrate(env: Env) {
-        Self::check_admin(&env);
-        let current_version = VERSION;
-        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
-        if stored_version < current_version {
-            // v2 migration: reset s_tokens to avoid deserialization traps when
-            // CurrencyCode representation changes across upgrades.
-            if stored_version < 2 {
-                let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
-                env.storage()
-                    .instance()
-                    .set(&DATA_KEY.s_tokens, &s_tokens_empty);
-            }
-            // v3 migration: clear rates keyed by old CurrencyCode encoding.
-            if stored_version < 3 {
-                // Rates are also keyed by CurrencyCode; clear them to avoid traps when
-                // the serialized key format changed across upgrades.
-                let rates_empty: Map<CurrencyCode, RateData> = Map::new(&env);
-                env.storage().instance().set(&DATA_KEY.rates, &rates_empty);
-                env.storage().instance().set(&DATA_KEY.last_update, &0u64);
-            }
-            // v5+ migration: several instance-storage maps are keyed by `CurrencyCode` and have
-            // historically changed encoding across upgrades. Clear them to avoid host traps on
-            // reads/writes, then re-seed via admin calls.
-            if stored_version < 6 {
-                let currencies_empty: Vec<CurrencyCode> = Vec::new(&env);
-                let basket_weights_empty: Map<CurrencyCode, i128> = Map::new(&env);
-                env.storage()
-                    .instance()
-                    .set(&DATA_KEY.currencies, &currencies_empty);
-                env.storage()
-                    .instance()
-                    .set(&DATA_KEY.basket_weights, &basket_weights_empty);
-
-                let rates_empty: Map<CurrencyCode, RateData> = Map::new(&env);
-                env.storage().instance().set(&DATA_KEY.rates, &rates_empty);
-                env.storage().instance().set(&DATA_KEY.last_update, &0u64);
-
-                let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
-                env.storage().instance().set(&DATA_KEY.s_tokens, &s_tokens_empty);
-            }
-            env.storage()
-                .instance()
-                .set(&DATA_KEY.version, &current_version);
-        }
-    }
-
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+
+        let current_version = Self::get_version(env.clone());
+        if new_version <= current_version {
+            panic!("Invalid version upgrade");
+        }
+
         env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        // Run migrations
+        for v in current_version..new_version {
+            match v {
+                0 => migrate_v0_to_v1(env.clone()),
+                _ => {}
+            }
+        }
+
+        env.storage().instance().set(&SharedDataKey::Version, &new_version);
     }
+}
+
+fn migrate_v0_to_v1(_env: Env) {
+    // Migration logic
 }
 

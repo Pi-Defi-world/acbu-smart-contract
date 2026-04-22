@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol, Vec};
 
-use shared::{calculate_fee, BASIS_POINTS};
+use shared::{calculate_fee, BASIS_POINTS, CONTRACT_VERSION, DataKey as SharedDataKey};
 
 mod shared {
     pub use shared::*;
@@ -50,7 +50,6 @@ pub struct DataKey {
     pub fee_rate: Symbol,
     pub yield_rate: Symbol,
     pub paused: Symbol,
-    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -59,12 +58,11 @@ const DATA_KEY: DataKey = DataKey {
     fee_rate: symbol_short!("FEE_RATE"),
     yield_rate: symbol_short!("YLD_RATE"),
     paused: symbol_short!("PAUSED"),
-    version: symbol_short!("VERSION"),
 };
 
 const DEPOSIT_KEY: Symbol = symbol_short!("DEPOSITS");
 const SECONDS_PER_YEAR: i128 = 31_536_000;
-const VERSION: u32 = 1;
+// CONTRACT_VERSION is imported from shared
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -169,7 +167,7 @@ impl SavingsVault {
         env.storage().instance().set(&DATA_KEY.fee_rate, &fee_rate_bps);
         env.storage().instance().set(&DATA_KEY.yield_rate, &yield_rate_bps);
         env.storage().instance().set(&DATA_KEY.paused, &false);
-        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
         Ok(())
     }
 
@@ -351,30 +349,38 @@ impl SavingsVault {
         Ok(())
     }
 
-    pub fn version(_env: Env) -> u32 {
-        VERSION
+    pub fn get_version(env: Env) -> u32 {
+        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
     }
 
-    pub fn migrate(env: Env) -> Result<(), soroban_sdk::Error> {
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) -> Result<(), soroban_sdk::Error> {
         let admin = Self::load_admin(&env)?;
         admin.require_auth();
-        let stored_version: u32 = env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.version)
-            .unwrap_or(0);
-        if stored_version < VERSION {
-            env.storage().instance().set(&DATA_KEY.version, &VERSION);
+
+        let current_version = Self::get_version(env.clone());
+        if new_version <= current_version {
+            panic!("Invalid version upgrade");
         }
-        Ok(())
-    }
 
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), soroban_sdk::Error> {
-        let admin = Self::load_admin(&env)?;
-        admin.require_auth();
         env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        // Run migrations
+        for v in current_version..new_version {
+            match v {
+                0 => migrate_v0_to_v1(env.clone()),
+                _ => {}
+            }
+        }
+
+        env.storage().instance().set(&SharedDataKey::Version, &new_version);
         Ok(())
     }
+}
+
+fn migrate_v0_to_v1(_env: Env) {
+    // Migration logic
+}
 
     // -----------------------------------------------------------------------
     // Private helpers
