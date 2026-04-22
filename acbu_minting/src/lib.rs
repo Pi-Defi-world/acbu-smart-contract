@@ -125,6 +125,9 @@ impl MintingContract {
     pub fn mint_from_usdc(env: Env, user: Address, usdc_amount: i128, recipient: Address) -> i128 {
         Self::check_paused(&env);
         user.require_auth();
+        // C-058: reject contract-type recipients — minting to a contract address
+        // that has no token-receipt logic would permanently strand the funds.
+        Self::assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -207,6 +210,9 @@ impl MintingContract {
     pub fn mint_from_basket(env: Env, user: Address, recipient: Address, acbu_amount: i128) -> i128 {
         Self::check_paused(&env);
         user.require_auth();
+        // C-058: reject contract-type recipients — minting to a contract address
+        // that has no token-receipt logic would permanently strand the funds.
+        Self::assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -335,6 +341,9 @@ impl MintingContract {
     ) -> i128 {
         Self::check_paused(&env);
         user.require_auth();
+        // C-058: reject contract-type recipients — minting to a contract address
+        // that has no token-receipt logic would permanently strand the funds.
+        Self::assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -441,6 +450,9 @@ impl MintingContract {
             panic!("Unauthorized operator");
         }
         operator.require_auth();
+        // C-058: reject contract-type recipients — minting to a contract address
+        // that has no token-receipt logic would permanently strand the funds.
+        Self::assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -542,6 +554,8 @@ impl MintingContract {
     ) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        // C-058: reject contract-type recipients to prevent stranded token transfers.
+        Self::assert_recipient_is_account(&recipient);
         if amount <= 0 {
             panic!("Invalid drip amount");
         }
@@ -651,6 +665,18 @@ impl MintingContract {
         }
     }
 
+    /// C-058: Asserts that `recipient` is a Stellar account (G… keypair) and not a
+    /// contract address (C… hash). Minting ACBU to a contract-only address that has no
+    /// token-receipt logic permanently strands the funds on-ledger with no recovery path.
+    ///
+    /// Called at the top of every mint entry-point and the admin drip helper, before any
+    /// state mutation or token transfer, so no funds ever move for an invalid recipient.
+    fn assert_recipient_is_account(recipient: &Address) {
+        if !recipient.is_account() {
+            panic!("Recipient must be a Stellar account, not a contract");
+        }
+    }
+
     pub fn version(_env: Env) -> u32 {
         VERSION
     }
@@ -672,5 +698,187 @@ impl MintingContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+}
+
+// ============================================================================
+// Tests — C-058: validate recipient is a real account
+// ============================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Env, Address};
+
+    // -----------------------------------------------------------------------
+    // Helper: contract address (C…) — represents any deployed contract
+    // -----------------------------------------------------------------------
+    fn contract_address(env: &Env) -> Address {
+        // In the test environment, `register_contract` returns a contract Address.
+        // We use a blank contract so we get a valid C… address without any impl needed.
+        env.register_contract(None, MintingContract)
+    }
+
+    // -----------------------------------------------------------------------
+    // assert_recipient_is_account — unit tests for the guard itself
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_account_recipient_passes_guard() {
+        let env = Env::default();
+        // Address::generate() produces a Stellar account (G… keypair).
+        let account = Address::generate(&env);
+        // Should not panic — accounts are valid recipients.
+        MintingContract::assert_recipient_is_account(&account);
+    }
+
+    #[test]
+    #[should_panic(expected = "Recipient must be a Stellar account, not a contract")]
+    fn test_contract_recipient_fails_guard() {
+        let env = Env::default();
+        let contract_addr = contract_address(&env);
+        MintingContract::assert_recipient_is_account(&contract_addr);
+    }
+
+    // -----------------------------------------------------------------------
+    // mint_from_usdc — C-058 guard
+    // -----------------------------------------------------------------------
+
+    #[test]
+    #[should_panic(expected = "Recipient must be a Stellar account, not a contract")]
+    fn test_mint_from_usdc_rejects_contract_recipient() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, MintingContract);
+        let client = MintingContractClient::new(&env, &contract_id);
+
+        // Initialize with dummy addresses (all accounts — only recipient is a contract)
+        let admin     = Address::generate(&env);
+        let oracle    = Address::generate(&env);
+        let res_track = Address::generate(&env);
+        let acbu_tok  = Address::generate(&env);
+        let usdc_tok  = Address::generate(&env);
+        let vault     = Address::generate(&env);
+        let treasury  = Address::generate(&env);
+
+        client.initialize(
+            &admin, &oracle, &res_track, &acbu_tok,
+            &usdc_tok, &vault, &treasury, &100i128, &150i128,
+        );
+
+        let user             = Address::generate(&env);
+        let contract_recip   = contract_address(&env); // ← invalid: C… address
+        client.mint_from_usdc(&user, &MIN_MINT_AMOUNT, &contract_recip);
+    }
+
+    #[test]
+    #[should_panic(expected = "Recipient must be a Stellar account, not a contract")]
+    fn test_mint_from_basket_rejects_contract_recipient() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, MintingContract);
+        let client = MintingContractClient::new(&env, &contract_id);
+
+        let admin     = Address::generate(&env);
+        let oracle    = Address::generate(&env);
+        let res_track = Address::generate(&env);
+        let acbu_tok  = Address::generate(&env);
+        let usdc_tok  = Address::generate(&env);
+        let vault     = Address::generate(&env);
+        let treasury  = Address::generate(&env);
+
+        client.initialize(
+            &admin, &oracle, &res_track, &acbu_tok,
+            &usdc_tok, &vault, &treasury, &100i128, &150i128,
+        );
+
+        let user           = Address::generate(&env);
+        let contract_recip = contract_address(&env);
+        client.mint_from_basket(&user, &contract_recip, &MIN_MINT_AMOUNT);
+    }
+
+    #[test]
+    #[should_panic(expected = "Recipient must be a Stellar account, not a contract")]
+    fn test_mint_from_single_rejects_contract_recipient() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, MintingContract);
+        let client = MintingContractClient::new(&env, &contract_id);
+
+        let admin     = Address::generate(&env);
+        let oracle    = Address::generate(&env);
+        let res_track = Address::generate(&env);
+        let acbu_tok  = Address::generate(&env);
+        let usdc_tok  = Address::generate(&env);
+        let vault     = Address::generate(&env);
+        let treasury  = Address::generate(&env);
+
+        client.initialize(
+            &admin, &oracle, &res_track, &acbu_tok,
+            &usdc_tok, &vault, &treasury, &100i128, &150i128,
+        );
+
+        let user           = Address::generate(&env);
+        let contract_recip = contract_address(&env);
+        let currency       = CurrencyCode::new(&env, "NGN");
+        client.mint_from_single(&user, &contract_recip, &currency, &MIN_MINT_AMOUNT);
+    }
+
+    #[test]
+    #[should_panic(expected = "Recipient must be a Stellar account, not a contract")]
+    fn test_mint_from_demo_fiat_rejects_contract_recipient() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, MintingContract);
+        let client = MintingContractClient::new(&env, &contract_id);
+
+        let admin     = Address::generate(&env);
+        let oracle    = Address::generate(&env);
+        let res_track = Address::generate(&env);
+        let acbu_tok  = Address::generate(&env);
+        let usdc_tok  = Address::generate(&env);
+        let vault     = Address::generate(&env);
+        let treasury  = Address::generate(&env);
+
+        client.initialize(
+            &admin, &oracle, &res_track, &acbu_tok,
+            &usdc_tok, &vault, &treasury, &100i128, &150i128,
+        );
+
+        // operator defaults to admin when not explicitly set
+        let contract_recip = contract_address(&env);
+        let currency       = CurrencyCode::new(&env, "NGN");
+        client.mint_from_demo_fiat(&admin, &contract_recip, &currency, &MIN_MINT_AMOUNT);
+    }
+
+    #[test]
+    #[should_panic(expected = "Recipient must be a Stellar account, not a contract")]
+    fn test_admin_drip_demo_fiat_rejects_contract_recipient() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, MintingContract);
+        let client = MintingContractClient::new(&env, &contract_id);
+
+        let admin     = Address::generate(&env);
+        let oracle    = Address::generate(&env);
+        let res_track = Address::generate(&env);
+        let acbu_tok  = Address::generate(&env);
+        let usdc_tok  = Address::generate(&env);
+        let vault     = Address::generate(&env);
+        let treasury  = Address::generate(&env);
+
+        client.initialize(
+            &admin, &oracle, &res_track, &acbu_tok,
+            &usdc_tok, &vault, &treasury, &100i128, &150i128,
+        );
+
+        let contract_recip = contract_address(&env);
+        let currency       = CurrencyCode::new(&env, "NGN");
+        client.admin_drip_demo_fiat(&contract_recip, &currency, &MIN_MINT_AMOUNT);
     }
 }
