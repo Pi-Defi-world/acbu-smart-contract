@@ -158,32 +158,45 @@ impl OracleContract {
             }
         }
 
-        // Calculate median from sources
-        let median_rate = median(sources.clone()).unwrap_or(rate);
+        // Pass 1: compute reference median from all sources to establish a baseline.
+        let raw_median = median(sources.clone()).unwrap_or(rate);
 
-        // Detect outliers in the source rates.
+        // Pass 2: reject sources that deviate beyond OUTLIER_THRESHOLD_BPS and emit alert events.
+        // Outliers are quarantined so they cannot influence the final stored rate.
         //
         // NOTE: Some Stellar CLI / RPC stacks are sensitive to complex contracttype values in
         // event topics; keep oracle rate updates functional even if event topic conversion would
         // otherwise fail. We still compute deviation, but we avoid publishing per-currency topics.
+        let mut clean_sources: Vec<i128> = Vec::new(&env);
         for i in 0..sources.len() {
             let source_rate = sources.get(i).unwrap();
-            let deviation_bps = calculate_deviation(source_rate, median_rate);
+            let deviation_bps = calculate_deviation(source_rate, raw_median);
 
             if deviation_bps > OUTLIER_THRESHOLD_BPS {
                 let outlier_event = OutlierDetectionEvent {
                     currency: currency.clone(),
-                    median_rate,
+                    median_rate: raw_median,
                     outlier_rate: source_rate,
                     deviation_bps,
                     timestamp: current_time,
                 };
                 env.events()
                     .publish((symbol_short!("outlier"),), outlier_event);
+            } else {
+                clean_sources.push_back(source_rate);
             }
         }
 
-        // Create rate data
+        // Final rate: median of clean sources only.
+        // If every source was an outlier (extreme disagreement), fall back to raw_median so the
+        // update is never silently dropped; this edge case should be investigated off-chain.
+        let median_rate = if clean_sources.is_empty() {
+            raw_median
+        } else {
+            median(clean_sources).unwrap_or(raw_median)
+        };
+
+        // Create rate data (original sources retained for audit trail).
         let rate_data = RateData {
             currency: currency.clone(),
             rate_usd: median_rate,
