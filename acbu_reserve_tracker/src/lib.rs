@@ -2,7 +2,7 @@
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol};
 
 
-use shared::{CurrencyCode, ReserveData, BASIS_POINTS, CONTRACT_VERSION, DataKey as SharedDataKey};
+use shared::{CurrencyCode, ReserveData, BASIS_POINTS};
 
 mod shared {
     pub use shared::*;
@@ -98,15 +98,7 @@ impl ReserveTrackerContract {
         reserves.set(currency.clone(), reserve_data);
         env.storage().instance().set(&DATA_KEY.reserves, &reserves);
 
-        // Emit Event (avoid complex contracttype values in topics for compatibility).
-        env.events().publish(
-            (symbol_short!("reserve"),),
-            ReserveUpdateEvent {
-                currency,
-                amount,
-                value_usd,
-                timestamp: current_time,
-            },
+        env.events().publish((symbol_short!("reserve"), currency.clone()), reserve_data.clone());
         );
     }
 
@@ -123,7 +115,7 @@ impl ReserveTrackerContract {
         Self::check_admin(&env);
         let reserves: Map<CurrencyCode, ReserveData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.reserves, &reserves);
-    }
+    env.events().publish((symbol_short!("reset"),), ());}
 
     /// Get total reserve value in USD
     pub fn get_total_reserve_value(env: Env) -> i128 {
@@ -154,17 +146,17 @@ impl ReserveTrackerContract {
             .storage()
             .instance()
             .get(&DATA_KEY.min_reserve_ratio)
-            .unwrap_or(10_000);
+            .unwrap_or(BASIS_POINTS);
 
         if min_ratio < 0 {
             return false;
         }
 
-        // total_reserve_value / total_acbu_supply >= min_ratio / 10,000
-        // total_reserve_value * 10,000 >= total_acbu_supply * min_ratio
+        // total_reserve_value / total_acbu_supply >= min_ratio / BASIS_POINTS
+        // total_reserve_value * BASIS_POINTS >= total_acbu_supply * min_ratio
         //
         // Use checked multiplication: raw `*` overflow traps as UnreachableCodeReached on Soroban.
-        let lhs = total_reserve_value.checked_mul(10_000);
+        let lhs = total_reserve_value.checked_mul(BASIS_POINTS);
         let rhs = total_acbu_supply.checked_mul(min_ratio);
         match (lhs, rhs) {
             (Some(l), Some(r)) => l >= r,
