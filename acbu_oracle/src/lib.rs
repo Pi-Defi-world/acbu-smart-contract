@@ -5,7 +5,7 @@ use soroban_sdk::{
 
 use shared::{
     calculate_deviation, median, CurrencyCode, OutlierDetectionEvent, RateData, RateUpdateEvent,
-    DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, UPDATE_INTERVAL_SECONDS,
+    BASIS_POINTS, DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, UPDATE_INTERVAL_SECONDS,
 };
 
 mod shared {
@@ -130,7 +130,7 @@ impl OracleContract {
         let rates: Map<CurrencyCode, RateData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.rates, &rates);
         env.storage().instance().set(&DATA_KEY.last_update, &0u64);
-        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -496,8 +496,8 @@ impl OracleContract {
     // Upgrade / migration
     // ─────────────────────────────────────────────────────────────────────────
 
-    pub fn version(_env: Env) -> u32 {
-        VERSION
+    pub fn get_version(env: Env) -> u32 {
+        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
     }
 
     pub fn migrate(env: Env) {
@@ -536,7 +536,23 @@ impl OracleContract {
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+
+        let current_version = Self::get_version(env.clone());
+        if new_version <= current_version {
+            panic!("Invalid version upgrade");
+        }
+
         env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        // Run migrations
+        for v in current_version..new_version {
+            match v {
+                0 => migrate_v0_to_v1(env.clone()),
+                _ => {}
+            }
+        }
+
+        env.storage().instance().set(&SharedDataKey::Version, &new_version);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

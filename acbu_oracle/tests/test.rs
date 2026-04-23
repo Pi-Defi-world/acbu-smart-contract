@@ -156,9 +156,9 @@ fn test_outlier_detection() {
     let mut sources = Vec::new(&env);
     // Create sources with one significant outlier
     // Median will be around 1000000
-    sources.push_back(1000000i128);   // Normal
-    sources.push_back(1005000i128);   // Normal
-    sources.push_back(1350000i128);   // Outlier (>3% deviation)
+    sources.push_back(1000000i128); // Normal
+    sources.push_back(1005000i128); // Normal
+    sources.push_back(1350000i128); // Outlier (>3% deviation)
 
     client.update_rate(&validator, &ngn, &rate, &sources, &env.ledger().timestamp());
 
@@ -177,7 +177,7 @@ fn test_outlier_detection() {
         let topics = event.1;
         if !topics.is_empty() {
             let event_symbol = Symbol::from_val(&env, &topics.get(0).unwrap());
-            
+
             if event_symbol == symbol_short!("rate_upd") {
                 rate_update_found = true;
             } else if event_symbol == symbol_short!("outlier") {
@@ -191,8 +191,86 @@ fn test_outlier_detection() {
             }
         }
     }
-    
+
     assert!(rate_update_found, "expected rate_upd event");
     assert!(outlier_found, "expected outlier detection event");
 }
 
+#[test]
+fn test_update_rate_uses_even_source_median_average() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1_000_000);
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn.clone(), 10000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
+
+    let mut sources = Vec::new(&env);
+    sources.push_back(1000000i128);
+    sources.push_back(1020000i128);
+    sources.push_back(980000i128);
+    sources.push_back(1040000i128);
+
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1234567i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
+    let stored_rate = client.get_rate(&ngn);
+    // Sorted = [980000, 1000000, 1020000, 1040000], median = (1000000 + 1020000) / 2
+    assert_eq!(stored_rate, 1010000);
+}
+
+#[test]
+fn test_update_rate_falls_back_to_provided_rate_when_sources_empty() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1_000_000);
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn.clone(), 10000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
+
+    let sources = Vec::new(&env);
+    let submitted_rate = 1_111_111i128;
+    client.update_rate(
+        &validator,
+        &ngn,
+        &submitted_rate,
+        &sources,
+        &env.ledger().timestamp(),
+    );
+    assert_eq!(client.get_rate(&ngn), submitted_rate);
+}
+
+// Example Test Assertion
+let last_event = env.events().all().last().unwrap();
+let event_data: (u128, Vec<Address>) = last_event.unwrap().data.into_val(&env);
+
+// Verification: Ensure the validator list is not empty
+assert!(event_data.1.len() > 0);
