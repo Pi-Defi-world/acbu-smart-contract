@@ -10,7 +10,7 @@ use soroban_sdk::{
 const SECONDS_PER_YEAR: u64 = 31_536_000;
 
 #[test]
-fn test_withdraw_after_term_has_zero_yield_at_deposit_time() {
+fn test_withdraw_after_term_has_correct_30day_yield() {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().with_mut(|l| l.timestamp = 1_000_000);
@@ -18,8 +18,8 @@ fn test_withdraw_after_term_has_zero_yield_at_deposit_time() {
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
     let acbu_token = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
+       .register_stellar_asset_contract_v2(admin.clone())
+       .address();
 
     let contract_id = env.register_contract(None, SavingsVault);
     let client = SavingsVaultClient::new(&env, &contract_id);
@@ -28,27 +28,39 @@ fn test_withdraw_after_term_has_zero_yield_at_deposit_time() {
     let yield_rate = 1_000; // 10% APR
     client.initialize(&admin, &acbu_token, &fee_rate, &yield_rate);
 
-    let deposit_amount = 10_000_000;
-    let term_seconds = 30 * 24 * 3600u64;
+    let deposit_amount = 10_000_000i128;
+    let term_seconds = 30 * 24 * 3600u64; // 2_592_000 seconds
+
+    // Expected: 10M * 1000 bps * 2_592_000 / (10000 * 31_536_000) = 82_191
+    let expected_yield = 82_191i128;
+    let expected_fee = 300_000i128;
+    let expected_user_payout = (deposit_amount - expected_fee) + expected_yield;
 
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
-    // Mint extra to cover yield payment by the vault
     token_admin.mint(&user, &deposit_amount);
-    token_admin.mint(&contract_id, &deposit_amount);
+    token_admin.mint(&contract_id, &expected_yield);
 
     client.deposit(&user, &deposit_amount, &term_seconds);
 
-    // Advance time past the lock term so the withdrawal is valid
+    // Advance time past the lock term
     env.ledger()
-        .with_mut(|l| l.timestamp = 1_000_000 + term_seconds);
+       .with_mut(|l| l.timestamp = 1_000_000 + term_seconds);
+
+    // Preview yield before withdraw
+    assert_eq!(client.get_pending_yield(&user, &term_seconds), expected_yield);
 
     client.withdraw(&user, &term_seconds, &deposit_amount);
 
     let token_client = soroban_sdk::token::Client::new(&env, &acbu_token);
-    // net = 10_000_000 - 3% fee (300_000) = 9_700_000
-    // yield for exactly term_seconds at 10% APR on 10 ACBU is a small positive, so just check >= 9_700_000
-    assert!(token_client.balance(&user) >= 9_700_000);
-    assert_eq!(token_client.balance(&admin), 300_000);
+    assert_eq!(token_client.balance(&user), expected_user_payout);
+    assert_eq!(token_client.balance(&admin), expected_fee);
+
+    let events = env.events().all();
+    let withdraw_event = events.iter().rev().find(|e| {
+        e.0 == contract_id && Symbol::from_val(&env, &e.1.get(0).unwrap()) == symbol_short!("Withdraw")
+    }).unwrap();
+    let withdraw_event: WithdrawEvent = withdraw_event.2.into_val(&env);
+    assert_eq!(withdraw_event.yield_amount, expected_yield); // Acceptance check passes
 }
 
 #[test]

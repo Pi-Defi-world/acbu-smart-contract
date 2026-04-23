@@ -343,7 +343,30 @@ impl SavingsVault {
         Self::sum_lots(&lots)
     }
 
-    pub fn pause(env: Env) -> Result<(), Error> {
+        pub fn get_pending_yield(env: Env, user: Address, term_seconds: u64) -> Result<i128, soroban_sdk::Error> {
+        let key = (DEPOSIT_KEY, user, term_seconds);
+        let lots: Vec<DepositLot> = env
+           .storage()
+           .temporary()
+           .get(&key)
+           .unwrap_or(Vec::new(&env));
+
+        let now = env.ledger().timestamp();
+        let yield_rate = Self::load_yield_rate(&env)?;
+        let mut yield_amount: i128 = 0;
+
+        for lot in lots.iter() {
+            let unlocked = now >= lot.timestamp.saturating_add(lot.term_seconds);
+            if!unlocked {
+                continue;
+            }
+            let elapsed = now.saturating_sub(lot.timestamp);
+            yield_amount += Self::calculate_yield(lot.amount, yield_rate, elapsed)?;
+        }
+        Ok(yield_amount)
+    }
+
+    pub fn pause(env: Env) -> Result<(), soroban_sdk::Error> {
         let admin = Self::load_admin(&env)?;
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &true);
