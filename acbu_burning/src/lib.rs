@@ -166,13 +166,17 @@ impl BurningContract {
         token.transfer_from(&spender, &vault, &recipient, &stoken_out);
 
         let tx_id = SorobanString::from_str(&env, "redeem_single");
+        // FIX(#102): Emit gross acbu_amount and explicit net_acbu so indexers can
+        // independently verify: acbu_amount - fee == net_acbu, and reconcile to
+        // within 1 unit without needing to re-derive the fee off-chain.
         let burn_event = BurnEvent {
             transaction_id: tx_id,
             user: user.clone(),
-            acbu_amount,
+            acbu_amount,       // gross amount burned (unchanged — was already correct)
+            net_acbu,          // explicit post-fee net so indexer needs no arithmetic
             local_amount: stoken_out,
             currency: currency.clone(),
-            fee,
+            fee,               // total fee for this redemption
             rate,
             timestamp: env.ledger().timestamp(),
         };
@@ -207,6 +211,7 @@ impl BurningContract {
             vec![&env],
         );
 
+        // FIX(#102): Compute totals from gross acbu_amount before any deduction.
         let total_fee = calculate_fee(acbu_amount, fee_rate);
         let net_acbu = acbu_amount - total_fee;
         let usd_total = (net_acbu * acbu_rate) / DECIMALS;
@@ -219,6 +224,24 @@ impl BurningContract {
             &Symbol::new(&env, "get_currencies"),
             vec![&env],
         );
+
+        // FIX(#102): Emit one top-level summary event so indexers can anchor the
+        // gross burn total, total fee, and net ACBU for the entire basket redemption.
+        // Per-currency events below carry per-recipient slices that must sum to these totals.
+        let summary_tx_id = SorobanString::from_str(&env, "redeem_basket_summary");
+        let summary_event = BurnEvent {
+            transaction_id: summary_tx_id,
+            user: user.clone(),
+            acbu_amount,       // gross total burned
+            net_acbu,          // total net after fee
+            local_amount: 0,   // not applicable at summary level
+            currency: CurrencyCode::default(),
+            fee: total_fee,    // total fee for the whole redemption
+            rate: acbu_rate,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events()
+            .publish((symbol_short!("burn_sum"), user.clone()), summary_event);
 
         let mut amounts_out = Vec::new(&env);
 
@@ -248,10 +271,13 @@ impl BurningContract {
                 vec![&env, currency.clone().into_val(&env)],
             );
 
+            // Per-currency gross ACBU slice and fee slice (both derived from gross acbu_amount).
+            let acbu_gross_i = (weight * acbu_amount) / BASIS_POINTS;
+            let fee_i = (weight * total_fee) / BASIS_POINTS;
+            let net_acbu_i = acbu_gross_i - fee_i;
+
             let usd_i = (weight * usd_total) / BASIS_POINTS;
             let native_i = (usd_i * DECIMALS) / rate;
-
-            let fee_i = (weight * total_fee) / BASIS_POINTS;
 
             if native_i > 0 {
                 let token = soroban_sdk::token::Client::new(&env, &stoken);
@@ -262,13 +288,18 @@ impl BurningContract {
             amounts_out.push_back(native_i);
 
             let tx_id = SorobanString::from_str(&env, "redeem_basket");
+            // FIX(#102): Emit gross per-currency acbu slice (acbu_gross_i) not the
+            // already-deducted net_acbu. Also emit net_acbu_i and fee_i so indexers
+            // can verify acbu_gross_i - fee_i == net_acbu_i for each currency leg,
+            // and sum all acbu_gross_i values back to the top-level acbu_amount.
             let burn_event = BurnEvent {
                 transaction_id: tx_id,
                 user: user.clone(),
-                acbu_amount: net_acbu,
+                acbu_amount: acbu_gross_i,  // per-currency gross slice (was incorrectly net_acbu total)
+                net_acbu: net_acbu_i,       // per-currency net slice
                 local_amount: native_i,
                 currency: currency.clone(),
-                fee: fee_i,
+                fee: fee_i,                 // per-currency fee slice
                 rate,
                 timestamp: env.ledger().timestamp(),
             };
