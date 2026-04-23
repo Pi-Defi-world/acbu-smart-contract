@@ -39,7 +39,8 @@ fn test_withdraw_after_term_has_zero_yield_at_deposit_time() {
     client.deposit(&user, &deposit_amount, &term_seconds);
 
     // Advance time past the lock term so the withdrawal is valid
-    env.ledger().with_mut(|l| l.timestamp = 1_000_000 + term_seconds);
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000_000 + term_seconds);
 
     client.withdraw(&user, &term_seconds, &deposit_amount);
 
@@ -228,11 +229,53 @@ fn test_withdraw_at_exact_term_boundary_succeeds() {
     client.deposit(&user, &deposit_amount, &term_seconds);
 
     // Advance to exactly term boundary
-    env.ledger().with_mut(|l| l.timestamp = 1_000_000 + term_seconds);
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000_000 + term_seconds);
 
     client.withdraw(&user, &term_seconds, &deposit_amount);
 
     let token_client = soroban_sdk::token::Client::new(&env, &acbu_token);
     assert_eq!(token_client.balance(&user), deposit_amount);
     assert_eq!(client.get_balance(&user, &term_seconds), 0);
+}
+
+#[test]
+fn test_withdraw_only_uses_lots_that_reached_their_own_term() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1_000_000);
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    let contract_id = env.register_contract(None, SavingsVault);
+    let client = SavingsVaultClient::new(&env, &contract_id);
+    client.initialize(&admin, &acbu_token, &0i128, &0i128);
+
+    let short_term: u64 = 60;
+    let long_term: u64 = 3_600;
+    let short_amount = 5_000_000i128;
+    let long_amount = 7_000_000i128;
+
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
+    token_admin.mint(&user, &(short_amount + long_amount));
+
+    client.deposit(&user, &short_amount, &short_term);
+    client.deposit(&user, &long_amount, &long_term);
+
+    // Only the short-term lot is mature.
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000_000 + short_term);
+
+    // Short-term withdrawal succeeds.
+    client.withdraw(&user, &short_term, &short_amount);
+    assert_eq!(client.get_balance(&user, &short_term), 0);
+
+    // Long-term withdrawal still fails because its own term has not elapsed.
+    let early_long = client.try_withdraw(&user, &long_term, &long_amount);
+    assert!(early_long.is_err());
+    assert_eq!(client.get_balance(&user, &long_term), long_amount);
 }

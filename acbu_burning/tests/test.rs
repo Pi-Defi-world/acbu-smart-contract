@@ -2,11 +2,7 @@
 
 use acbu_burning::{BurningContract, BurningContractClient};
 use shared::{CurrencyCode, DECIMALS};
-use soroban_sdk::{
-    contract, contractimpl, symbol_short,
-    testutils::{Address as _},
-    Address, Env,
-};
+use soroban_sdk::{contract, contractimpl, symbol_short, testutils::Address as _, Address, Env};
 
 mod oracle_mock {
     use super::*;
@@ -25,11 +21,19 @@ mod oracle_mock {
         pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
             let mut v = Vec::new(&env);
             v.push_back(CurrencyCode::new(&env, "NGN"));
+            v.push_back(CurrencyCode::new(&env, "KES"));
+            v.push_back(CurrencyCode::new(&env, "GHS"));
             v
         }
 
-        pub fn get_basket_weight(_env: Env, _c: CurrencyCode) -> i128 {
-            10_000
+        pub fn get_basket_weight(env: Env, c: CurrencyCode) -> i128 {
+            if c == CurrencyCode::new(&env, "NGN") || c == CurrencyCode::new(&env, "KES") {
+                3_333
+            } else if c == CurrencyCode::new(&env, "GHS") {
+                3_334
+            } else {
+                0
+            }
         }
 
         pub fn get_rate(_env: Env, _c: CurrencyCode) -> i128 {
@@ -56,7 +60,9 @@ fn test_burning_initialize_and_version() {
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, oracle_mock::MockOracle);
     let reserve_tracker = Address::generate(&env);
-    let acbu_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let withdrawal_processor = Address::generate(&env);
     let vault = admin.clone();
 
@@ -91,8 +97,12 @@ fn test_redeem_single_transfers_stoken() {
     let oracle = env.register_contract(None, oracle_mock::MockOracle);
     let reserve_tracker = Address::generate(&env);
 
-    let acbu_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
-    let stoken = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let stoken = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken);
 
@@ -141,8 +151,12 @@ fn test_redeem_basket() {
     let oracle = env.register_contract(None, oracle_mock::MockOracle);
     let reserve_tracker = Address::generate(&env);
 
-    let acbu_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
-    let stoken = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let stoken = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken);
 
@@ -162,7 +176,7 @@ fn test_redeem_basket() {
     );
 
     let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
-    let burn_amt = 100 * DECIMALS;
+    let burn_amt = 100 * DECIMALS + 3;
     acbu_sac.mint(&user, &burn_amt);
 
     let st_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken);
@@ -173,5 +187,12 @@ fn test_redeem_basket() {
     token.approve(&vault, &contract_id, &1_000_000_000_000_000, &100u32);
 
     let amounts = client.redeem_basket(&user, &recipient, &burn_amt);
-    assert!(!amounts.is_empty());
+    assert_eq!(amounts.len(), 3);
+
+    let mut total_out = 0i128;
+    for amount in amounts.iter() {
+        total_out += amount;
+    }
+    let expected_fee = (burn_amt * 100) / 10_000;
+    assert_eq!(total_out + expected_fee, burn_amt);
 }

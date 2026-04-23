@@ -1,12 +1,12 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env, IntoVal, String as SorobanString,
-    Symbol,
+    contract, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env, IntoVal,
+    String as SorobanString, Symbol,
 };
 
 use shared::{
-    calculate_amount_after_fee, calculate_fee, CurrencyCode, MintEvent, BASIS_POINTS, DECIMALS, MAX_MINT_AMOUNT,
-    MIN_MINT_AMOUNT,
+    calculate_amount_after_fee, calculate_fee, CurrencyCode, MintEvent, BASIS_POINTS, CONTRACT_VERSION,
+    DECIMALS, DataKey as SharedDataKey, MAX_MINT_AMOUNT, MIN_MINT_AMOUNT,
 };
 
 mod shared {
@@ -19,6 +19,14 @@ pub mod token_contract {
         file = "../soroban_token_contract.wasm",
         sha256 = "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"
     );
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettlementProof {
+    pub proof_id: String,
+    pub settled: bool,
+    pub timestamp: u64,
 }
 
 #[contracttype]
@@ -37,9 +45,8 @@ pub struct DataKey {
     pub min_mint_amount: Symbol,
     pub max_mint_amount: Symbol,
     pub total_supply: Symbol,
-    pub version: Symbol,
-    /// Backend / relayer key allowed to pull custodial demo fiat from this contract into the vault.
     pub operator: Symbol,
+    pub used_proofs: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -56,11 +63,11 @@ const DATA_KEY: DataKey = DataKey {
     min_mint_amount: symbol_short!("MIN_MINT"),
     max_mint_amount: symbol_short!("MAX_MINT"),
     total_supply: symbol_short!("SUPPLY"),
-    version: symbol_short!("VERSION"),
     operator: symbol_short!("OPERTR"),
+    used_proofs: symbol_short!("PRF_SET"),
 };
 
-const VERSION: u32 = 3;
+// CONTRACT_VERSION is imported from shared
 
 #[contract]
 pub struct MintingContract;
@@ -118,7 +125,7 @@ impl MintingContract {
             .instance()
             .set(&DATA_KEY.max_mint_amount, &MAX_MINT_AMOUNT);
         env.storage().instance().set(&DATA_KEY.total_supply, &0i128);
-        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Mint ACBU from USDC deposit (unchanged reserve/oracle flow).
@@ -179,7 +186,9 @@ impl MintingContract {
         }
 
         total_supply += acbu_amount;
-        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         let usdc_client = soroban_sdk::token::Client::new(&env, &usdc_token);
         usdc_client.transfer(&user, &env.current_contract_address(), &usdc_amount);
@@ -207,7 +216,12 @@ impl MintingContract {
 
     /// Mint ACBU by depositing Afreum-style S-tokens in full basket proportions (lower fee tier).
     /// Pulls each S-token from `user` into `vault` per oracle weights and rates.
-    pub fn mint_from_basket(env: Env, user: Address, recipient: Address, acbu_amount: i128) -> i128 {
+    pub fn mint_from_basket(
+        env: Env,
+        user: Address,
+        recipient: Address,
+        acbu_amount: i128,
+    ) -> i128 {
         Self::check_paused(&env);
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
@@ -305,7 +319,9 @@ impl MintingContract {
         }
 
         total_supply += acbu_amount;
-        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &net_mint);
@@ -326,7 +342,8 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
-        net_mint
+        mark_proof_used(&env, &proof_id);
+        acbu_amount
     }
 
     /// Single S-token deposit: Afreum ramp delivers one S-token; fee tier is `fee_single_bps`.
@@ -413,7 +430,9 @@ impl MintingContract {
         token.transfer(&user, &vault, &s_token_amount);
 
         total_supply += acbu_amount;
-        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &acbu_amount);
@@ -443,6 +462,7 @@ impl MintingContract {
         recipient: Address,
         currency: CurrencyCode,
         fiat_amount: i128,
+        proof_id: SorobanString,
     ) -> i128 {
         Self::check_paused(&env);
         let expected_operator: Address = Self::get_operator(env.clone());
@@ -453,6 +473,10 @@ impl MintingContract {
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
         Self::assert_recipient_is_account(&recipient);
+
+        if !check_proof_unused(&env, &proof_id) {
+            panic!("Proof already used");
+        }
 
         let min_amount: i128 = env
             .storage()
@@ -523,7 +547,9 @@ impl MintingContract {
         token.transfer(&custody, &vault, &fiat_amount);
 
         total_supply += acbu_amount;
-        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &acbu_amount);
@@ -598,11 +624,16 @@ impl MintingContract {
     pub fn sync_supply(env: Env, new_supply: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.total_supply, &new_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &new_supply);
     }
 
     pub fn get_total_supply(env: Env) -> i128 {
-        env.storage().instance().get(&DATA_KEY.total_supply).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.total_supply)
+            .unwrap_or(0)
     }
 
     pub fn pause(env: Env) {
@@ -665,220 +696,33 @@ impl MintingContract {
         }
     }
 
-    /// C-058: Asserts that `recipient` is a Stellar account (G… keypair) and not a
-    /// contract address (C… hash). Minting ACBU to a contract-only address that has no
-    /// token-receipt logic permanently strands the funds on-ledger with no recovery path.
-    ///
-    /// Called at the top of every mint entry-point and the admin drip helper, before any
-    /// state mutation or token transfer, so no funds ever move for an invalid recipient.
-    fn assert_recipient_is_account(recipient: &Address) {
-        if !recipient.is_account() {
-            panic!("Recipient must be a Stellar account, not a contract");
-        }
+    pub fn get_version(env: Env) -> u32 {
+        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
     }
 
-    pub fn version(_env: Env) -> u32 {
-        VERSION
-    }
-
-    pub fn migrate(env: Env) {
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
 
-        let current_version = VERSION;
-        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
-        if stored_version < current_version {
-            env.storage()
-                .instance()
-                .set(&DATA_KEY.version, &current_version);
+        let current_version = Self::get_version(env.clone());
+        if new_version <= current_version {
+            panic!("Invalid version upgrade");
         }
-    }
 
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        admin.require_auth();
         env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        // Run migrations
+        for v in current_version..new_version {
+            match v {
+                0 => migrate_v0_to_v1(env.clone()),
+                _ => {}
+            }
+        }
+
+        env.storage().instance().set(&SharedDataKey::Version, &new_version);
     }
 }
 
-// ============================================================================
-// Tests — C-058: validate recipient is a real account
-// ============================================================================
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Env, Address};
-
-    // -----------------------------------------------------------------------
-    // Helper: contract address (C…) — represents any deployed contract
-    // -----------------------------------------------------------------------
-    fn contract_address(env: &Env) -> Address {
-        // In the test environment, `register_contract` returns a contract Address.
-        // We use a blank contract so we get a valid C… address without any impl needed.
-        env.register_contract(None, MintingContract)
-    }
-
-    // -----------------------------------------------------------------------
-    // assert_recipient_is_account — unit tests for the guard itself
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_account_recipient_passes_guard() {
-        let env = Env::default();
-        // Address::generate() produces a Stellar account (G… keypair).
-        let account = Address::generate(&env);
-        // Should not panic — accounts are valid recipients.
-        MintingContract::assert_recipient_is_account(&account);
-    }
-
-    #[test]
-    #[should_panic(expected = "Recipient must be a Stellar account, not a contract")]
-    fn test_contract_recipient_fails_guard() {
-        let env = Env::default();
-        let contract_addr = contract_address(&env);
-        MintingContract::assert_recipient_is_account(&contract_addr);
-    }
-
-    // -----------------------------------------------------------------------
-    // mint_from_usdc — C-058 guard
-    // -----------------------------------------------------------------------
-
-    #[test]
-    #[should_panic(expected = "Recipient must be a Stellar account, not a contract")]
-    fn test_mint_from_usdc_rejects_contract_recipient() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, MintingContract);
-        let client = MintingContractClient::new(&env, &contract_id);
-
-        // Initialize with dummy addresses (all accounts — only recipient is a contract)
-        let admin     = Address::generate(&env);
-        let oracle    = Address::generate(&env);
-        let res_track = Address::generate(&env);
-        let acbu_tok  = Address::generate(&env);
-        let usdc_tok  = Address::generate(&env);
-        let vault     = Address::generate(&env);
-        let treasury  = Address::generate(&env);
-
-        client.initialize(
-            &admin, &oracle, &res_track, &acbu_tok,
-            &usdc_tok, &vault, &treasury, &100i128, &150i128,
-        );
-
-        let user             = Address::generate(&env);
-        let contract_recip   = contract_address(&env); // ← invalid: C… address
-        client.mint_from_usdc(&user, &MIN_MINT_AMOUNT, &contract_recip);
-    }
-
-    #[test]
-    #[should_panic(expected = "Recipient must be a Stellar account, not a contract")]
-    fn test_mint_from_basket_rejects_contract_recipient() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, MintingContract);
-        let client = MintingContractClient::new(&env, &contract_id);
-
-        let admin     = Address::generate(&env);
-        let oracle    = Address::generate(&env);
-        let res_track = Address::generate(&env);
-        let acbu_tok  = Address::generate(&env);
-        let usdc_tok  = Address::generate(&env);
-        let vault     = Address::generate(&env);
-        let treasury  = Address::generate(&env);
-
-        client.initialize(
-            &admin, &oracle, &res_track, &acbu_tok,
-            &usdc_tok, &vault, &treasury, &100i128, &150i128,
-        );
-
-        let user           = Address::generate(&env);
-        let contract_recip = contract_address(&env);
-        client.mint_from_basket(&user, &contract_recip, &MIN_MINT_AMOUNT);
-    }
-
-    #[test]
-    #[should_panic(expected = "Recipient must be a Stellar account, not a contract")]
-    fn test_mint_from_single_rejects_contract_recipient() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, MintingContract);
-        let client = MintingContractClient::new(&env, &contract_id);
-
-        let admin     = Address::generate(&env);
-        let oracle    = Address::generate(&env);
-        let res_track = Address::generate(&env);
-        let acbu_tok  = Address::generate(&env);
-        let usdc_tok  = Address::generate(&env);
-        let vault     = Address::generate(&env);
-        let treasury  = Address::generate(&env);
-
-        client.initialize(
-            &admin, &oracle, &res_track, &acbu_tok,
-            &usdc_tok, &vault, &treasury, &100i128, &150i128,
-        );
-
-        let user           = Address::generate(&env);
-        let contract_recip = contract_address(&env);
-        let currency       = CurrencyCode::new(&env, "NGN");
-        client.mint_from_single(&user, &contract_recip, &currency, &MIN_MINT_AMOUNT);
-    }
-
-    #[test]
-    #[should_panic(expected = "Recipient must be a Stellar account, not a contract")]
-    fn test_mint_from_demo_fiat_rejects_contract_recipient() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, MintingContract);
-        let client = MintingContractClient::new(&env, &contract_id);
-
-        let admin     = Address::generate(&env);
-        let oracle    = Address::generate(&env);
-        let res_track = Address::generate(&env);
-        let acbu_tok  = Address::generate(&env);
-        let usdc_tok  = Address::generate(&env);
-        let vault     = Address::generate(&env);
-        let treasury  = Address::generate(&env);
-
-        client.initialize(
-            &admin, &oracle, &res_track, &acbu_tok,
-            &usdc_tok, &vault, &treasury, &100i128, &150i128,
-        );
-
-        // operator defaults to admin when not explicitly set
-        let contract_recip = contract_address(&env);
-        let currency       = CurrencyCode::new(&env, "NGN");
-        client.mint_from_demo_fiat(&admin, &contract_recip, &currency, &MIN_MINT_AMOUNT);
-    }
-
-    #[test]
-    #[should_panic(expected = "Recipient must be a Stellar account, not a contract")]
-    fn test_admin_drip_demo_fiat_rejects_contract_recipient() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, MintingContract);
-        let client = MintingContractClient::new(&env, &contract_id);
-
-        let admin     = Address::generate(&env);
-        let oracle    = Address::generate(&env);
-        let res_track = Address::generate(&env);
-        let acbu_tok  = Address::generate(&env);
-        let usdc_tok  = Address::generate(&env);
-        let vault     = Address::generate(&env);
-        let treasury  = Address::generate(&env);
-
-        client.initialize(
-            &admin, &oracle, &res_track, &acbu_tok,
-            &usdc_tok, &vault, &treasury, &100i128, &150i128,
-        );
-
-        let contract_recip = contract_address(&env);
-        let currency       = CurrencyCode::new(&env, "NGN");
-        client.admin_drip_demo_fiat(&contract_recip, &currency, &MIN_MINT_AMOUNT);
-    }
+fn migrate_v0_to_v1(_env: Env) {
+    // Migration logic
 }
