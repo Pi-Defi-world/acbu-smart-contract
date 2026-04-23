@@ -40,6 +40,8 @@ pub struct DataKey {
     pub version: Symbol,
     /// Backend / relayer key allowed to pull custodial demo fiat from this contract into the vault.
     pub operator: Symbol,
+    /// Tracks processed fintech transaction IDs to prevent duplicate minting
+    pub processed_fintech_tx_ids: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -58,6 +60,7 @@ const DATA_KEY: DataKey = DataKey {
     total_supply: symbol_short!("SUPPLY"),
     version: symbol_short!("VERSION"),
     operator: symbol_short!("OPERTR"),
+    processed_fintech_tx_ids: symbol_short!("FTECH_IDS"),
 };
 
 const VERSION: u32 = 3;
@@ -119,6 +122,9 @@ impl MintingContract {
             .set(&DATA_KEY.max_mint_amount, &MAX_MINT_AMOUNT);
         env.storage().instance().set(&DATA_KEY.total_supply, &0i128);
         env.storage().instance().set(&DATA_KEY.version, &VERSION);
+        // Initialize empty set for tracking processed fintech transaction IDs
+        let empty_set: soroban_sdk::Map<String as SorobanString, bool> = soroban_sdk::map![&env];
+        env.storage().instance().set(&DATA_KEY.processed_fintech_tx_ids, &empty_set);
     }
 
     /// Mint ACBU from USDC deposit (unchanged reserve/oracle flow).
@@ -530,6 +536,150 @@ impl MintingContract {
             .publish((symbol_short!("mint"), recipient), mint_event);
 
         acbu_amount
+    }
+
+    /// Fintech-partner fiat mint: operator (fintech backend) authorizes; validates fintech_tx_id
+    /// to prevent duplicate minting. Requires both operator authorization and valid fintech transaction.
+    /// This function enforces strict access control: only the operator (fintech partner) can call it.
+    pub fn mint_from_fiat(
+        env: Env,
+        operator: Address,
+        recipient: Address,
+        currency: CurrencyCode,
+        fiat_amount: i128,
+        fintech_tx_id: String as SorobanString,
+    ) -> i128 {
+        Self::check_paused(&env);
+        let expected_operator: Address = Self::get_operator(env.clone());
+        
+        // Strict access control: only operator (fintech backend) can call
+        if operator != expected_operator {
+            panic!("Unauthorized: only operator can call mint_from_fiat");
+        }
+        operator.require_auth();
+
+        // Validate fintech_tx_id is not empty
+        if fintech_tx_id.len() == 0 {
+            panic!("fintech_tx_id cannot be empty");
+        }
+
+        // Check if fintech_tx_id has already been processed
+        let mut processed_ids: soroban_sdk::Map<String as SorobanString, bool> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.processed_fintech_tx_ids)
+            .unwrap_or_else(|| soroban_sdk::map![&env]);
+        
+        if processed_ids.contains_key(&fintech_tx_id) {
+            panic!("Duplicate fintech transaction ID");
+        }
+
+        let min_amount: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.min_mint_amount)
+            .unwrap();
+        let max_amount: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.max_mint_amount)
+            .unwrap();
+
+        let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let oracle_addr: Address = env.storage().instance().get(&DATA_KEY.oracle).unwrap();
+        let reserve_tracker_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.reserve_tracker)
+            .unwrap();
+        let vault: Address = env.storage().instance().get(&DATA_KEY.vault).unwrap();
+        let fee_rate: i128 = env.storage().instance().get(&DATA_KEY.fee_rate).unwrap();
+        let treasury: Address = env.storage().instance().get(&DATA_KEY.treasury).unwrap();
+        let mut total_supply: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.total_supply)
+            .unwrap_or(0);
+
+        let acbu_rate: i128 = env.invoke_contract(
+            &oracle_addr,
+            &Symbol::new(&env, "get_acbu_usd_rate"),
+            vec![&env],
+        );
+        let rate: i128 = env.invoke_contract(
+            &oracle_addr,
+            &Symbol::new(&env, "get_rate"),
+            vec![&env, currency.clone().into_val(&env)],
+        );
+        if rate == 0 {
+            panic!("Invalid oracle rate");
+        }
+
+        let usd_gross = (fiat_amount * rate) / DECIMALS;
+        if usd_gross < min_amount || usd_gross > max_amount {
+            panic!("Invalid mint amount");
+        }
+
+        let usd_after_fee = calculate_amount_after_fee(usd_gross, fee_rate);
+        let acbu_amount = (usd_after_fee * DECIMALS) / acbu_rate;
+
+        let projected_supply = total_supply + acbu_amount;
+        let reserve_ok: bool = env.invoke_contract(
+            &reserve_tracker_addr,
+            &Symbol::new(&env, "is_reserve_sufficient"),
+            vec![&env, projected_supply.into_val(&env)],
+        );
+        if !reserve_ok {
+            panic!("Insufficient reserves: minting would violate the minimum collateral ratio");
+        }
+
+        // For mint_from_fiat, fiat deposit is handled off-chain by the fintech partner.
+        // No on-chain token transfer needed; fintech validates and deposits fiat in their system.
+
+        total_supply += acbu_amount;
+        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+
+        let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
+        acbu_sac.mint(&recipient, &acbu_amount);
+        
+        let fee = calculate_fee(usd_gross, fee_rate);
+        if fee > 0 {
+            acbu_sac.mint(&treasury, &fee);
+        }
+
+        // Mark fintech_tx_id as processed to prevent duplicate minting
+        processed_ids.set(fintech_tx_id.clone(), true);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.processed_fintech_tx_ids, &processed_ids);
+
+        let mint_event = MintEvent {
+            transaction_id: fintech_tx_id,
+            user: recipient.clone(),
+            usdc_amount: usd_gross,
+            acbu_amount,
+            fee,
+            rate: acbu_rate,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events()
+            .publish((symbol_short!("mint"), recipient), mint_event);
+
+        acbu_amount
+    }
+
+    /// Helper to check if an address is authorized as operator (fintech backend).
+    /// Returns true if the address is the configured operator.
+    fn check_is_operator(env: &Env, address: &Address) -> bool {
+        let operator: Address = Self::get_operator(env.clone());
+        address == &operator
+    }
+
+    /// Helper to check if an address is authorized as admin.
+    /// Returns true if the address is the configured admin.
+    fn check_is_admin(env: &Env, address: &Address) -> bool {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        address == &admin
     }
 
     /// Testnet / ops: transfer demo basket S-token from custodial balance on this contract to
