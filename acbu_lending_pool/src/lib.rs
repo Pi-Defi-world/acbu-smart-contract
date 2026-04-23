@@ -3,7 +3,7 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol,
 };
 
-use shared::BASIS_POINTS;
+use shared::{BASIS_POINTS, CONTRACT_VERSION, DataKey as SharedDataKey};
 
 
 #[contracttype]
@@ -13,7 +13,6 @@ pub struct DataKey {
     pub acbu_token: Symbol,
     pub fee_rate: Symbol,
     pub paused: Symbol,
-    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -21,10 +20,9 @@ const DATA_KEY: DataKey = DataKey {
     acbu_token: symbol_short!("ACBU_TKN"),
     fee_rate: symbol_short!("FEE_RATE"),
     paused: symbol_short!("PAUSED"),
-    version: symbol_short!("VERSION"),
 };
 
-const VERSION: u32 = 1;
+// CONTRACT_VERSION is imported from shared
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -288,8 +286,8 @@ impl LendingPool {
         Ok(())
     }
 
-    pub fn version(_env: Env) -> u32 {
-        VERSION
+    pub fn get_version(env: Env) -> u32 {
+        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
     }
 
     pub fn migrate(env: Env) -> Result<(), Error> {
@@ -300,12 +298,9 @@ impl LendingPool {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
-        let current_version = VERSION;
-        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
-        if stored_version < current_version {
-            env.storage()
-                .instance()
-                .set(&DATA_KEY.version, &current_version);
+        let current_version = Self::get_version(env.clone());
+        if new_version <= current_version {
+            panic!("Invalid version upgrade");
         }
         Ok(())
     }
@@ -320,5 +315,9 @@ impl LendingPool {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
         Ok(())
     }
+}
+
+fn migrate_v0_to_v1(_env: Env) {
+    // Migration logic for v0 to v1 if needed
 }
 
