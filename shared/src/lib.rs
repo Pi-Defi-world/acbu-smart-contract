@@ -2,6 +2,14 @@
 
 use soroban_sdk::{contracttype, Address, String as SorobanString, Vec};
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    Version,
+}
+
+pub const CONTRACT_VERSION: u32 = 1;
+
 /// Currency code type (e.g., "NGN", "KES", "RWF")
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -124,6 +132,9 @@ pub enum ContractError {
     OracleError,
     ReserveError,
     InsufficientBalance,
+    /// Recipient address is a contract, not a Stellar account.
+    /// Minting to a contract-only address would strand funds permanently.
+    InvalidRecipient,
 }
 
 /// Constants
@@ -138,39 +149,81 @@ pub const OUTLIER_THRESHOLD_BPS: i128 = 300; // 3% deviation for outlier detecti
 
 /// Utility functions
 pub fn calculate_fee(amount: i128, fee_rate_bps: i128) -> i128 {
-    (amount * fee_rate_bps) / BASIS_POINTS
+    amount
+        .checked_mul(fee_rate_bps)
+        .and_then(|v| v.checked_div(BASIS_POINTS))
+        .expect("Overflow in fee calculation")
 }
 
 pub fn calculate_amount_after_fee(amount: i128, fee_rate_bps: i128) -> i128 {
-    amount - calculate_fee(amount, fee_rate_bps)
+    amount
+        .checked_sub(calculate_fee(amount, fee_rate_bps))
+        .expect("Underflow in amount after fee calculation")
 }
 
-/// Calculate median of sorted values
-pub fn median(values: soroban_sdk::Vec<i128>) -> Option<i128> {
+/// Calculate median using in-place quickselect algorithm
+/// This avoids unnecessary allocations (clone) and reduces gas consumption
+pub fn median(mut values: soroban_sdk::Vec<i128>) -> Option<i128> {
     if values.is_empty() {
         return None;
     }
 
-    let mut sorted = values.clone();
-    let n = sorted.len();
-    for i in 0..n {
-        for j in 0..n - 1 - i {
-            let v1 = sorted.get(j).unwrap();
-            let v2 = sorted.get(j + 1).unwrap();
-            if v1 > v2 {
-                sorted.set(j, v2);
-                sorted.set(j + 1, v1);
-            }
+    let n = values.len();
+    let mid = n / 2;
+
+    if n % 2 == 0 {
+        // For even count, find two middle elements and average them
+        let _ = quickselect_inplace(&mut values, 0, (n - 1) as i32, (mid - 1) as i32);
+        let val1 = values.get(mid - 1)?;
+        let _ = quickselect_inplace(&mut values, 0, (n - 1) as i32, mid as i32);
+        let val2 = values.get(mid)?;
+        Some((val1 + val2) / 2)
+    } else {
+        // For odd count, find the middle element
+        let _ = quickselect_inplace(&mut values, 0, (n - 1) as i32, mid as i32);
+        Some(values.get(mid)?)
+    }
+}
+
+/// In-place quickselect to find the k-th smallest element
+/// Based on Hoare's selection algorithm for O(n) average performance without cloning
+fn quickselect_inplace(values: &mut soroban_sdk::Vec<i128>, mut left: i32, mut right: i32, k: i32) {
+    while left < right {
+        let pivot_index = partition_inplace(values, left, right);
+        if k == pivot_index {
+            return;
+        } else if k < pivot_index {
+            right = pivot_index - 1;
+        } else {
+            left = pivot_index + 1;
+        }
+    }
+}
+
+/// Partition array in-place for quickselect using Lomuto partition scheme
+fn partition_inplace(values: &mut soroban_sdk::Vec<i128>, left: i32, right: i32) -> i32 {
+    let pivot_value = values.get(right as usize).unwrap_or(0);
+    let mut i = left - 1;
+
+    for j in left..right {
+        let val_j = values.get(j as usize).unwrap_or(0);
+        if val_j < pivot_value {
+            i += 1;
+            let idx_i = i as usize;
+            let idx_j = j as usize;
+            let val_i = values.get(idx_i).unwrap_or(0);
+            values.set(idx_i, val_j);
+            values.set(idx_j, val_i);
         }
     }
 
-    let mid = n / 2;
-    #[allow(clippy::manual_is_multiple_of)]
-    if n % 2 == 0 {
-        Some((sorted.get(mid - 1).unwrap() + sorted.get(mid).unwrap()) / 2)
-    } else {
-        Some(sorted.get(mid).unwrap())
-    }
+    let idx_i_plus_1 = (i + 1) as usize;
+    let idx_right = right as usize;
+    let val_i_plus_1 = values.get(idx_i_plus_1).unwrap_or(0);
+    values.set(idx_i_plus_1, pivot_value);
+    values.set(idx_right, val_i_plus_1);
+
+    i + 1
 }
 
 /// Calculate percentage deviation
@@ -179,10 +232,9 @@ pub fn calculate_deviation(value1: i128, value2: i128) -> i128 {
         return i128::MAX;
     }
     let diff = if value1 > value2 {
-        value1 - value2
+        value1.checked_sub(value2).expect("Underflow in deviation diff")
     } else {
-        value2 - value1
+        value2.checked_sub(value1).expect("Underflow in deviation diff")
     };
     (diff * BASIS_POINTS) / value2
 }
-
