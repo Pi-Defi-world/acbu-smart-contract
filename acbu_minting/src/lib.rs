@@ -132,6 +132,9 @@ impl MintingContract {
     pub fn mint_from_usdc(env: Env, user: Address, usdc_amount: i128, recipient: Address) -> i128 {
         Self::check_paused(&env);
         user.require_auth();
+        // C-058: reject contract-type recipients — minting to a contract address
+        // that has no token-receipt logic would permanently strand the funds.
+        Self::assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -221,6 +224,9 @@ impl MintingContract {
     ) -> i128 {
         Self::check_paused(&env);
         user.require_auth();
+        // C-058: reject contract-type recipients — minting to a contract address
+        // that has no token-receipt logic would permanently strand the funds.
+        Self::assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -352,6 +358,9 @@ impl MintingContract {
     ) -> i128 {
         Self::check_paused(&env);
         user.require_auth();
+        // C-058: reject contract-type recipients — minting to a contract address
+        // that has no token-receipt logic would permanently strand the funds.
+        Self::assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -461,6 +470,9 @@ impl MintingContract {
             panic!("Unauthorized operator");
         }
         operator.require_auth();
+        // C-058: reject contract-type recipients — minting to a contract address
+        // that has no token-receipt logic would permanently strand the funds.
+        Self::assert_recipient_is_account(&recipient);
 
         if !check_proof_unused(&env, &proof_id) {
             panic!("Proof already used");
@@ -568,6 +580,8 @@ impl MintingContract {
     ) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        // C-058: reject contract-type recipients to prevent stranded token transfers.
+        Self::assert_recipient_is_account(&recipient);
         if amount <= 0 {
             panic!("Invalid drip amount");
         }

@@ -132,6 +132,9 @@ pub enum ContractError {
     OracleError,
     ReserveError,
     InsufficientBalance,
+    /// Recipient address is a contract, not a Stellar account.
+    /// Minting to a contract-only address would strand funds permanently.
+    InvalidRecipient,
 }
 
 /// Constants
@@ -230,4 +233,3 @@ pub fn calculate_deviation(value1: i128, value2: i128) -> i128 {
     };
     (diff * BASIS_POINTS) / value2
 }
-
