@@ -1,8 +1,9 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol,
+};
 
-
-use shared::{CurrencyCode, ReserveData};
+use shared::{CurrencyCode, ReserveData, BASIS_POINTS};
 
 mod shared {
     pub use shared::*;
@@ -23,7 +24,14 @@ pub struct DataKey {
     pub oracle: Symbol,
     pub reserves: Symbol,
     pub min_reserve_ratio: Symbol,
-    pub version: Symbol,
+}
+
+#[allow(dead_code)]
+pub mod token_contract {
+    soroban_sdk::contractimport!(
+        file = "../soroban_token_contract.wasm",
+        sha256 = "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"
+    );
 }
 
 #[contracttype]
@@ -40,10 +48,9 @@ const DATA_KEY: DataKey = DataKey {
     oracle: symbol_short!("ORACLE"),
     reserves: symbol_short!("RESERVES"),
     min_reserve_ratio: symbol_short!("MIN_RES"),
-    version: symbol_short!("VERSION"),
 };
 
-const VERSION: u32 = 4;
+// CONTRACT_VERSION is imported from shared
 
 
 #[contract]
@@ -52,11 +59,37 @@ pub struct ReserveTrackerContract;
 #[contractimpl]
 impl ReserveTrackerContract {
     /// Initialize the reserve tracker contract
-    pub fn initialize(env: Env, admin: Address, oracle: Address, min_reserve_ratio_bps: i128) {
-        // Check if already initialized
+pub fn initialize(env: Env, admin: Address, oracle: Address, acbu_token: Address, min_reserve_ratio_bps: i128) {
         if env.storage().instance().has(&DATA_KEY.admin) {
             panic!("Contract already initialized");
         }
+
+        env.storage().instance().set(&DATA_KEY.admin, &admin);
+        env.storage().instance().set(&DATA_KEY.oracle, &oracle);
+        env.storage().instance().set(&DATA_KEY.acbu_token, &acbu_token);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.min_reserve_ratio, &min_reserve_ratio_bps);
+
+        let reserves: Map<CurrencyCode, ReserveData> = Map::new(&env);
+        env.storage().instance().set(&DATA_KEY.reserves, &reserves);
+        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+    }
+
+    pub fn get_total_supply_from_token(env: &Env) -> i128 {
+        let acbu_token_addr: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let token = soroban_sdk::token::Client::new(env, &acbu_token_addr);
+        token.total_supply()
+    }
+
+    pub fn verify_reserves(env: Env) -> bool {
+        let total_acbu_supply = Self::get_total_supply_from_token(&env);
+        Self::is_reserve_sufficient(env, total_acbu_supply)
+    }
+
+    pub fn verify_reserves_manual(env: Env, total_acbu_supply: i128) -> bool {
+        Self::is_reserve_sufficient(env, total_acbu_supply)
+    }
 
         // Store configuration
         env.storage().instance().set(&DATA_KEY.admin, &admin);
@@ -68,7 +101,7 @@ impl ReserveTrackerContract {
         // Initialize reserves map
         let reserves: Map<CurrencyCode, ReserveData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.reserves, &reserves);
-        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Update reserve amount for a currency (admin or authorized address)
@@ -100,15 +133,7 @@ impl ReserveTrackerContract {
         reserves.set(currency.clone(), reserve_data);
         env.storage().instance().set(&DATA_KEY.reserves, &reserves);
 
-        // Emit Event (avoid complex contracttype values in topics for compatibility).
-        env.events().publish(
-            (symbol_short!("reserve"),),
-            ReserveUpdateEvent {
-                currency,
-                amount,
-                value_usd,
-                timestamp: current_time,
-            },
+        env.events().publish((symbol_short!("reserve"), currency.clone()), reserve_data.clone());
         );
     }
 
@@ -125,7 +150,7 @@ impl ReserveTrackerContract {
         Self::check_admin(&env);
         let reserves: Map<CurrencyCode, ReserveData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.reserves, &reserves);
-    }
+    env.events().publish((symbol_short!("reset"),), ());}
 
     /// Get total reserve value in USD
     pub fn get_total_reserve_value(env: Env) -> i128 {
@@ -138,8 +163,9 @@ impl ReserveTrackerContract {
 
         for entry in reserves.iter() {
             let data = entry.1;
-            // Saturate so summing many basket lines cannot overflow i128 and trap the VM.
-            total_value = total_value.saturating_add(data.value_usd);
+            total_value = total_value
+                .checked_add(data.value_usd)
+                .expect("Overflow in reserve value calculation");
         }
 
         total_value
@@ -156,17 +182,17 @@ impl ReserveTrackerContract {
             .storage()
             .instance()
             .get(&DATA_KEY.min_reserve_ratio)
-            .unwrap_or(10_000);
+            .unwrap_or(BASIS_POINTS);
 
         if min_ratio < 0 {
             return false;
         }
 
-        // total_reserve_value / total_acbu_supply >= min_ratio / 10,000
-        // total_reserve_value * 10,000 >= total_acbu_supply * min_ratio
+        // total_reserve_value / total_acbu_supply >= min_ratio / BASIS_POINTS
+        // total_reserve_value * BASIS_POINTS >= total_acbu_supply * min_ratio
         //
         // Use checked multiplication: raw `*` overflow traps as UnreachableCodeReached on Soroban.
-        let lhs = total_reserve_value.checked_mul(10_000);
+        let lhs = total_reserve_value.checked_mul(BASIS_POINTS);
         let rhs = total_acbu_supply.checked_mul(min_ratio);
         match (lhs, rhs) {
             (Some(l), Some(r)) => l >= r,
@@ -192,25 +218,34 @@ impl ReserveTrackerContract {
         admin.require_auth();
     }
 
-    pub fn version(_env: Env) -> u32 {
-        VERSION
+    pub fn get_version(env: Env) -> u32 {
+        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
     }
 
-    pub fn migrate(env: Env) {
-        Self::check_admin(&env);
-        let current_version = VERSION;
-        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
-        if stored_version < current_version {
-            env.storage()
-                .instance()
-                .set(&DATA_KEY.version, &current_version);
-        }
-    }
-
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+
+        let current_version = Self::get_version(env.clone());
+        if new_version <= current_version {
+            panic!("Invalid version upgrade");
+        }
+
         env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        // Run migrations
+        for v in current_version..new_version {
+            match v {
+                0 => migrate_v0_to_v1(env.clone()),
+                _ => {}
+            }
+        }
+
+        env.storage().instance().set(&SharedDataKey::Version, &new_version);
     }
+}
+
+fn migrate_v0_to_v1(_env: Env) {
+    // Migration logic
 }
 
