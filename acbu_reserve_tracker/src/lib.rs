@@ -2,7 +2,7 @@
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol};
 
 
-use shared::{CurrencyCode, ReserveData};
+use shared::{CurrencyCode, ReserveData, BASIS_POINTS};
 
 mod shared {
     pub use shared::*;
@@ -156,17 +156,17 @@ impl ReserveTrackerContract {
             .storage()
             .instance()
             .get(&DATA_KEY.min_reserve_ratio)
-            .unwrap_or(10_000);
+            .unwrap_or(BASIS_POINTS);
 
         if min_ratio < 0 {
             return false;
         }
 
-        // total_reserve_value / total_acbu_supply >= min_ratio / 10,000
-        // total_reserve_value * 10,000 >= total_acbu_supply * min_ratio
+        // total_reserve_value / total_acbu_supply >= min_ratio / BASIS_POINTS
+        // total_reserve_value * BASIS_POINTS >= total_acbu_supply * min_ratio
         //
         // Use checked multiplication: raw `*` overflow traps as UnreachableCodeReached on Soroban.
-        let lhs = total_reserve_value.checked_mul(10_000);
+        let lhs = total_reserve_value.checked_mul(BASIS_POINTS);
         let rhs = total_acbu_supply.checked_mul(min_ratio);
         match (lhs, rhs) {
             (Some(l), Some(r)) => l >= r,

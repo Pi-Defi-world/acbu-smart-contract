@@ -6,7 +6,7 @@ use soroban_sdk::{
 
 use shared::{
     calculate_deviation, median, CurrencyCode, OutlierDetectionEvent, RateData, RateUpdateEvent,
-    DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, UPDATE_INTERVAL_SECONDS,
+    BASIS_POINTS, DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, UPDATE_INTERVAL_SECONDS,
 };
 
 mod shared {
@@ -275,7 +275,7 @@ impl OracleContract {
             if let Some(weight) = basket_weights.get(currency.clone()) {
                 if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
                     // Weight is in basis points (e.g., 1800 = 18%)
-                    let contribution = (rate_data.rate_usd * weight) / 10_000;
+                    let contribution = (rate_data.rate_usd * weight) / BASIS_POINTS;
                     weighted_sum += contribution;
                     total_weight += weight;
                 }
@@ -290,7 +290,7 @@ impl OracleContract {
         }
 
         // Normalize to ensure weights sum to 100%
-        (weighted_sum * 10_000) / total_weight
+        (weighted_sum * BASIS_POINTS) / total_weight
     }
 
     /// Basket currencies in declaration order (for S-token mint/burn loops).
