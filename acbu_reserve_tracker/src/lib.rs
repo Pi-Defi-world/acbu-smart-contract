@@ -23,7 +23,6 @@ pub struct DataKey {
     pub oracle: Symbol,
     pub reserves: Symbol,
     pub min_reserve_ratio: Symbol,
-    pub version: Symbol,
 }
 
 #[contracttype]
@@ -40,10 +39,9 @@ const DATA_KEY: DataKey = DataKey {
     oracle: symbol_short!("ORACLE"),
     reserves: symbol_short!("RESERVES"),
     min_reserve_ratio: symbol_short!("MIN_RES"),
-    version: symbol_short!("VERSION"),
 };
 
-const VERSION: u32 = 4;
+// CONTRACT_VERSION is imported from shared
 
 
 #[contract]
@@ -68,7 +66,7 @@ impl ReserveTrackerContract {
         // Initialize reserves map
         let reserves: Map<CurrencyCode, ReserveData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.reserves, &reserves);
-        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Update reserve amount for a currency (admin or authorized address)
@@ -184,25 +182,34 @@ impl ReserveTrackerContract {
         admin.require_auth();
     }
 
-    pub fn version(_env: Env) -> u32 {
-        VERSION
+    pub fn get_version(env: Env) -> u32 {
+        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
     }
 
-    pub fn migrate(env: Env) {
-        Self::check_admin(&env);
-        let current_version = VERSION;
-        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
-        if stored_version < current_version {
-            env.storage()
-                .instance()
-                .set(&DATA_KEY.version, &current_version);
-        }
-    }
-
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+
+        let current_version = Self::get_version(env.clone());
+        if new_version <= current_version {
+            panic!("Invalid version upgrade");
+        }
+
         env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        // Run migrations
+        for v in current_version..new_version {
+            match v {
+                0 => migrate_v0_to_v1(env.clone()),
+                _ => {}
+            }
+        }
+
+        env.storage().instance().set(&SharedDataKey::Version, &new_version);
     }
+}
+
+fn migrate_v0_to_v1(_env: Env) {
+    // Migration logic
 }
 
