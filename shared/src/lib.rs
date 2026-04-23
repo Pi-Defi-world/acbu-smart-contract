@@ -2,6 +2,14 @@
 
 use soroban_sdk::{contracttype, Address, String as SorobanString, Vec};
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    Version,
+}
+
+pub const CONTRACT_VERSION: u32 = 1;
+
 /// Currency code type (e.g., "NGN", "KES", "RWF")
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -124,6 +132,9 @@ pub enum ContractError {
     OracleError,
     ReserveError,
     InsufficientBalance,
+    /// Recipient address is a contract, not a Stellar account.
+    /// Minting to a contract-only address would strand funds permanently.
+    InvalidRecipient,
 }
 
 /// Constants
@@ -138,11 +149,16 @@ pub const OUTLIER_THRESHOLD_BPS: i128 = 300; // 3% deviation for outlier detecti
 
 /// Utility functions
 pub fn calculate_fee(amount: i128, fee_rate_bps: i128) -> i128 {
-    (amount * fee_rate_bps) / BASIS_POINTS
+    amount
+        .checked_mul(fee_rate_bps)
+        .and_then(|v| v.checked_div(BASIS_POINTS))
+        .expect("Overflow in fee calculation")
 }
 
 pub fn calculate_amount_after_fee(amount: i128, fee_rate_bps: i128) -> i128 {
-    amount - calculate_fee(amount, fee_rate_bps)
+    amount
+        .checked_sub(calculate_fee(amount, fee_rate_bps))
+        .expect("Underflow in amount after fee calculation")
 }
 
 /// Calculate median using in-place quickselect algorithm
@@ -158,14 +174,14 @@ pub fn median(mut values: soroban_sdk::Vec<i128>) -> Option<i128> {
     if n % 2 == 0 {
         // For even count, find two middle elements and average them
         let _ = quickselect_inplace(&mut values, 0, (n - 1) as i32, (mid - 1) as i32);
-        let val1 = values.get(mid - 1)?;
+        let val1 = values.get((mid - 1) as u32)?;
         let _ = quickselect_inplace(&mut values, 0, (n - 1) as i32, mid as i32);
-        let val2 = values.get(mid)?;
+        let val2 = values.get(mid as u32)?;
         Some((val1 + val2) / 2)
     } else {
         // For odd count, find the middle element
         let _ = quickselect_inplace(&mut values, 0, (n - 1) as i32, mid as i32);
-        Some(values.get(mid)?)
+        Some(values.get(mid as u32)?)
     }
 }
 
@@ -216,10 +232,9 @@ pub fn calculate_deviation(value1: i128, value2: i128) -> i128 {
         return i128::MAX;
     }
     let diff = if value1 > value2 {
-        value1 - value2
+        value1.checked_sub(value2).expect("Underflow in deviation diff")
     } else {
-        value2 - value1
+        value2.checked_sub(value1).expect("Underflow in deviation diff")
     };
     (diff * BASIS_POINTS) / value2
 }
-

@@ -267,3 +267,10 @@ fn test_update_rate_falls_back_to_provided_rate_when_sources_empty() {
     );
     assert_eq!(client.get_rate(&ngn), submitted_rate);
 }
+
+// Example Test Assertion
+let last_event = env.events().all().last().unwrap();
+let event_data: (u128, Vec<Address>) = last_event.unwrap().data.into_val(&env);
+
+// Verification: Ensure the validator list is not empty
+assert!(event_data.1.len() > 0);
