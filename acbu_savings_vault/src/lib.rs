@@ -70,7 +70,9 @@ pub struct DepositLot {
 #[derive(Clone, Debug)]
 pub struct DepositEvent {
     pub user: Address,
-    pub amount: i128,
+    pub gross_amount: i128,
+    pub fee_amount: i128,
+    pub net_amount: i128,
     pub term_seconds: u64,
     pub timestamp: u64,
 }
@@ -181,9 +183,25 @@ impl SavingsVault {
             return Err(Error::InvalidTerm);
         }
 
+        // Load fee_rate and calculate fee before transfer.
+        let fee_rate = Self::load_fee_rate(&env)?;
+        let fee_amount = calculate_fee(amount, fee_rate);
+        let net_amount = amount - fee_amount;
+
+        // Guard against fee consuming entire deposit.
+        if net_amount <= 0 {
+            return Err(soroban_sdk::Error::from_contract_error(ERR_ZERO_NET_DEPOSIT));
+        }
+
         let acbu = Self::load_acbu_token(&env)?;
         let client = soroban_sdk::token::Client::new(&env, &acbu);
         client.transfer(&user, &env.current_contract_address(), &amount);
+
+        // Immediately forward fee to admin if non-zero.
+        if fee_amount > 0 {
+            let admin = Self::load_admin(&env)?;
+            client.transfer(&env.current_contract_address(), &admin, &fee_amount);
+        }
 
         let key = (DEPOSIT_KEY, user.clone(), term_seconds);
         let mut lots: Vec<DepositLot> = env
@@ -192,7 +210,8 @@ impl SavingsVault {
             .get(&key)
             .unwrap_or(Vec::new(&env));
         lots.push_back(DepositLot {
-            amount,
+                        //Store net_amount instead of gross amount.
+            amount: net_amount,
             timestamp: env.ledger().timestamp(),
             term_seconds,
         });
@@ -202,11 +221,15 @@ impl SavingsVault {
             (symbol_short!("Deposit"), user.clone()),
             DepositEvent {
                 user,
-                amount,
+                // Emit gross, fee, and net for transparency.
+                gross_amount: amount,
+                fee_amount,
+                net_amount,
                 term_seconds,
                 timestamp: env.ledger().timestamp(),
             },
         );
+        //Return net balance. get_balance will now reflect fees.
         Ok(Self::sum_lots(&lots))
     }
 
@@ -248,10 +271,10 @@ impl SavingsVault {
             return Err(Error::InsufficientUnlocked);
         }
 
-        // These are required state — fail explicitly rather than silently default.
-        let fee_rate = Self::load_fee_rate(&env)?;
+        // Removed load_fee_rate and calculate_fee. Fee no longer charged on withdraw.
+        
         let yield_rate = Self::load_yield_rate(&env)?;
-        let fee_amount: i128 = calculate_fee(amount, fee_rate);
+        
 
         let mut amount_left = amount;
         let mut updated_lots = Vec::new(&env);
@@ -314,17 +337,14 @@ impl SavingsVault {
         let acbu = Self::load_acbu_token(&env)?;
         let client = soroban_sdk::token::Client::new(&env, &acbu);
         client.transfer(&env.current_contract_address(), &user, &payout_amount);
-        if fee_amount > 0 {
-            let admin = Self::load_admin(&env)?;
-            client.transfer(&env.current_contract_address(), &admin, &fee_amount);
-        }
+        // Removed fee transfer to admin. Fee already paid on deposit.
 
         env.events().publish(
             (symbol_short!("Withdraw"), user.clone()),
             WithdrawEvent {
                 user,
                 amount,
-                fee_amount,
+                fee_amount: 0,
                 yield_amount,
                 timestamp: env.ledger().timestamp(),
             },
@@ -332,7 +352,7 @@ impl SavingsVault {
         Ok(())
     }
 
-    /// Get total deposited balance for a user + term combination.
+    /// Get total deposited balance for a user + term combination. Net of deposit fees.
     pub fn get_balance(env: Env, user: Address, term_seconds: u64) -> i128 {
         let key = (DEPOSIT_KEY, user, term_seconds);
         let lots: Vec<DepositLot> = env
