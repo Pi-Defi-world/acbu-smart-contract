@@ -186,23 +186,23 @@ fn quickselect_inplace(values: &mut soroban_sdk::Vec<i128>, mut left: i32, mut r
 
 /// Partition array in-place for quickselect using Lomuto partition scheme
 fn partition_inplace(values: &mut soroban_sdk::Vec<i128>, left: i32, right: i32) -> i32 {
-    let pivot_value = values.get(right as usize).unwrap_or(0);
+    let pivot_value = values.get(right as u32).unwrap_or(0);
     let mut i = left - 1;
 
     for j in left..right {
-        let val_j = values.get(j as usize).unwrap_or(0);
+        let val_j = values.get(j as u32).unwrap_or(0);
         if val_j < pivot_value {
             i += 1;
-            let idx_i = i as usize;
-            let idx_j = j as usize;
+            let idx_i = i as u32;
+            let idx_j = j as u32;
             let val_i = values.get(idx_i).unwrap_or(0);
             values.set(idx_i, val_j);
             values.set(idx_j, val_i);
         }
     }
 
-    let idx_i_plus_1 = (i + 1) as usize;
-    let idx_right = right as usize;
+    let idx_i_plus_1 = (i + 1) as u32;
+    let idx_right = right as u32;
     let val_i_plus_1 = values.get(idx_i_plus_1).unwrap_or(0);
     values.set(idx_i_plus_1, pivot_value);
     values.set(idx_right, val_i_plus_1);
