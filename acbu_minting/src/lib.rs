@@ -9,9 +9,6 @@ use shared::{
     DECIMALS, DataKey as SharedDataKey, MAX_MINT_AMOUNT, MIN_MINT_AMOUNT,
 };
 
-mod shared {
-    pub use shared::*;
-}
 
 #[allow(dead_code)]
 pub mod token_contract {
@@ -24,7 +21,7 @@ pub mod token_contract {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SettlementProof {
-    pub proof_id: String,
+    pub proof_id: SorobanString,
     pub settled: bool,
     pub timestamp: u64,
 }
@@ -76,6 +73,9 @@ pub struct MintingContract;
 impl MintingContract {
     /// Initialize the minting contract.
     /// `fee_rate_bps` applies to basket and USDC paths; `fee_single_bps` to single S-token deposits (typically higher).
+    // Soroban initialize functions are idiomatic with many parameters; a config-struct
+    // refactor is a separate concern.
+    #[allow(clippy::too_many_arguments)]
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -360,7 +360,6 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
-        mark_proof_used(&env, &proof_id);
         acbu_amount
     }
 
@@ -601,6 +600,9 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
+        // Seal the proof so it cannot be replayed (fixes the check_proof_unused guard above).
+        mark_proof_used(&env, &proof_id);
+
         acbu_amount
     }
 
@@ -745,7 +747,8 @@ impl MintingContract {
 
         env.deployer().update_current_contract_wasm(new_wasm_hash);
 
-        // Run migrations
+        // Run migrations — the match will gain new arms as versions are added.
+        #[allow(clippy::single_match)]
         for v in current_version..new_version {
             match v {
                 0 => migrate_v0_to_v1(env.clone()),
@@ -759,4 +762,37 @@ impl MintingContract {
 
 fn migrate_v0_to_v1(_env: Env) {
     // Migration logic
+}
+
+// ---------------------------------------------------------------------------
+// Helper: assert that an address belongs to an account (not a contract).
+// C-058 — minting to a contract address that has no token-receipt logic would
+// permanently strand funds.
+//
+// NOTE: soroban-sdk 21 does not expose an `is_account()` predicate on
+// `Address`; the distinction is enforced off-chain by the client SDK and by
+// Stellar's native authorization model.  This stub preserves the call sites so
+// the intent is visible and can be filled in when the SDK gains the API.
+// ---------------------------------------------------------------------------
+impl MintingContract {
+    #[allow(clippy::unused_self)]
+    fn assert_recipient_is_account(_address: &Address) {
+        // On-chain account-vs-contract check is not available in soroban-sdk 21.
+        // Enforcement is the responsibility of the calling client.
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Proof-replay helpers: used by mint_from_demo_fiat to prevent double-spend.
+// ---------------------------------------------------------------------------
+fn check_proof_unused(env: &Env, proof_id: &SorobanString) -> bool {
+    !env.storage()
+        .persistent()
+        .has(&(symbol_short!("PRF_SET"), proof_id.clone()))
+}
+
+fn mark_proof_used(env: &Env, proof_id: &SorobanString) {
+    env.storage()
+        .persistent()
+        .set(&(symbol_short!("PRF_SET"), proof_id.clone()), &true);
 }
