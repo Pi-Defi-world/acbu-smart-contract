@@ -262,6 +262,55 @@ impl OracleContract {
         }
     }
 
+    /// Get rate data with timestamp for staleness validation
+    pub fn get_rate_with_timestamp(env: Env, currency: CurrencyCode) -> (i128, u64) {
+        if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
+            (rate_data.rate_usd, rate_data.timestamp)
+        } else {
+            panic!("Rate not found for currency");
+        }
+    }
+
+    /// Get ACBU/USD rate with timestamp
+    pub fn get_acbu_usd_rate_with_timestamp(env: Env) -> (i128, u64) {
+        let basket_weights: Map<CurrencyCode, i128> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.basket_weights)
+            .unwrap_or(Map::new(&env));
+        let currencies: Vec<CurrencyCode> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.currencies)
+            .unwrap_or(Vec::new(&env));
+
+        let mut weighted_sum = 0i128;
+        let mut total_weight = 0i128;
+        let mut oldest_timestamp = u64::MAX;
+
+        for currency in currencies.iter() {
+            if let Some(weight) = basket_weights.get(currency.clone()) {
+                if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
+                    let contribution = (rate_data.rate_usd * weight) / BASIS_POINTS;
+                    weighted_sum += contribution;
+                    total_weight += weight;
+                    if rate_data.timestamp < oldest_timestamp {
+                        oldest_timestamp = rate_data.timestamp;
+                    }
+                }
+            }
+        }
+
+        let rate = if total_weight > 0 {
+            weighted_sum / total_weight
+        } else {
+            DECIMALS // Neutral rate if no weights
+        };
+
+        (rate, if oldest_timestamp == u64::MAX { 0 } else { oldest_timestamp })
+    }
+
+
     /// Get ACBU/USD rate (basket-weighted)
     pub fn get_acbu_usd_rate(env: Env) -> i128 {
         // NOTE: These are instance-storage values that have historically changed encoding
