@@ -51,11 +51,18 @@ pub struct ReserveTrackerContract;
 
 #[contractimpl]
 impl ReserveTrackerContract {
-    /// Initialize the reserve tracker contract
+    /// Initialize the reserve tracker contract.
+    ///
+    /// These launch-time parameters are frozen after initialization and cannot be changed.
     pub fn initialize(env: Env, admin: Address, oracle: Address, min_reserve_ratio_bps: i128) {
         // Check if already initialized
         if env.storage().instance().has(&DATA_KEY.admin) {
             panic!("Contract already initialized");
+        }
+
+        // Validate reserve ratio bounds (basis points: 0..=10,000)
+        if !(0..=10_000).contains(&min_reserve_ratio_bps) {
+            panic!("Invalid min_reserve_ratio_bps: must be between 0 and 10,000 inclusive");
         }
 
         // Store configuration
