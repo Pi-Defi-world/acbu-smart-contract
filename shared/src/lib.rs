@@ -31,6 +31,9 @@ pub struct RateData {
     pub rate_usd: i128, // Rate in 7 decimals (e.g., 0.0012345 = 12345)
     pub timestamp: u64,
     pub sources: soroban_sdk::Vec<i128>, // Source rates for median calculation
+    /// Ledger sequence number at which this rate was written.
+    /// Used for ledger-based staleness checks (unforgeable — set by the network).
+    pub ledger: u32,
 }
 
 /// Reserve data structure
@@ -146,6 +149,11 @@ pub const MIN_BURN_AMOUNT: i128 = 10_000_000; // 10 ACBU (7 decimals)
 pub const UPDATE_INTERVAL_SECONDS: u64 = 21_600; // 6 hours
 pub const EMERGENCY_THRESHOLD_BPS: i128 = 500; // 5% deviation threshold
 pub const OUTLIER_THRESHOLD_BPS: i128 = 300; // 3% deviation for outlier detection
+/// Maximum ledger age of a stored rate before it is considered stale and rejected
+/// at read time. Stellar closes ~1 ledger every 5 seconds; 720 ledgers ≈ 1 hour.
+/// Rates must be refreshed within this window or consumers (minting) will be blocked.
+/// Admin can bypass via `set_rate_admin` for emergency overrides.
+pub const STALE_RATE_MAX_LEDGERS: u32 = 4_320; // ~6 hours at 5 s/ledger
 
 /// Utility functions
 pub fn calculate_fee(amount: i128, fee_rate_bps: i128) -> i128 {

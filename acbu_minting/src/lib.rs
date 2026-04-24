@@ -7,6 +7,7 @@ use soroban_sdk::{
 use shared::{
     calculate_amount_after_fee, calculate_fee, CurrencyCode, DataKey as SharedDataKey, MintEvent,
     BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MAX_MINT_AMOUNT, MIN_MINT_AMOUNT,
+    UPDATE_INTERVAL_SECONDS,
 };
 
 
