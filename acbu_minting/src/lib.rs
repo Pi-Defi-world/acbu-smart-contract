@@ -5,8 +5,8 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_amount_after_fee, calculate_fee, CurrencyCode, MintEvent, BASIS_POINTS, CONTRACT_VERSION,
-    DECIMALS, DataKey as SharedDataKey, MAX_MINT_AMOUNT, MIN_MINT_AMOUNT, UPDATE_INTERVAL_SECONDS,
+    calculate_amount_after_fee, calculate_fee, CurrencyCode, DataKey as SharedDataKey, MintEvent,
+    BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MAX_MINT_AMOUNT, MIN_MINT_AMOUNT,
 };
 
 mod shared {
@@ -125,7 +125,9 @@ impl MintingContract {
             .instance()
             .set(&DATA_KEY.max_mint_amount, &MAX_MINT_AMOUNT);
         env.storage().instance().set(&DATA_KEY.total_supply, &0i128);
-        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Mint ACBU from USDC deposit (unchanged reserve/oracle flow).
@@ -205,7 +207,7 @@ impl MintingContract {
 
         let fee = calculate_fee(usdc_amount, fee_rate);
 
-        let tx_id = SorobanString::from_str(&env, "mint_tx_static");
+        let tx_id = generate_unique_tx_id(&env, &recipient, acbu_amount, "mint_usdc");
         let mint_event = MintEvent {
             transaction_id: tx_id,
             user: recipient.clone(),
@@ -356,7 +358,7 @@ impl MintingContract {
             acbu_sac.mint(&treasury, &fee_acbu);
         }
 
-        let tx_id = SorobanString::from_str(&env, "mint_basket");
+        let tx_id = generate_unique_tx_id(&env, &recipient, net_mint, "mint_basket");
         let mint_event = MintEvent {
             transaction_id: tx_id,
             user: recipient.clone(),
@@ -369,7 +371,6 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
-        mark_proof_used(&env, &proof_id);
         acbu_amount
     }
 
@@ -478,8 +479,9 @@ impl MintingContract {
         acbu_sac.mint(&recipient, &acbu_amount);
 
         let fee = calculate_fee(usd_gross, fee_single);
+        let tx_id = generate_unique_tx_id(&env, &recipient, acbu_amount, "mint_single");
         let mint_event = MintEvent {
-            transaction_id: SorobanString::from_str(&env, "mint_single"),
+            transaction_id: tx_id,
             user: recipient.clone(),
             usdc_amount: usd_gross,
             acbu_amount,
@@ -617,6 +619,150 @@ impl MintingContract {
             .publish((symbol_short!("mint"), recipient), mint_event);
 
         acbu_amount
+    }
+
+    /// Fintech-partner fiat mint: operator (fintech backend) authorizes; validates fintech_tx_id
+    /// to prevent duplicate minting. Requires both operator authorization and valid fintech transaction.
+    /// This function enforces strict access control: only the operator (fintech partner) can call it.
+    pub fn mint_from_fiat(
+        env: Env,
+        operator: Address,
+        recipient: Address,
+        currency: CurrencyCode,
+        fiat_amount: i128,
+        fintech_tx_id: String as SorobanString,
+    ) -> i128 {
+        Self::check_paused(&env);
+        let expected_operator: Address = Self::get_operator(env.clone());
+        
+        // Strict access control: only operator (fintech backend) can call
+        if operator != expected_operator {
+            panic!("Unauthorized: only operator can call mint_from_fiat");
+        }
+        operator.require_auth();
+
+        // Validate fintech_tx_id is not empty
+        if fintech_tx_id.len() == 0 {
+            panic!("fintech_tx_id cannot be empty");
+        }
+
+        // Check if fintech_tx_id has already been processed
+        let mut processed_ids: soroban_sdk::Map<String as SorobanString, bool> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.processed_fintech_tx_ids)
+            .unwrap_or_else(|| soroban_sdk::map![&env]);
+        
+        if processed_ids.contains_key(&fintech_tx_id) {
+            panic!("Duplicate fintech transaction ID");
+        }
+
+        let min_amount: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.min_mint_amount)
+            .unwrap();
+        let max_amount: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.max_mint_amount)
+            .unwrap();
+
+        let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let oracle_addr: Address = env.storage().instance().get(&DATA_KEY.oracle).unwrap();
+        let reserve_tracker_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.reserve_tracker)
+            .unwrap();
+        let vault: Address = env.storage().instance().get(&DATA_KEY.vault).unwrap();
+        let fee_rate: i128 = env.storage().instance().get(&DATA_KEY.fee_rate).unwrap();
+        let treasury: Address = env.storage().instance().get(&DATA_KEY.treasury).unwrap();
+        let mut total_supply: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.total_supply)
+            .unwrap_or(0);
+
+        let acbu_rate: i128 = env.invoke_contract(
+            &oracle_addr,
+            &Symbol::new(&env, "get_acbu_usd_rate"),
+            vec![&env],
+        );
+        let rate: i128 = env.invoke_contract(
+            &oracle_addr,
+            &Symbol::new(&env, "get_rate"),
+            vec![&env, currency.clone().into_val(&env)],
+        );
+        if rate == 0 {
+            panic!("Invalid oracle rate");
+        }
+
+        let usd_gross = (fiat_amount * rate) / DECIMALS;
+        if usd_gross < min_amount || usd_gross > max_amount {
+            panic!("Invalid mint amount");
+        }
+
+        let usd_after_fee = calculate_amount_after_fee(usd_gross, fee_rate);
+        let acbu_amount = (usd_after_fee * DECIMALS) / acbu_rate;
+
+        let projected_supply = total_supply + acbu_amount;
+        let reserve_ok: bool = env.invoke_contract(
+            &reserve_tracker_addr,
+            &Symbol::new(&env, "is_reserve_sufficient"),
+            vec![&env, projected_supply.into_val(&env)],
+        );
+        if !reserve_ok {
+            panic!("Insufficient reserves: minting would violate the minimum collateral ratio");
+        }
+
+        // For mint_from_fiat, fiat deposit is handled off-chain by the fintech partner.
+        // No on-chain token transfer needed; fintech validates and deposits fiat in their system.
+
+        total_supply += acbu_amount;
+        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+
+        let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
+        acbu_sac.mint(&recipient, &acbu_amount);
+        
+        let fee = calculate_fee(usd_gross, fee_rate);
+        if fee > 0 {
+            acbu_sac.mint(&treasury, &fee);
+        }
+
+        // Mark fintech_tx_id as processed to prevent duplicate minting
+        processed_ids.set(fintech_tx_id.clone(), true);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.processed_fintech_tx_ids, &processed_ids);
+
+        let mint_event = MintEvent {
+            transaction_id: fintech_tx_id,
+            user: recipient.clone(),
+            usdc_amount: usd_gross,
+            acbu_amount,
+            fee,
+            rate: acbu_rate,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events()
+            .publish((symbol_short!("mint"), recipient), mint_event);
+
+        acbu_amount
+    }
+
+    /// Helper to check if an address is authorized as operator (fintech backend).
+    /// Returns true if the address is the configured operator.
+    fn check_is_operator(env: &Env, address: &Address) -> bool {
+        let operator: Address = Self::get_operator(env.clone());
+        address == &operator
+    }
+
+    /// Helper to check if an address is authorized as admin.
+    /// Returns true if the address is the configured admin.
+    fn check_is_admin(env: &Env, address: &Address) -> bool {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        address == &admin
     }
 
     /// Testnet / ops: transfer demo basket S-token from custodial balance on this contract to
@@ -881,7 +1027,10 @@ impl MintingContract {
     }
 
     pub fn get_version(env: Env) -> u32 {
-        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&SharedDataKey::Version)
+            .unwrap_or(0)
     }
 
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
@@ -903,7 +1052,9 @@ impl MintingContract {
             }
         }
 
-        env.storage().instance().set(&SharedDataKey::Version, &new_version);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &new_version);
     }
 }
 
@@ -915,31 +1066,15 @@ fn check_oracle_freshness(env: &Env, oracle_timestamp: u64, max_staleness_second
     }
 }
 
-fn check_proof_unused(env: &Env, proof_id: &SorobanString) -> bool {
-    // Check if the proof_id exists in the used_proofs set
-    // Storage returns an Option; if not found, proof is unused (returns true)
-    let used_proofs_key = DATA_KEY.used_proofs;
-    match env.storage().instance().get::<Symbol, soroban_sdk::Map<SorobanString, bool>>(&used_proofs_key) {
-        Some(used_proofs_map) => !used_proofs_map.contains_key(proof_id.clone()),
-        None => true, // If set doesn't exist, proof is unused
-    }
+fn generate_unique_tx_id(env: &Env, user: &Address, amount: i128, prefix: &str) -> SorobanString {
+    let timestamp = env.ledger().timestamp();
+    let seq = env.ledger().sequence();
+    let mut hash: u64 = 0u64; 
+    hash = hash.wrapping_mul(31).wrapping_add(prefix.as_bytes().iter().fold(0u64, |h, &b| h.wrapping_mul(31).wrapping_add(b as u64)));
+    hash = hash.wrapping_mul(31).wrapping_add(user.as_val().get(0).unwrap_or(0) as u64));
+    hash = hash.wrapping_mul(31).wrapping_add((amount & 0xFFFFFFFF) as u64);
+    hash = hash.wrapping_mul(31).wrapping_add(timestamp as u64);
+    hash = hash.wrapping_mul(31).wrapping_add(seq as u64);
+    let id_str = format!("{}_{:x}", prefix, hash);
+    SorobanString::from_str(env, &id_str)
 }
-
-fn mark_proof_used(env: &Env, proof_id: &SorobanString) {
-    let used_proofs_key = DATA_KEY.used_proofs;
-    let mut used_proofs_map: soroban_sdk::Map<SorobanString, bool> = env
-        .storage()
-        .instance()
-        .get(&used_proofs_key)
-        .unwrap_or_else(|| soroban_sdk::Map::new(env));
-    used_proofs_map.set(proof_id.clone(), true);
-    env.storage().instance().set(&used_proofs_key, &used_proofs_map);
-}
-
-fn assert_recipient_is_account(recipient: &Address) {
-    // For Soroban, all Stellar addresses (public keys) can receive tokens.
-    // Contract addresses would typically have different behavior;
-    // this is a placeholder that can be enhanced to distinguish account vs contract types.
-    let _recipient = recipient;
-}
-

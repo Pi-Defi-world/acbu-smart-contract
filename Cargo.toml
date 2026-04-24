@@ -11,6 +11,9 @@ members = [
 ]
 resolver = "2"
 
+# Build script for WASM integrity verification
+build = "build.rs"
+
 [profile.release]
 opt-level = "z"      # Optimize for size
 lto = true           # Enable link-time optimization
