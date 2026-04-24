@@ -1,12 +1,12 @@
 #![cfg(test)]
 
+use acbu_savings_vault::DepositEvent;
 use acbu_savings_vault::{SavingsVault, SavingsVaultClient, WithdrawEvent};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger},
     Address, Env, FromVal, IntoVal, Symbol,
 };
-use acbu_savings_vault::DepositEvent;
 
 const SECONDS_PER_YEAR: u64 = 31_536_000;
 
@@ -19,8 +19,8 @@ fn test_withdraw_after_term_has_correct_30day_yield() {
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
     let acbu_token = env
-       .register_stellar_asset_contract_v2(admin.clone())
-       .address();
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let contract_id = env.register_contract(None, SavingsVault);
     let client = SavingsVaultClient::new(&env, &contract_id);
@@ -35,10 +35,9 @@ fn test_withdraw_after_term_has_correct_30day_yield() {
     // Expected: 10M * 1000 bps * 2_592_000 / (10000 * 31_536_000) = 82_191
     let expected_yield = 82_191i128;
     let expected_fee = 300_000i128;
-    let expected_user_payout = (deposit_amount - expected_fee) + expected_yield;
-
-
-    let expected_yield = 79_726;
+    let net_deposit = deposit_amount - expected_fee;
+    let expected_yield = 79_726i128;
+    let expected_user_payout = net_deposit + expected_yield;
 
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&user, &deposit_amount);
@@ -48,11 +47,13 @@ fn test_withdraw_after_term_has_correct_30day_yield() {
 
     // Advance time past the lock term
     env.ledger()
-       .with_mut(|l| l.timestamp = 1_000_000 + term_seconds);
+        .with_mut(|l| l.timestamp = 1_000_000 + term_seconds);
 
     // Preview yield before withdraw
-    assert_eq!(client.get_pending_yield(&user, &term_seconds), expected_yield);
-
+    assert_eq!(
+        client.get_pending_yield(&user, &term_seconds),
+        expected_yield
+    );
 
     client.withdraw(&user, &term_seconds, &net_deposit);
 
@@ -61,9 +62,14 @@ fn test_withdraw_after_term_has_correct_30day_yield() {
     assert_eq!(token_client.balance(&admin), expected_fee);
 
     let events = env.events().all();
-    let withdraw_event = events.iter().rev().find(|e| {
-        e.0 == contract_id && Symbol::from_val(&env, &e.1.get(0).unwrap()) == symbol_short!("Withdraw")
-    }).unwrap();
+    let withdraw_event = events
+        .iter()
+        .rev()
+        .find(|e| {
+            e.0 == contract_id
+                && Symbol::from_val(&env, &e.1.get(0).unwrap()) == symbol_short!("Withdraw")
+        })
+        .unwrap();
     let withdraw_event: WithdrawEvent = withdraw_event.2.into_val(&env);
     assert_eq!(withdraw_event.yield_amount, expected_yield); // Acceptance check passes
 }
@@ -77,8 +83,8 @@ fn test_withdraw_after_one_year_has_positive_yield_and_event_value() {
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
     let acbu_token = env
-      .register_stellar_asset_contract_v2(admin.clone())
-      .address();
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let contract_id = env.register_contract(None, SavingsVault);
     let client = SavingsVaultClient::new(&env, &contract_id);
@@ -103,9 +109,8 @@ fn test_withdraw_after_one_year_has_positive_yield_and_event_value() {
     client.deposit(&user, &deposit_amount, &term_seconds);
 
     env.ledger()
-      .with_mut(|l| l.timestamp = 1_000_000 + SECONDS_PER_YEAR);
+        .with_mut(|l| l.timestamp = 1_000_000 + SECONDS_PER_YEAR);
 
-   
     client.withdraw(&user, &term_seconds, &net_deposit);
 
     let token_client = soroban_sdk::token::Client::new(&env, &acbu_token);
@@ -116,11 +121,11 @@ fn test_withdraw_after_one_year_has_positive_yield_and_event_value() {
     let mut found_withdraw = false;
 
     for event in events.iter() {
-        if event.0!= contract_id {
+        if event.0 != contract_id {
             continue;
         }
         let topics = event.1;
-        if!topics.is_empty()
+        if !topics.is_empty()
             && Symbol::from_val(&env, &topics.get(0).unwrap()) == symbol_short!("Withdraw")
         {
             let withdraw_event: WithdrawEvent = event.2.into_val(&env);
@@ -142,8 +147,8 @@ fn test_partial_withdraw_and_multiple_deposits_fifo_yield() {
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
     let acbu_token = env
-      .register_stellar_asset_contract_v2(admin.clone())
-      .address();
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let contract_id = env.register_contract(None, SavingsVault);
     let client = SavingsVaultClient::new(&env, &contract_id);
@@ -167,12 +172,12 @@ fn test_partial_withdraw_and_multiple_deposits_fifo_yield() {
     client.deposit(&user, &lot_1, &term_seconds);
 
     env.ledger()
-      .with_mut(|l| l.timestamp = 1_000_000 + (SECONDS_PER_YEAR / 2));
+        .with_mut(|l| l.timestamp = 1_000_000 + (SECONDS_PER_YEAR / 2));
 
     client.deposit(&user, &lot_2, &term_seconds);
 
     env.ledger()
-      .with_mut(|l| l.timestamp = 1_000_000 + SECONDS_PER_YEAR);
+        .with_mut(|l| l.timestamp = 1_000_000 + SECONDS_PER_YEAR);
 
     client.withdraw(&user, &term_seconds, &withdraw_amount);
 
@@ -195,8 +200,8 @@ fn test_early_withdrawal_is_rejected() {
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
     let acbu_token = env
-      .register_stellar_asset_contract_v2(admin.clone())
-      .address();
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let contract_id = env.register_contract(None, SavingsVault);
     let client = SavingsVaultClient::new(&env, &contract_id);
@@ -235,8 +240,8 @@ fn test_withdraw_at_exact_term_boundary_succeeds() {
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
     let acbu_token = env
-      .register_stellar_asset_contract_v2(admin.clone())
-      .address();
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let contract_id = env.register_contract(None, SavingsVault);
     let client = SavingsVaultClient::new(&env, &contract_id);
@@ -254,8 +259,7 @@ fn test_withdraw_at_exact_term_boundary_succeeds() {
 
     // Advance to exactly term boundary
     env.ledger()
-      .with_mut(|l| l.timestamp = 1_000_000 + term_seconds);
-
+        .with_mut(|l| l.timestamp = 1_000_000 + term_seconds);
 
     client.withdraw(&user, &term_seconds, &deposit_amount);
 
@@ -273,8 +277,8 @@ fn test_withdraw_only_uses_lots_that_reached_their_own_term() {
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
     let acbu_token = env
-      .register_stellar_asset_contract_v2(admin.clone())
-      .address();
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let contract_id = env.register_contract(None, SavingsVault);
     let client = SavingsVaultClient::new(&env, &contract_id);
@@ -293,7 +297,7 @@ fn test_withdraw_only_uses_lots_that_reached_their_own_term() {
 
     // Only the short-term lot is mature.
     env.ledger()
-      .with_mut(|l| l.timestamp = 1_000_000 + short_term);
+        .with_mut(|l| l.timestamp = 1_000_000 + short_term);
 
     // Short-term withdrawal succeeds.
     client.withdraw(&user, &short_term, &short_amount);
@@ -305,7 +309,6 @@ fn test_withdraw_only_uses_lots_that_reached_their_own_term() {
     assert_eq!(client.get_balance(&user, &long_term), long_amount);
 }
 
-
 #[test]
 fn test_deposit_fee_reflected_in_balance() {
     let env = Env::default();
@@ -313,7 +316,9 @@ fn test_deposit_fee_reflected_in_balance() {
 
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
-    let acbu_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let contract_id = env.register_contract(None, SavingsVault);
     let client = SavingsVaultClient::new(&env, &contract_id);
@@ -348,7 +353,9 @@ fn test_deposit_event_has_fee_fields() {
 
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
-    let acbu_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let contract_id = env.register_contract(None, SavingsVault);
     let client = SavingsVaultClient::new(&env, &contract_id);
@@ -360,9 +367,14 @@ fn test_deposit_event_has_fee_fields() {
     client.deposit(&user, &10_000_000, &3600);
 
     let events = env.events().all();
-    let deposit_event = events.iter().rev().find(|e| {
-        e.0 == contract_id && Symbol::from_val(&env, &e.1.get(0).unwrap()) == symbol_short!("Deposit")
-    }).unwrap();
+    let deposit_event = events
+        .iter()
+        .rev()
+        .find(|e| {
+            e.0 == contract_id
+                && Symbol::from_val(&env, &e.1.get(0).unwrap()) == symbol_short!("Deposit")
+        })
+        .unwrap();
     let deposit_event: DepositEvent = deposit_event.2.into_val(&env);
 
     assert_eq!(deposit_event.gross_amount, 10_000_000);

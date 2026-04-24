@@ -1,20 +1,12 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol,
+    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol, Vec,
 };
 
-use shared::{CurrencyCode, ReserveData, BASIS_POINTS};
+use shared::{CurrencyCode, DataKey as SharedDataKey, ReserveData, BASIS_POINTS, CONTRACT_VERSION};
 
 mod shared {
     pub use shared::*;
-}
-
-#[allow(dead_code)]
-pub mod token_contract {
-    soroban_sdk::contractimport!(
-        file = "../soroban_token_contract.wasm",
-        sha256 = "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"
-    );
 }
 
 #[contracttype]
@@ -24,23 +16,8 @@ pub struct DataKey {
     pub oracle: Symbol,
     pub reserves: Symbol,
     pub min_reserve_ratio: Symbol,
-}
-
-#[allow(dead_code)]
-pub mod token_contract {
-    soroban_sdk::contractimport!(
-        file = "../soroban_token_contract.wasm",
-        sha256 = "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"
-    );
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct ReserveUpdateEvent {
-    pub currency: CurrencyCode,
-    pub amount: i128,
-    pub value_usd: i128,
-    pub timestamp: u64,
+    pub acbu_token: Symbol,
+    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -48,10 +25,9 @@ const DATA_KEY: DataKey = DataKey {
     oracle: symbol_short!("ORACLE"),
     reserves: symbol_short!("RESERVES"),
     min_reserve_ratio: symbol_short!("MIN_RES"),
+    acbu_token: symbol_short!("ACBU_TKN"),
+    version: symbol_short!("VERSION"),
 };
-
-// CONTRACT_VERSION is imported from shared
-
 
 #[contract]
 pub struct ReserveTrackerContract;
@@ -59,27 +35,41 @@ pub struct ReserveTrackerContract;
 #[contractimpl]
 impl ReserveTrackerContract {
     /// Initialize the reserve tracker contract
-pub fn initialize(env: Env, admin: Address, oracle: Address, acbu_token: Address, min_reserve_ratio_bps: i128) {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        oracle: Address,
+        acbu_token: Address,
+        min_reserve_ratio_bps: i128,
+    ) {
         if env.storage().instance().has(&DATA_KEY.admin) {
             panic!("Contract already initialized");
         }
 
         env.storage().instance().set(&DATA_KEY.admin, &admin);
         env.storage().instance().set(&DATA_KEY.oracle, &oracle);
-        env.storage().instance().set(&DATA_KEY.acbu_token, &acbu_token);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.acbu_token, &acbu_token);
         env.storage()
             .instance()
             .set(&DATA_KEY.min_reserve_ratio, &min_reserve_ratio_bps);
 
         let reserves: Map<CurrencyCode, ReserveData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.reserves, &reserves);
-        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     pub fn get_total_supply_from_token(env: &Env) -> i128 {
         let acbu_token_addr: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
-        let token = soroban_sdk::token::Client::new(env, &acbu_token_addr);
-        token.total_supply()
+        // Use invoke_contract to avoid dependency on a specific token client implementation
+        env.invoke_contract(
+            &acbu_token_addr,
+            &Symbol::new(env, "get_total_supply"),
+            Vec::new(env),
+        )
     }
 
     pub fn verify_reserves(env: Env) -> bool {
@@ -89,19 +79,6 @@ pub fn initialize(env: Env, admin: Address, oracle: Address, acbu_token: Address
 
     pub fn verify_reserves_manual(env: Env, total_acbu_supply: i128) -> bool {
         Self::is_reserve_sufficient(env, total_acbu_supply)
-    }
-
-        // Store configuration
-        env.storage().instance().set(&DATA_KEY.admin, &admin);
-        env.storage().instance().set(&DATA_KEY.oracle, &oracle);
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.min_reserve_ratio, &min_reserve_ratio_bps);
-
-        // Initialize reserves map
-        let reserves: Map<CurrencyCode, ReserveData> = Map::new(&env);
-        env.storage().instance().set(&DATA_KEY.reserves, &reserves);
-        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Update reserve amount for a currency (admin or authorized address)
@@ -130,11 +107,11 @@ pub fn initialize(env: Env, admin: Address, oracle: Address, acbu_token: Address
             timestamp: current_time,
         };
 
-        reserves.set(currency.clone(), reserve_data);
+        reserves.set(currency.clone(), reserve_data.clone());
         env.storage().instance().set(&DATA_KEY.reserves, &reserves);
 
-        env.events().publish((symbol_short!("reserve"), currency.clone()), reserve_data.clone());
-        );
+        env.events()
+            .publish((symbol_short!("reserve"), currency.clone()), reserve_data);
     }
 
     /// Get current reserves for all currencies
@@ -145,88 +122,51 @@ pub fn initialize(env: Env, admin: Address, oracle: Address, acbu_token: Address
             .unwrap_or(Map::new(&env))
     }
 
-    /// Admin recovery helper: clear reserve map if legacy/corrupt data causes read traps.
-    pub fn reset_reserves(env: Env) {
-        Self::check_admin(&env);
-        let reserves: Map<CurrencyCode, ReserveData> = Map::new(&env);
-        env.storage().instance().set(&DATA_KEY.reserves, &reserves);
-    env.events().publish((symbol_short!("reset"),), ());}
-
-    /// Get total reserve value in USD
-    pub fn get_total_reserve_value(env: Env) -> i128 {
-        let reserves: Map<CurrencyCode, ReserveData> = env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.reserves)
-            .unwrap_or(Map::new(&env));
-        let mut total_value = 0i128;
-
-        for entry in reserves.iter() {
-            let data = entry.1;
-            total_value = total_value
-                .checked_add(data.value_usd)
-                .expect("Overflow in reserve value calculation");
-        }
-
-        total_value
-    }
-
-    /// Check if reserves meet the minimum ratio (relative to minted ACBU)
+    /// Check if the total reserves are sufficient to back the ACBU supply
     pub fn is_reserve_sufficient(env: Env, total_acbu_supply: i128) -> bool {
-        if total_acbu_supply < 0 {
-            return false;
+        if total_acbu_supply <= 0 {
+            return true;
         }
 
-        let total_reserve_value = Self::get_total_reserve_value(env.clone());
-        let min_ratio: i128 = env
+        let reserves = Self::get_all_reserves(env.clone());
+        let mut total_reserve_usd = 0i128;
+
+        for (_curr, data) in reserves.iter() {
+            total_reserve_usd = total_reserve_usd
+                .checked_add(data.value_usd)
+                .expect("Overflow in reserve calculation");
+        }
+
+        let oracle_addr: Address = env.storage().instance().get(&DATA_KEY.oracle).unwrap();
+        let acbu_usd_rate: i128 = env.invoke_contract(
+            &oracle_addr,
+            &Symbol::new(&env, "get_acbu_usd_rate"),
+            Vec::new(&env),
+        );
+
+        let total_acbu_usd = (total_acbu_supply * acbu_usd_rate) / 100_000_000;
+        if total_acbu_usd == 0 {
+            return true;
+        }
+
+        let min_reserve_ratio = env
             .storage()
             .instance()
             .get(&DATA_KEY.min_reserve_ratio)
-            .unwrap_or(BASIS_POINTS);
+            .unwrap_or(10000i128); // Default to 100%
 
-        if min_ratio < 0 {
-            return false;
-        }
-
-        // total_reserve_value / total_acbu_supply >= min_ratio / BASIS_POINTS
-        // total_reserve_value * BASIS_POINTS >= total_acbu_supply * min_ratio
-        //
-        // Use checked multiplication: raw `*` overflow traps as UnreachableCodeReached on Soroban.
-        let lhs = total_reserve_value.checked_mul(BASIS_POINTS);
-        let rhs = total_acbu_supply.checked_mul(min_ratio);
-        match (lhs, rhs) {
-            (Some(l), Some(r)) => l >= r,
-            // Reserve side product overflow → backing is extremely large vs any mint check here.
-            (None, Some(_)) => true,
-            // Supply * min_ratio overflow or reserve product missing while rhs ok → deny.
-            (Some(_), None) | (None, None) => false,
-        }
-    }
-
-    /// Verify reserves meet the minimum collateral ratio for the given circulating ACBU supply.
-    ///
-    /// `total_acbu_supply` must be total outstanding ACBU in 7-decimal fixed-point units (1 whole
-    /// token = 10_000_000), for example from an indexer or summed balances off-chain.
-    /// Do not use this contract's own token balance: the reserve tracker does not custody ACBU.
-    pub fn verify_reserves(env: Env, total_acbu_supply: i128) -> bool {
-        Self::is_reserve_sufficient(env, total_acbu_supply)
-    }
-
-    // Private helper functions
-    fn check_admin(env: &Env) {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        admin.require_auth();
-    }
-
-    pub fn get_version(env: Env) -> u32 {
-        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
+        let current_ratio = (total_reserve_usd * BASIS_POINTS) / total_acbu_usd;
+        current_ratio >= min_reserve_ratio
     }
 
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        admin.require_auth();
+        Self::check_admin(&env);
 
-        let current_version = Self::get_version(env.clone());
+        let current_version = env
+            .storage()
+            .instance()
+            .get(&SharedDataKey::Version)
+            .unwrap_or(0);
         if new_version <= current_version {
             panic!("Invalid version upgrade");
         }
@@ -234,6 +174,7 @@ pub fn initialize(env: Env, admin: Address, oracle: Address, acbu_token: Address
         env.deployer().update_current_contract_wasm(new_wasm_hash);
 
         // Run migrations
+        #[allow(clippy::single_match)]
         for v in current_version..new_version {
             match v {
                 0 => migrate_v0_to_v1(env.clone()),
@@ -241,11 +182,21 @@ pub fn initialize(env: Env, admin: Address, oracle: Address, acbu_token: Address
             }
         }
 
-        env.storage().instance().set(&SharedDataKey::Version, &new_version);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &new_version);
+    }
+
+    // -----------------------------------------------------------------------
+    // Private helpers
+    // -----------------------------------------------------------------------
+
+    fn check_admin(env: &Env) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
     }
 }
 
 fn migrate_v0_to_v1(_env: Env) {
     // Migration logic
 }
-

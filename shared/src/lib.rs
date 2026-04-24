@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contracttype, Address, String as SorobanString, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, String as SorobanString, Vec};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -31,6 +31,9 @@ pub struct RateData {
     pub rate_usd: i128, // Rate in 7 decimals (e.g., 0.0012345 = 12345)
     pub timestamp: u64,
     pub sources: soroban_sdk::Vec<i128>, // Source rates for median calculation
+    /// Ledger sequence number at which this rate was written.
+    /// Used for ledger-based staleness checks (unforgeable — set by the network).
+    pub ledger: u32,
 }
 
 /// Reserve data structure
@@ -90,6 +93,7 @@ pub struct BurnEvent {
     pub transaction_id: SorobanString,
     pub user: Address,
     pub acbu_amount: i128,
+    pub net_acbu: i128,
     pub local_amount: i128,
     pub currency: CurrencyCode,
     pub fee: i128,
@@ -119,22 +123,20 @@ pub struct OutlierDetectionEvent {
 }
 
 /// Error types
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ContractError {
-    Unauthorized,
-    Paused,
-    InvalidAmount,
-    InvalidRate,
-    InsufficientReserves,
-    RateLimitExceeded,
-    InvalidCurrency,
-    OracleError,
-    ReserveError,
-    InsufficientBalance,
-    /// Recipient address is a contract, not a Stellar account.
-    /// Minting to a contract-only address would strand funds permanently.
-    InvalidRecipient,
+    Unauthorized = 1,
+    Paused = 2,
+    InvalidAmount = 3,
+    InvalidRate = 4,
+    InsufficientReserves = 5,
+    RateLimitExceeded = 6,
+    InvalidCurrency = 7,
+    OracleError = 8,
+    ReserveError = 9,
+    InsufficientBalance = 10,
+    InvalidRecipient = 11,
 }
 
 /// Constants
@@ -146,6 +148,11 @@ pub const MIN_BURN_AMOUNT: i128 = 10_000_000; // 10 ACBU (7 decimals)
 pub const UPDATE_INTERVAL_SECONDS: u64 = 21_600; // 6 hours
 pub const EMERGENCY_THRESHOLD_BPS: i128 = 500; // 5% deviation threshold
 pub const OUTLIER_THRESHOLD_BPS: i128 = 300; // 3% deviation for outlier detection
+/// Maximum ledger age of a stored rate before it is considered stale and rejected
+/// at read time. Stellar closes ~1 ledger every 5 seconds; 720 ledgers ≈ 1 hour.
+/// Rates must be refreshed within this window or consumers (minting) will be blocked.
+/// Admin can bypass via `set_rate_admin` for emergency overrides.
+pub const STALE_RATE_MAX_LEDGERS: u32 = 4_320; // ~6 hours at 5 s/ledger
 
 /// Utility functions
 pub fn calculate_fee(amount: i128, fee_rate_bps: i128) -> i128 {
@@ -173,15 +180,15 @@ pub fn median(mut values: soroban_sdk::Vec<i128>) -> Option<i128> {
 
     if n % 2 == 0 {
         // For even count, find two middle elements and average them
-        let _ = quickselect_inplace(&mut values, 0, (n - 1) as i32, (mid - 1) as i32);
-        let val1 = values.get((mid - 1) as u32)?;
-        let _ = quickselect_inplace(&mut values, 0, (n - 1) as i32, mid as i32);
-        let val2 = values.get(mid as u32)?;
+        quickselect_inplace(&mut values, 0, (n - 1) as i32, (mid - 1) as i32);
+        let val1 = values.get(mid - 1)?;
+        quickselect_inplace(&mut values, 0, (n - 1) as i32, mid as i32);
+        let val2 = values.get(mid)?;
         Some((val1 + val2) / 2)
     } else {
         // For odd count, find the middle element
-        let _ = quickselect_inplace(&mut values, 0, (n - 1) as i32, mid as i32);
-        Some(values.get(mid as u32)?)
+        quickselect_inplace(&mut values, 0, (n - 1) as i32, mid as i32);
+        Some(values.get(mid)?)
     }
 }
 
@@ -232,9 +239,13 @@ pub fn calculate_deviation(value1: i128, value2: i128) -> i128 {
         return i128::MAX;
     }
     let diff = if value1 > value2 {
-        value1.checked_sub(value2).expect("Underflow in deviation diff")
+        value1
+            .checked_sub(value2)
+            .expect("Underflow in deviation diff")
     } else {
-        value2.checked_sub(value1).expect("Underflow in deviation diff")
+        value2
+            .checked_sub(value1)
+            .expect("Underflow in deviation diff")
     };
     (diff * BASIS_POINTS) / value2
 }

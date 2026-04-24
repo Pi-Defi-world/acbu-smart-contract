@@ -23,6 +23,10 @@ mod oracle_mock {
             DECIMALS
         }
 
+        pub fn get_acbu_usd_rate_with_timestamp(env: Env) -> (i128, u64) {
+            (DECIMALS, env.ledger().timestamp())
+        }
+
         pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
             let mut v = Vec::new(&env);
             v.push_back(CurrencyCode::new(&env, "NGN"));
@@ -35,6 +39,10 @@ mod oracle_mock {
 
         pub fn get_rate(_env: Env, _c: CurrencyCode) -> i128 {
             DECIMALS
+        }
+
+        pub fn get_rate_with_timestamp(env: Env, _c: CurrencyCode) -> (i128, u64) {
+            (DECIMALS, env.ledger().timestamp())
         }
 
         pub fn get_s_token_address(env: Env, _c: CurrencyCode) -> Address {
@@ -104,19 +112,39 @@ fn init_mint_client(
 
 // --- Setup ---
 
-fn setup_test(env: &Env) -> (Address, Address, Address, Address, Address, MintingContractClient) {
+fn setup_test(
+    env: &Env,
+) -> (
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    MintingContractClient,
+) {
     let admin = Address::generate(env);
     let oracle = env.register_contract(None, oracle_mock::MockOracle);
     let reserve_tracker = env.register_contract(None, reserve_mock::MockReserveTracker);
 
     let contract_id = env.register_contract(None, MintingContract);
-    let acbu_token = env.register_stellar_asset_contract_v2(contract_id.clone()).address();
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(contract_id.clone())
+        .address();
 
-    let usdc_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let usdc_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let client = MintingContractClient::new(env, &contract_id);
 
-    (admin, oracle, reserve_tracker, acbu_token, usdc_token, client)
+    (
+        admin,
+        oracle,
+        reserve_tracker,
+        acbu_token,
+        usdc_token,
+        client,
+    )
 }
 
 #[test]
@@ -256,7 +284,9 @@ fn test_mint_from_basket() {
     let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
     let user = Address::generate(&env);
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&user, &(1_000 * DECIMALS));
 
@@ -277,7 +307,8 @@ fn test_mint_from_basket() {
     );
 
     let acbu_amt = 100 * DECIMALS;
-    let net = client.mint_from_basket(&user, &user, &acbu_amt);
+    let proof_id = soroban_sdk::String::from_str(&env, "proof_1");
+    let net = client.mint_from_basket(&user, &user, &acbu_amt, &proof_id);
     assert!(net > 0);
     assert_eq!(client.get_total_supply(), acbu_amt);
 }
@@ -290,11 +321,16 @@ fn test_mint_insufficient_reserves() {
 
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, oracle_mock::MockOracle);
-    let reserve_tracker = env.register_contract(None, failing_reserve_mock::MockFailingReserveTracker);
+    let reserve_tracker =
+        env.register_contract(None, failing_reserve_mock::MockFailingReserveTracker);
 
     let contract_id = env.register_contract(None, MintingContract);
-    let acbu_token = env.register_stellar_asset_contract_v2(contract_id.clone()).address();
-    let usdc_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(contract_id.clone())
+        .address();
+    let usdc_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let client = MintingContractClient::new(&env, &contract_id);
 
@@ -328,7 +364,9 @@ fn test_mint_from_demo_fiat() {
     let recipient = Address::generate(&env);
     let mint_addr = client.address.clone();
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken_id);
@@ -349,11 +387,13 @@ fn test_mint_from_demo_fiat() {
 
     let fiat_amount = 50 * DECIMALS;
     let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token_id);
+    let tx_id = soroban_sdk::String::from_str(&env, "tx_1");
     let acbu = client.mint_from_demo_fiat(
         &admin,
         &recipient,
         &CurrencyCode::new(&env, "NGN"),
         &fiat_amount,
+        &tx_id,
     );
     assert!(acbu > 0);
     assert_eq!(acbu_client.balance(&recipient), acbu);
@@ -371,7 +411,9 @@ fn test_mint_from_demo_fiat_wrong_operator() {
     let mint_addr = client.address.clone();
     let attacker = Address::generate(&env);
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken_id);
@@ -390,11 +432,13 @@ fn test_mint_from_demo_fiat_wrong_operator() {
         100,
     );
 
+    let tx_id = soroban_sdk::String::from_str(&env, "tx_bad");
     client.mint_from_demo_fiat(
         &attacker,
         &recipient,
         &CurrencyCode::new(&env, "NGN"),
         &(10 * DECIMALS),
+        &tx_id,
     );
 }
 
@@ -408,7 +452,9 @@ fn test_set_operator_and_mint_demo_fiat() {
     let recipient = Address::generate(&env);
     let mint_addr = client.address.clone();
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken_id);
@@ -430,11 +476,13 @@ fn test_set_operator_and_mint_demo_fiat() {
     client.set_operator(&operator);
     assert_eq!(client.get_operator(), operator);
 
+    let tx_id = soroban_sdk::String::from_str(&env, "tx_ok");
     let acbu = client.mint_from_demo_fiat(
         &operator,
         &recipient,
         &CurrencyCode::new(&env, "NGN"),
         &(20 * DECIMALS),
+        &tx_id,
     );
     assert!(acbu > 0);
 }
@@ -448,7 +496,7 @@ fn test_mint_from_usdc_exceeds_max() {
     let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
     let user = Address::generate(&env);
     let usdc_sac = soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token_id);
-    
+
     // Max mint amount is 1_000_000_000_000, so 2_000_000_000_000 is huge
     let huge_amount = 2_000_000_000_000;
     usdc_sac.mint(&user, &huge_amount);
@@ -481,7 +529,9 @@ fn test_mint_from_demo_fiat_exceeds_max() {
     let recipient = Address::generate(&env);
     let mint_addr = client.address.clone();
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&mint_addr, &(2_000_000_000_000));
     oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken_id);
@@ -504,10 +554,12 @@ fn test_mint_from_demo_fiat_exceeds_max() {
 
     let huge_fiat_amount = 2_000_000_000_000;
     // huge_fiat_amount converted to USD gross will exceed max (given 1:1 rate in MockOracle)
+    let tx_id = soroban_sdk::String::from_str(&env, "tx_huge");
     client.mint_from_demo_fiat(
         &operator,
         &recipient,
         &CurrencyCode::new(&env, "NGN"),
         &huge_fiat_amount,
+        &tx_id,
     );
 }
