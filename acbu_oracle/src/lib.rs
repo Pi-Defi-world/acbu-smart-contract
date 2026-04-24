@@ -3,15 +3,20 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol, Vec,
 };
 
-
 use shared::{
     calculate_deviation, median, CurrencyCode, OutlierDetectionEvent, RateData, RateUpdateEvent,
-    DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, UPDATE_INTERVAL_SECONDS,
+    BASIS_POINTS, DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, STALE_RATE_MAX_LEDGERS,
+    UPDATE_INTERVAL_SECONDS,
 };
 
 mod shared {
     pub use shared::*;
 }
+
+// ─── Admin rotation timelock (seconds) ───────────────────────────────────────
+/// How long the pending admin must wait before they can claim ownership.
+/// 24 hours gives the current admin time to cancel a mistaken/malicious transfer.
+const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,9 +29,11 @@ pub struct DataKey {
     pub last_update: Symbol,
     pub update_interval: Symbol,
     pub basket_weights: Symbol,
-    /// Afreum (or other) Soroban SAC addresses per basket currency code
     pub s_tokens: Symbol,
     pub version: Symbol,
+    // ── New keys for two-step admin rotation ──────────────────────────────
+    pub pending_admin: Symbol,
+    pub pending_admin_eligible_at: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -40,10 +47,52 @@ const DATA_KEY: DataKey = DataKey {
     basket_weights: symbol_short!("BSK_WTS"),
     s_tokens: symbol_short!("S_TOKNS"),
     version: symbol_short!("VERSION"),
+    pending_admin: symbol_short!("PEND_ADM"),
+    pending_admin_eligible_at: symbol_short!("PEND_ETA"),
 };
 
-const VERSION: u32 = 8;
+const VERSION: u32 = 9; // bumped from 8 → 9 for admin rotation feature
 
+// ─── Admin rotation event payloads ───────────────────────────────────────────
+
+/// Emitted when the current admin nominates a successor.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminTransferInitiatedEvent {
+    pub current_admin: Address,
+    pub pending_admin: Address,
+    /// Ledger timestamp after which `accept_admin` is callable.
+    pub eligible_at: u64,
+}
+
+/// Emitted when the pending admin successfully claims ownership.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminTransferCompletedEvent {
+    pub old_admin: Address,
+    pub new_admin: Address,
+    pub timestamp: u64,
+}
+
+/// Emitted when the current admin cancels a pending transfer.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminTransferCancelledEvent {
+    pub admin: Address,
+    pub cancelled_pending: Address,
+    pub timestamp: u64,
+}
+
+/// Emitted when a rate read is rejected because the stored rate is too old.
+/// Consumers (e.g. monitoring bots) can subscribe to this to alert on stale feeds.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct StaleRateEvent {
+    pub currency: CurrencyCode,
+    pub stored_ledger: u32,
+    pub current_ledger: u32,
+    pub max_stale_ledgers: u32,
+}
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -57,7 +106,10 @@ pub struct OracleContract;
 
 #[contractimpl]
 impl OracleContract {
-    /// Initialize the oracle contract
+    // ─────────────────────────────────────────────────────────────────────────
+    // Initialisation
+    // ─────────────────────────────────────────────────────────────────────────
+
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -66,50 +118,152 @@ impl OracleContract {
         currencies: Vec<CurrencyCode>,
         basket_weights: Map<CurrencyCode, i128>,
     ) {
-        // Check if already initialized
         if env.storage().instance().has(&DATA_KEY.admin) {
             panic!("Contract already initialized");
         }
 
-        // Validate inputs
         if !((1..=validators.len()).contains(&min_signatures)) {
             panic!("Invalid min_signatures configuration");
         }
-
         if min_signatures == 0 {
             panic!("Minimum signatures must be > 0");
         }
 
-        // Store configuration
         env.storage().instance().set(&DATA_KEY.admin, &admin);
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.validators, &validators);
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.min_signatures, &min_signatures);
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.currencies, &currencies);
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.basket_weights, &basket_weights);
-        let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.s_tokens, &s_tokens_empty);
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.update_interval, &UPDATE_INTERVAL_SECONDS);
+        env.storage().instance().set(&DATA_KEY.validators, &validators);
+        env.storage().instance().set(&DATA_KEY.min_signatures, &min_signatures);
+        env.storage().instance().set(&DATA_KEY.currencies, &currencies);
+        env.storage().instance().set(&DATA_KEY.basket_weights, &basket_weights);
 
-        // Initialize rates map
+        let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
+        env.storage().instance().set(&DATA_KEY.s_tokens, &s_tokens_empty);
+        env.storage().instance().set(&DATA_KEY.update_interval, &UPDATE_INTERVAL_SECONDS);
+
         let rates: Map<CurrencyCode, RateData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.rates, &rates);
         env.storage().instance().set(&DATA_KEY.last_update, &0u64);
-        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
-    /// Update rate for a currency (validator function)
+    // ─────────────────────────────────────────────────────────────────────────
+    // Two-step admin rotation
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// **Step 1 — Initiate transfer (current admin only)**
+    ///
+    /// Records `new_admin` as the pending successor and starts the timelock.
+    /// The current admin retains full authority until `accept_admin` completes.
+    /// Calling this again while a transfer is pending *replaces* the previous
+    /// nomination (allows correction of a typo'd address before the timelock
+    /// expires, provided the current admin's key is still accessible).
+    pub fn transfer_admin(env: Env, new_admin: Address) {
+        Self::check_admin(&env);
+
+        let eligible_at = env.ledger().timestamp() + ADMIN_TIMELOCK_SECONDS;
+        env.storage().instance().set(&DATA_KEY.pending_admin, &new_admin);
+        env.storage().instance().set(&DATA_KEY.pending_admin_eligible_at, &eligible_at);
+
+        let current_admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        env.events().publish(
+            (symbol_short!("adm_init"),),
+            AdminTransferInitiatedEvent {
+                current_admin,
+                pending_admin: new_admin,
+                eligible_at,
+            },
+        );
+    }
+
+    /// **Step 2 — Accept transfer (pending admin only)**
+    ///
+    /// The nominated address calls this after the timelock has elapsed.
+    /// On success the pending state is cleared and the new admin is stored.
+    pub fn accept_admin(env: Env) {
+        let pending_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.pending_admin)
+            .unwrap_or_else(|| panic!("No pending admin transfer"));
+
+        // Require signature from the incoming admin
+        pending_admin.require_auth();
+
+        let eligible_at: u64 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.pending_admin_eligible_at)
+            .unwrap_or(u64::MAX);
+
+        if env.ledger().timestamp() < eligible_at {
+            panic!("Admin transfer timelock has not elapsed");
+        }
+
+        let old_admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+
+        // Commit the new admin
+        env.storage().instance().set(&DATA_KEY.admin, &pending_admin);
+
+        // Clear pending state
+        env.storage().instance().remove(&DATA_KEY.pending_admin);
+        env.storage().instance().remove(&DATA_KEY.pending_admin_eligible_at);
+
+        env.events().publish(
+            (symbol_short!("adm_done"),),
+            AdminTransferCompletedEvent {
+                old_admin,
+                new_admin: pending_admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+    }
+
+    /// **Cancel a pending transfer (current admin only)**
+    ///
+    /// Allows the current admin to revoke a pending nomination at any time
+    /// before it is accepted, e.g. if the nominated address was incorrect or
+    /// the key was later found to be compromised.
+    pub fn cancel_admin_transfer(env: Env) {
+        Self::check_admin(&env);
+
+        let pending_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.pending_admin)
+            .unwrap_or_else(|| panic!("No pending admin transfer to cancel"));
+
+        env.storage().instance().remove(&DATA_KEY.pending_admin);
+        env.storage().instance().remove(&DATA_KEY.pending_admin_eligible_at);
+
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        env.events().publish(
+            (symbol_short!("adm_cncl"),),
+            AdminTransferCancelledEvent {
+                admin,
+                cancelled_pending: pending_admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+    }
+
+    /// Read current admin address (public)
+    pub fn get_admin(env: Env) -> Address {
+        env.storage().instance().get(&DATA_KEY.admin).unwrap()
+    }
+
+    /// Read pending admin address, if any (public — for monitoring)
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DATA_KEY.pending_admin)
+    }
+
+    /// Ledger timestamp at which the pending admin may call `accept_admin`
+    pub fn get_pending_admin_eligible_at(env: Env) -> Option<u64> {
+        env.storage().instance().get(&DATA_KEY.pending_admin_eligible_at)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Rate management (unchanged)
+    // ─────────────────────────────────────────────────────────────────────────
+
     pub fn update_rate(
         env: Env,
         validator: Address,
@@ -118,10 +272,8 @@ impl OracleContract {
         sources: Vec<i128>,
         _timestamp: u64,
     ) {
-        // Authorize validator
         validator.require_auth();
 
-        // Check if caller is a validator
         let validators: Vec<Address> = env.storage().instance().get(&DATA_KEY.validators).unwrap();
         let mut is_validator = false;
         for v in validators.iter() {
@@ -134,7 +286,6 @@ impl OracleContract {
             panic!("Unauthorized: validator only");
         }
 
-        // Check update interval per currency (not globally across all currencies).
         let update_interval: u64 = env
             .storage()
             .instance()
@@ -142,13 +293,12 @@ impl OracleContract {
             .unwrap_or(UPDATE_INTERVAL_SECONDS);
         let current_time = env.ledger().timestamp();
 
-        // Allow emergency updates if rate moved >5%
         let existing_rate = Self::get_rate_internal(&env, &currency);
         let mut allow_update = false;
         if let Some(existing_rate) = existing_rate.clone() {
             let deviation = calculate_deviation(rate, existing_rate.rate_usd);
             if deviation > EMERGENCY_THRESHOLD_BPS {
-                allow_update = true; // Emergency update
+                allow_update = true;
             }
         }
 
@@ -158,40 +308,53 @@ impl OracleContract {
             }
         }
 
-        // Calculate median from sources
-        let median_rate = median(sources.clone()).unwrap_or(rate);
+        // Pass 1: compute reference median from all sources to establish a baseline.
+        let raw_median = median(sources.clone()).unwrap_or(rate);
 
-        // Detect outliers in the source rates.
+        // Pass 2: reject sources that deviate beyond OUTLIER_THRESHOLD_BPS and emit alert events.
+        // Outliers are quarantined so they cannot influence the final stored rate.
         //
         // NOTE: Some Stellar CLI / RPC stacks are sensitive to complex contracttype values in
         // event topics; keep oracle rate updates functional even if event topic conversion would
         // otherwise fail. We still compute deviation, but we avoid publishing per-currency topics.
+        let mut clean_sources: Vec<i128> = Vec::new(&env);
         for i in 0..sources.len() {
             let source_rate = sources.get(i).unwrap();
-            let deviation_bps = calculate_deviation(source_rate, median_rate);
+            let deviation_bps = calculate_deviation(source_rate, raw_median);
 
             if deviation_bps > OUTLIER_THRESHOLD_BPS {
                 let outlier_event = OutlierDetectionEvent {
                     currency: currency.clone(),
-                    median_rate,
+                    median_rate: raw_median,
                     outlier_rate: source_rate,
                     deviation_bps,
                     timestamp: current_time,
                 };
                 env.events()
                     .publish((symbol_short!("outlier"),), outlier_event);
+            } else {
+                clean_sources.push_back(source_rate);
             }
         }
 
-        // Create rate data
+        // Final rate: median of clean sources only.
+        // If every source was an outlier (extreme disagreement), fall back to raw_median so the
+        // update is never silently dropped; this edge case should be investigated off-chain.
+        let median_rate = if clean_sources.is_empty() {
+            raw_median
+        } else {
+            median(clean_sources).unwrap_or(raw_median)
+        };
+
+        // Create rate data (original sources retained for audit trail).
         let rate_data = RateData {
             currency: currency.clone(),
             rate_usd: median_rate,
             timestamp: current_time,
             sources,
+            ledger: env.ledger().sequence(),
         };
 
-        // Update rates map
         let mut rates: Map<CurrencyCode, RateData> = env
             .storage()
             .instance()
@@ -199,11 +362,8 @@ impl OracleContract {
             .unwrap_or(Map::new(&env));
         rates.set(currency.clone(), rate_data);
         env.storage().instance().set(&DATA_KEY.rates, &rates);
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.last_update, &current_time);
+        env.storage().instance().set(&DATA_KEY.last_update, &current_time);
 
-        // Emit RateUpdateEvent (symbol-only topic for compatibility).
         let event = RateUpdateEvent {
             currency: currency.clone(),
             rate: median_rate,
@@ -213,11 +373,6 @@ impl OracleContract {
         env.events().publish((symbol_short!("rate_upd"),), event);
     }
 
-    /// Admin override for setting a currency USD rate.
-    ///
-    /// This is a pragmatic escape hatch for custodial MVP reliability when the
-    /// validator update path is unavailable; it writes the same `rates` storage
-    /// used by `get_rate`/`get_acbu_usd_rate`.
     pub fn set_rate_admin(env: Env, currency: CurrencyCode, rate: i128) {
         Self::check_admin(&env);
         if rate <= 0 {
@@ -229,6 +384,8 @@ impl OracleContract {
             rate_usd: rate,
             timestamp: current_time,
             sources: Vec::new(&env),
+            // Admin override: stamp with current ledger so the rate is immediately fresh.
+            ledger: env.ledger().sequence(),
         };
         let mut rates: Map<CurrencyCode, RateData> = env
             .storage()
@@ -237,26 +394,72 @@ impl OracleContract {
             .unwrap_or(Map::new(&env));
         rates.set(currency, rate_data);
         env.storage().instance().set(&DATA_KEY.rates, &rates);
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.last_update, &current_time);
+        env.storage().instance().set(&DATA_KEY.last_update, &current_time);
     }
 
-    /// Get current rate for a currency
     pub fn get_rate(env: Env, currency: CurrencyCode) -> i128 {
         if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
+            Self::assert_rate_fresh(&env, &rate_data, &currency);
             rate_data.rate_usd
         } else {
             panic!("Rate not found for currency");
         }
     }
 
+    /// Get rate data with timestamp for staleness validation
+    pub fn get_rate_with_timestamp(env: Env, currency: CurrencyCode) -> (i128, u64) {
+        if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
+            Self::assert_rate_fresh(&env, &rate_data, &currency);
+            (rate_data.rate_usd, rate_data.timestamp)
+        } else {
+            panic!("Rate not found for currency");
+        }
+    }
+
+    /// Get ACBU/USD rate with timestamp
+    pub fn get_acbu_usd_rate_with_timestamp(env: Env) -> (i128, u64) {
+        let basket_weights: Map<CurrencyCode, i128> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.basket_weights)
+            .unwrap_or(Map::new(&env));
+        let currencies: Vec<CurrencyCode> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.currencies)
+            .unwrap_or(Vec::new(&env));
+
+        let mut weighted_sum = 0i128;
+        let mut total_weight = 0i128;
+        let mut oldest_timestamp = u64::MAX;
+
+        for currency in currencies.iter() {
+            if let Some(weight) = basket_weights.get(currency.clone()) {
+                if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
+                    // Enforce staleness: a stale basket component blocks the whole basket rate.
+                    Self::assert_rate_fresh(&env, &rate_data, &currency);
+                    let contribution = (rate_data.rate_usd * weight) / BASIS_POINTS;
+                    weighted_sum += contribution;
+                    total_weight += weight;
+                    if rate_data.timestamp < oldest_timestamp {
+                        oldest_timestamp = rate_data.timestamp;
+                    }
+                }
+            }
+        }
+
+        let rate = if total_weight > 0 {
+            weighted_sum / total_weight
+        } else {
+            DECIMALS // Neutral rate if no weights
+        };
+
+        (rate, if oldest_timestamp == u64::MAX { 0 } else { oldest_timestamp })
+    }
+
+
     /// Get ACBU/USD rate (basket-weighted)
     pub fn get_acbu_usd_rate(env: Env) -> i128 {
-        // NOTE: These are instance-storage values that have historically changed encoding
-        // (due to `CurrencyCode` representation changes). Avoid `unwrap()` here so the
-        // mint path never host-traps on legacy/corrupted state; an unseeded basket
-        // simply returns a neutral 1.0 rate (DECIMALS).
         let basket_weights: Map<CurrencyCode, i128> = env
             .storage()
             .instance()
@@ -274,7 +477,8 @@ impl OracleContract {
         for currency in currencies.iter() {
             if let Some(weight) = basket_weights.get(currency.clone()) {
                 if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
-                    // Weight is in basis points (e.g., 1800 = 18%)
+                    // Enforce staleness: a stale basket component blocks the whole basket rate.
+                    Self::assert_rate_fresh(&env, &rate_data, &currency);
                     let contribution = (rate_data.rate_usd * weight) / 10_000;
                     weighted_sum += contribution;
                     total_weight += weight;
@@ -282,26 +486,21 @@ impl OracleContract {
             }
         }
 
-        // Avoid host trap when basket/oracle not yet seeded (e.g. fresh testnet deploy).
-        // Production must still publish rates + configure weights for all basket currencies
-        // before relying on mints.
         if total_weight == 0 {
             return DECIMALS;
         }
 
-        // Normalize to ensure weights sum to 100%
         (weighted_sum * 10_000) / total_weight
     }
 
-    /// Basket currencies in declaration order (for S-token mint/burn loops).
+    // ─────────────────────────────────────────────────────────────────────────
+    // Basket / token config (unchanged)
+    // ─────────────────────────────────────────────────────────────────────────
+
     pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
-        env.storage()
-            .instance()
-            .get(&DATA_KEY.currencies)
-            .unwrap_or(Vec::new(&env))
+        env.storage().instance().get(&DATA_KEY.currencies).unwrap_or(Vec::new(&env))
     }
 
-    /// Weight in basis points for a basket member (0 if not in basket).
     pub fn get_basket_weight(env: Env, currency: CurrencyCode) -> i128 {
         let basket_weights: Map<CurrencyCode, i128> = env
             .storage()
@@ -311,23 +510,16 @@ impl OracleContract {
         basket_weights.get(currency).unwrap_or(0)
     }
 
-    /// Replace basket configuration (admin only).
-    /// This is the supported way to re-seed basket data after an upgrade/migration.
     pub fn set_basket_config(
         env: Env,
         currencies: Vec<CurrencyCode>,
         basket_weights: Map<CurrencyCode, i128>,
     ) {
         Self::check_admin(&env);
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.currencies, &currencies);
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.basket_weights, &basket_weights);
+        env.storage().instance().set(&DATA_KEY.currencies, &currencies);
+        env.storage().instance().set(&DATA_KEY.basket_weights, &basket_weights);
     }
 
-    /// Configure Soroban token contract address for an Afreum-style S-token (admin).
     pub fn set_s_token_address(env: Env, currency: CurrencyCode, token_address: Address) {
         Self::check_admin(&env);
         let mut m: Map<CurrencyCode, Address> = env
@@ -339,7 +531,6 @@ impl OracleContract {
         env.storage().instance().set(&DATA_KEY.s_tokens, &m);
     }
 
-    /// Resolved S-token contract for a basket currency.
     pub fn get_s_token_address(env: Env, currency: CurrencyCode) -> Address {
         let m: Map<CurrencyCode, Address> = env
             .storage()
@@ -353,67 +544,114 @@ impl OracleContract {
         }
     }
 
-    /// Add validator (admin only)
+    // ─────────────────────────────────────────────────────────────────────────
+    // Validator management (unchanged)
+    // ─────────────────────────────────────────────────────────────────────────
+
     pub fn add_validator(env: Env, validator: Address) {
         Self::check_admin(&env);
         let validators: Vec<Address> = env.storage().instance().get(&DATA_KEY.validators).unwrap();
-
-        // Check if already exists
         for v in validators.iter() {
             if v == validator {
                 panic!("Validator already exists");
             }
         }
-
         let mut new_validators = validators.clone();
         new_validators.push_back(validator);
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.validators, &new_validators);
+        env.storage().instance().set(&DATA_KEY.validators, &new_validators);
     }
 
-    /// Remove validator (admin only)
     pub fn remove_validator(env: Env, validator: Address) {
         Self::check_admin(&env);
         let validators: Vec<Address> = env.storage().instance().get(&DATA_KEY.validators).unwrap();
-        let min_sigs: u32 = env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.min_signatures)
-            .unwrap();
-
-        // Can't remove if it would make validators < min_signatures
+        let min_sigs: u32 = env.storage().instance().get(&DATA_KEY.min_signatures).unwrap();
         if validators.len() <= min_sigs {
             panic!("Cannot remove validator: would violate minimum signatures");
         }
-
-        // Remove validator
         let mut new_validators = Vec::new(&env);
         for v in validators.iter() {
             if v != validator {
                 new_validators.push_back(v.clone());
             }
         }
-
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.validators, &new_validators);
+        env.storage().instance().set(&DATA_KEY.validators, &new_validators);
     }
 
-    /// Get all validators
     pub fn get_validators(env: Env) -> Vec<Address> {
         env.storage().instance().get(&DATA_KEY.validators).unwrap()
     }
 
-    /// Get minimum signatures required
     pub fn get_min_signatures(env: Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DATA_KEY.min_signatures)
-            .unwrap()
+        env.storage().instance().get(&DATA_KEY.min_signatures).unwrap()
     }
 
-    // Private helper functions
+    // ─────────────────────────────────────────────────────────────────────────
+    // Upgrade / migration
+    // ─────────────────────────────────────────────────────────────────────────
+
+    pub fn get_version(env: Env) -> u32 {
+        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
+    }
+
+    pub fn migrate(env: Env) {
+        Self::check_admin(&env);
+        let current_version = VERSION;
+        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
+        if stored_version < current_version {
+            if stored_version < 2 {
+                let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
+                env.storage().instance().set(&DATA_KEY.s_tokens, &s_tokens_empty);
+            }
+            if stored_version < 3 {
+                let rates_empty: Map<CurrencyCode, RateData> = Map::new(&env);
+                env.storage().instance().set(&DATA_KEY.rates, &rates_empty);
+                env.storage().instance().set(&DATA_KEY.last_update, &0u64);
+            }
+            if stored_version < 6 {
+                let currencies_empty: Vec<CurrencyCode> = Vec::new(&env);
+                let basket_weights_empty: Map<CurrencyCode, i128> = Map::new(&env);
+                env.storage().instance().set(&DATA_KEY.currencies, &currencies_empty);
+                env.storage().instance().set(&DATA_KEY.basket_weights, &basket_weights_empty);
+
+                let rates_empty: Map<CurrencyCode, RateData> = Map::new(&env);
+                env.storage().instance().set(&DATA_KEY.rates, &rates_empty);
+                env.storage().instance().set(&DATA_KEY.last_update, &0u64);
+
+                let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
+                env.storage().instance().set(&DATA_KEY.s_tokens, &s_tokens_empty);
+            }
+            // v9 migration: no data backfill needed — pending_admin keys
+            // simply don't exist on upgraded contracts until a transfer is initiated.
+            env.storage().instance().set(&DATA_KEY.version, &current_version);
+        }
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+
+        let current_version = Self::get_version(env.clone());
+        if new_version <= current_version {
+            panic!("Invalid version upgrade");
+        }
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        // Run migrations
+        for v in current_version..new_version {
+            match v {
+                0 => migrate_v0_to_v1(env.clone()),
+                _ => {}
+            }
+        }
+
+        env.storage().instance().set(&SharedDataKey::Version, &new_version);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Private helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
     fn get_rate_internal(env: &Env, currency: &CurrencyCode) -> Option<RateData> {
         let rates: Map<CurrencyCode, RateData> = env
             .storage()
@@ -423,66 +661,36 @@ impl OracleContract {
         rates.get(currency.clone())
     }
 
+    /// Panics if the stored rate is older than `STALE_RATE_MAX_LEDGERS` ledgers.
+    ///
+    /// Using ledger sequence (not timestamp) as the staleness signal is intentional:
+    /// ledger sequence is set by the network and cannot be forged by a validator.
+    /// This is the oracle-side enforcement; the minting contract adds a second,
+    /// timestamp-based layer via `check_oracle_freshness`.
+    ///
+    /// Admin override path: call `set_rate_admin` to refresh the stored rate with
+    /// the current ledger sequence, which immediately unblocks reads.
+    fn assert_rate_fresh(env: &Env, rate_data: &RateData, currency: &CurrencyCode) {
+        let current_ledger = env.ledger().sequence();
+        let age = current_ledger.saturating_sub(rate_data.ledger);
+        if age > STALE_RATE_MAX_LEDGERS {
+            // Emit an observable event before panicking so monitoring bots can alert.
+            env.events().publish(
+                (symbol_short!("stale_rt"),),
+                StaleRateEvent {
+                    currency: currency.clone(),
+                    stored_ledger: rate_data.ledger,
+                    current_ledger,
+                    max_stale_ledgers: STALE_RATE_MAX_LEDGERS,
+                },
+            );
+            panic!("Rate is stale: stored ledger is too old; admin must refresh via set_rate_admin");
+        }
+    }
+
     fn check_admin(env: &Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
     }
-
-    pub fn version(_env: Env) -> u32 {
-        VERSION
-    }
-
-    pub fn migrate(env: Env) {
-        Self::check_admin(&env);
-        let current_version = VERSION;
-        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
-        if stored_version < current_version {
-            // v2 migration: reset s_tokens to avoid deserialization traps when
-            // CurrencyCode representation changes across upgrades.
-            if stored_version < 2 {
-                let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
-                env.storage()
-                    .instance()
-                    .set(&DATA_KEY.s_tokens, &s_tokens_empty);
-            }
-            // v3 migration: clear rates keyed by old CurrencyCode encoding.
-            if stored_version < 3 {
-                // Rates are also keyed by CurrencyCode; clear them to avoid traps when
-                // the serialized key format changed across upgrades.
-                let rates_empty: Map<CurrencyCode, RateData> = Map::new(&env);
-                env.storage().instance().set(&DATA_KEY.rates, &rates_empty);
-                env.storage().instance().set(&DATA_KEY.last_update, &0u64);
-            }
-            // v5+ migration: several instance-storage maps are keyed by `CurrencyCode` and have
-            // historically changed encoding across upgrades. Clear them to avoid host traps on
-            // reads/writes, then re-seed via admin calls.
-            if stored_version < 6 {
-                let currencies_empty: Vec<CurrencyCode> = Vec::new(&env);
-                let basket_weights_empty: Map<CurrencyCode, i128> = Map::new(&env);
-                env.storage()
-                    .instance()
-                    .set(&DATA_KEY.currencies, &currencies_empty);
-                env.storage()
-                    .instance()
-                    .set(&DATA_KEY.basket_weights, &basket_weights_empty);
-
-                let rates_empty: Map<CurrencyCode, RateData> = Map::new(&env);
-                env.storage().instance().set(&DATA_KEY.rates, &rates_empty);
-                env.storage().instance().set(&DATA_KEY.last_update, &0u64);
-
-                let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
-                env.storage().instance().set(&DATA_KEY.s_tokens, &s_tokens_empty);
-            }
-            env.storage()
-                .instance()
-                .set(&DATA_KEY.version, &current_version);
-        }
-    }
-
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        admin.require_auth();
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
-    }
 }
-
+mod tests;

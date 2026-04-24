@@ -11,12 +11,27 @@ members = [
 ]
 resolver = "2"
 
+# Build script for WASM integrity verification
+build = "build.rs"
+
 [profile.release]
 opt-level = "z"      # Optimize for size
 lto = true           # Enable link-time optimization
 codegen-units = 1    # Better optimization
 strip = true         # Strip symbols
+overflow-checks = true
 
 [profile.release-with-logs]
 inherits = "release"
 debug = true
+
+# ---------------------------------------------------------------------------
+# Workspace-wide lint policy — enforced by `cargo clippy` in CI.
+# ---------------------------------------------------------------------------
+[workspace.lints.rust]
+unused_imports    = "deny"   # the original hygiene issue; hard-fail in CI
+dead_code         = "warn"
+unused_variables  = "warn"
+
+[workspace.lints.clippy]
+all  = "warn"   # surface all default clippy lints across every crate
