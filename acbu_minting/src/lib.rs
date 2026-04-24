@@ -1,12 +1,12 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env, IntoVal, String as SorobanString,
-    Symbol,
+    contract, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env, IntoVal,
+    String as SorobanString, Symbol,
 };
 
 use shared::{
-    calculate_amount_after_fee, calculate_fee, CurrencyCode, MintEvent, BASIS_POINTS, DECIMALS, MAX_MINT_AMOUNT,
-    MIN_MINT_AMOUNT,
+    calculate_amount_after_fee, calculate_fee, CurrencyCode, DataKey as SharedDataKey, MintEvent,
+    BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MAX_MINT_AMOUNT, MIN_MINT_AMOUNT,
 };
 
 mod shared {
@@ -19,6 +19,14 @@ pub mod token_contract {
         file = "../soroban_token_contract.wasm",
         sha256 = "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"
     );
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettlementProof {
+    pub proof_id: String,
+    pub settled: bool,
+    pub timestamp: u64,
 }
 
 #[contracttype]
@@ -37,11 +45,8 @@ pub struct DataKey {
     pub min_mint_amount: Symbol,
     pub max_mint_amount: Symbol,
     pub total_supply: Symbol,
-    pub version: Symbol,
-    /// Backend / relayer key allowed to pull custodial demo fiat from this contract into the vault.
     pub operator: Symbol,
-    /// Tracks processed fintech transaction IDs to prevent duplicate minting
-    pub processed_fintech_tx_ids: Symbol,
+    pub used_proofs: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -58,12 +63,11 @@ const DATA_KEY: DataKey = DataKey {
     min_mint_amount: symbol_short!("MIN_MINT"),
     max_mint_amount: symbol_short!("MAX_MINT"),
     total_supply: symbol_short!("SUPPLY"),
-    version: symbol_short!("VERSION"),
     operator: symbol_short!("OPERTR"),
-    processed_fintech_tx_ids: symbol_short!("FTECH_IDS"),
+    used_proofs: symbol_short!("PRF_SET"),
 };
 
-const VERSION: u32 = 3;
+// CONTRACT_VERSION is imported from shared
 
 #[contract]
 pub struct MintingContract;
@@ -121,16 +125,18 @@ impl MintingContract {
             .instance()
             .set(&DATA_KEY.max_mint_amount, &MAX_MINT_AMOUNT);
         env.storage().instance().set(&DATA_KEY.total_supply, &0i128);
-        env.storage().instance().set(&DATA_KEY.version, &VERSION);
-        // Initialize empty set for tracking processed fintech transaction IDs
-        let empty_set: soroban_sdk::Map<String as SorobanString, bool> = soroban_sdk::map![&env];
-        env.storage().instance().set(&DATA_KEY.processed_fintech_tx_ids, &empty_set);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Mint ACBU from USDC deposit (unchanged reserve/oracle flow).
     pub fn mint_from_usdc(env: Env, user: Address, usdc_amount: i128, recipient: Address) -> i128 {
         Self::check_paused(&env);
         user.require_auth();
+        // C-058: reject contract-type recipients — minting to a contract address
+        // that has no token-receipt logic would permanently strand the funds.
+        Self::assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -169,9 +175,14 @@ impl MintingContract {
         );
 
         let usdc_after_fee = calculate_amount_after_fee(usdc_amount, fee_rate);
-        let acbu_amount = (usdc_after_fee * DECIMALS) / acbu_rate;
+        let acbu_amount = usdc_after_fee
+            .checked_mul(DECIMALS)
+            .and_then(|v| v.checked_div(acbu_rate))
+            .expect("Overflow in acbu amount calculation");
 
-        let projected_supply = total_supply + acbu_amount;
+        let projected_supply = total_supply
+            .checked_add(acbu_amount)
+            .expect("Overflow in projected supply calculation");
         let reserve_ok: bool = env.invoke_contract(
             &reserve_tracker_addr,
             &Symbol::new(&env, "is_reserve_sufficient"),
@@ -182,7 +193,9 @@ impl MintingContract {
         }
 
         total_supply += acbu_amount;
-        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         let usdc_client = soroban_sdk::token::Client::new(&env, &usdc_token);
         usdc_client.transfer(&user, &env.current_contract_address(), &usdc_amount);
@@ -192,7 +205,7 @@ impl MintingContract {
 
         let fee = calculate_fee(usdc_amount, fee_rate);
 
-        let tx_id = SorobanString::from_str(&env, "mint_tx_static");
+        let tx_id = generate_unique_tx_id(&env, &recipient, acbu_amount, "mint_usdc");
         let mint_event = MintEvent {
             transaction_id: tx_id,
             user: recipient.clone(),
@@ -210,9 +223,17 @@ impl MintingContract {
 
     /// Mint ACBU by depositing Afreum-style S-tokens in full basket proportions (lower fee tier).
     /// Pulls each S-token from `user` into `vault` per oracle weights and rates.
-    pub fn mint_from_basket(env: Env, user: Address, recipient: Address, acbu_amount: i128) -> i128 {
+    pub fn mint_from_basket(
+        env: Env,
+        user: Address,
+        recipient: Address,
+        acbu_amount: i128,
+    ) -> i128 {
         Self::check_paused(&env);
         user.require_auth();
+        // C-058: reject contract-type recipients — minting to a contract address
+        // that has no token-receipt logic would permanently strand the funds.
+        Self::assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -251,8 +272,12 @@ impl MintingContract {
         );
 
         let fee_acbu = calculate_fee(acbu_amount, fee_rate);
-        let net_mint = acbu_amount - fee_acbu;
-        let projected_supply = total_supply + acbu_amount;
+        let net_mint = acbu_amount
+            .checked_sub(fee_acbu)
+            .expect("Underflow in net mint calculation");
+        let projected_supply = total_supply
+            .checked_add(acbu_amount)
+            .expect("Overflow in projected supply calculation");
 
         let reserve_ok: bool = env.invoke_contract(
             &reserve_tracker_addr,
@@ -269,7 +294,10 @@ impl MintingContract {
             vec![&env],
         );
 
-        let usd_total: i128 = (acbu_amount * acbu_rate) / DECIMALS;
+        let usd_total: i128 = acbu_amount
+            .checked_mul(acbu_rate)
+            .and_then(|v| v.checked_div(DECIMALS))
+            .expect("Overflow in usd total calculation");
 
         for currency in currencies.iter() {
             let weight: i128 = env.invoke_contract(
@@ -296,8 +324,14 @@ impl MintingContract {
                 vec![&env, currency.clone().into_val(&env)],
             );
 
-            let usd_i = (weight * usd_total) / BASIS_POINTS;
-            let native_i = (usd_i * DECIMALS) / rate;
+            let usd_i = weight
+                .checked_mul(usd_total)
+                .and_then(|v| v.checked_div(BASIS_POINTS))
+                .expect("Overflow in usd_i calculation");
+            let native_i = usd_i
+                .checked_mul(DECIMALS)
+                .and_then(|v| v.checked_div(rate))
+                .expect("Overflow in native_i calculation");
             if native_i > 0 {
                 let token = soroban_sdk::token::Client::new(&env, &stoken);
                 token.transfer(&user, &vault, &native_i);
@@ -305,7 +339,9 @@ impl MintingContract {
         }
 
         total_supply += acbu_amount;
-        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &net_mint);
@@ -313,7 +349,7 @@ impl MintingContract {
             acbu_sac.mint(&treasury, &fee_acbu);
         }
 
-        let tx_id = SorobanString::from_str(&env, "mint_basket");
+        let tx_id = generate_unique_tx_id(&env, &recipient, net_mint, "mint_basket");
         let mint_event = MintEvent {
             transaction_id: tx_id,
             user: recipient.clone(),
@@ -326,7 +362,7 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
-        net_mint
+        acbu_amount
     }
 
     /// Single S-token deposit: Afreum ramp delivers one S-token; fee tier is `fee_single_bps`.
@@ -341,6 +377,9 @@ impl MintingContract {
     ) -> i128 {
         Self::check_paused(&env);
         user.require_auth();
+        // C-058: reject contract-type recipients — minting to a contract address
+        // that has no token-receipt logic would permanently strand the funds.
+        Self::assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -388,15 +427,23 @@ impl MintingContract {
             panic!("Invalid oracle rate");
         }
 
-        let usd_gross = (s_token_amount * rate) / DECIMALS;
+        let usd_gross = s_token_amount
+            .checked_mul(rate)
+            .and_then(|v| v.checked_div(DECIMALS))
+            .expect("Overflow in usd_gross calculation");
         if usd_gross < min_amount || usd_gross > max_amount {
             panic!("Invalid mint amount");
         }
 
         let usd_after_fee = calculate_amount_after_fee(usd_gross, fee_single);
-        let acbu_amount = (usd_after_fee * DECIMALS) / acbu_rate;
+        let acbu_amount = usd_after_fee
+            .checked_mul(DECIMALS)
+            .and_then(|v| v.checked_div(acbu_rate))
+            .expect("Overflow in acbu amount calculation");
 
-        let projected_supply = total_supply + acbu_amount;
+        let projected_supply = total_supply
+            .checked_add(acbu_amount)
+            .expect("Overflow in projected supply calculation");
         let reserve_ok: bool = env.invoke_contract(
             &reserve_tracker_addr,
             &Symbol::new(&env, "is_reserve_sufficient"),
@@ -410,14 +457,17 @@ impl MintingContract {
         token.transfer(&user, &vault, &s_token_amount);
 
         total_supply += acbu_amount;
-        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &acbu_amount);
 
         let fee = calculate_fee(usd_gross, fee_single);
+        let tx_id = generate_unique_tx_id(&env, &recipient, acbu_amount, "mint_single");
         let mint_event = MintEvent {
-            transaction_id: SorobanString::from_str(&env, "mint_single"),
+            transaction_id: tx_id,
             user: recipient.clone(),
             usdc_amount: usd_gross,
             acbu_amount,
@@ -440,6 +490,7 @@ impl MintingContract {
         recipient: Address,
         currency: CurrencyCode,
         fiat_amount: i128,
+        proof_id: SorobanString,
     ) -> i128 {
         Self::check_paused(&env);
         let expected_operator: Address = Self::get_operator(env.clone());
@@ -447,6 +498,13 @@ impl MintingContract {
             panic!("Unauthorized operator");
         }
         operator.require_auth();
+        // C-058: reject contract-type recipients — minting to a contract address
+        // that has no token-receipt logic would permanently strand the funds.
+        Self::assert_recipient_is_account(&recipient);
+
+        if !check_proof_unused(&env, &proof_id) {
+            panic!("Proof already used");
+        }
 
         let min_amount: i128 = env
             .storage()
@@ -494,15 +552,23 @@ impl MintingContract {
             panic!("Invalid oracle rate");
         }
 
-        let usd_gross = (fiat_amount * rate) / DECIMALS;
+        let usd_gross = fiat_amount
+            .checked_mul(rate)
+            .and_then(|v| v.checked_div(DECIMALS))
+            .expect("Overflow in usd_gross calculation");
         if usd_gross < min_amount || usd_gross > max_amount {
             panic!("Invalid mint amount");
         }
 
         let usd_after_fee = calculate_amount_after_fee(usd_gross, fee_single);
-        let acbu_amount = (usd_after_fee * DECIMALS) / acbu_rate;
+        let acbu_amount = usd_after_fee
+            .checked_mul(DECIMALS)
+            .and_then(|v| v.checked_div(acbu_rate))
+            .expect("Overflow in acbu amount calculation");
 
-        let projected_supply = total_supply + acbu_amount;
+        let projected_supply = total_supply
+            .checked_add(acbu_amount)
+            .expect("Overflow in projected supply calculation");
         let reserve_ok: bool = env.invoke_contract(
             &reserve_tracker_addr,
             &Symbol::new(&env, "is_reserve_sufficient"),
@@ -517,7 +583,9 @@ impl MintingContract {
         token.transfer(&custody, &vault, &fiat_amount);
 
         total_supply += acbu_amount;
-        env.storage().instance().set(&DATA_KEY.total_supply, &total_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &acbu_amount);
@@ -692,6 +760,8 @@ impl MintingContract {
     ) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        // C-058: reject contract-type recipients to prevent stranded token transfers.
+        Self::assert_recipient_is_account(&recipient);
         if amount <= 0 {
             panic!("Invalid drip amount");
         }
@@ -734,11 +804,16 @@ impl MintingContract {
     pub fn sync_supply(env: Env, new_supply: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.total_supply, &new_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &new_supply);
     }
 
     pub fn get_total_supply(env: Env) -> i128 {
-        env.storage().instance().get(&DATA_KEY.total_supply).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.total_supply)
+            .unwrap_or(0)
     }
 
     pub fn pause(env: Env) {
@@ -801,26 +876,51 @@ impl MintingContract {
         }
     }
 
-    pub fn version(_env: Env) -> u32 {
-        VERSION
+    pub fn get_version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&SharedDataKey::Version)
+            .unwrap_or(0)
     }
 
-    pub fn migrate(env: Env) {
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
 
-        let current_version = VERSION;
-        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
-        if stored_version < current_version {
-            env.storage()
-                .instance()
-                .set(&DATA_KEY.version, &current_version);
+        let current_version = Self::get_version(env.clone());
+        if new_version <= current_version {
+            panic!("Invalid version upgrade");
         }
-    }
 
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        admin.require_auth();
         env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        // Run migrations
+        for v in current_version..new_version {
+            match v {
+                0 => migrate_v0_to_v1(env.clone()),
+                _ => {}
+            }
+        }
+
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &new_version);
     }
+}
+
+fn migrate_v0_to_v1(_env: Env) {
+    // Migration logic
+}
+
+fn generate_unique_tx_id(env: &Env, user: &Address, amount: i128, prefix: &str) -> SorobanString {
+    let timestamp = env.ledger().timestamp();
+    let seq = env.ledger().sequence();
+    let mut hash: u64 = 0u64; 
+    hash = hash.wrapping_mul(31).wrapping_add(prefix.as_bytes().iter().fold(0u64, |h, &b| h.wrapping_mul(31).wrapping_add(b as u64)));
+    hash = hash.wrapping_mul(31).wrapping_add(user.as_val().get(0).unwrap_or(0) as u64));
+    hash = hash.wrapping_mul(31).wrapping_add((amount & 0xFFFFFFFF) as u64);
+    hash = hash.wrapping_mul(31).wrapping_add(timestamp as u64);
+    hash = hash.wrapping_mul(31).wrapping_add(seq as u64);
+    let id_str = format!("{}_{:x}", prefix, hash);
+    SorobanString::from_str(env, &id_str)
 }

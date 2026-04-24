@@ -6,7 +6,7 @@ use soroban_sdk::{
 
 use shared::{
     calculate_deviation, median, CurrencyCode, OutlierDetectionEvent, RateData, RateUpdateEvent,
-    DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, UPDATE_INTERVAL_SECONDS,
+    BASIS_POINTS, DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, UPDATE_INTERVAL_SECONDS,
 };
 
 mod shared {
@@ -26,7 +26,6 @@ pub struct DataKey {
     pub basket_weights: Symbol,
     /// Afreum (or other) Soroban SAC addresses per basket currency code
     pub s_tokens: Symbol,
-    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -39,10 +38,9 @@ const DATA_KEY: DataKey = DataKey {
     update_interval: symbol_short!("UPD_INT"),
     basket_weights: symbol_short!("BSK_WTS"),
     s_tokens: symbol_short!("S_TOKNS"),
-    version: symbol_short!("VERSION"),
 };
 
-const VERSION: u32 = 8;
+// CONTRACT_VERSION is imported from shared
 
 
 #[contracttype]
@@ -106,7 +104,7 @@ impl OracleContract {
         let rates: Map<CurrencyCode, RateData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.rates, &rates);
         env.storage().instance().set(&DATA_KEY.last_update, &0u64);
-        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Update rate for a currency (validator function)
@@ -158,32 +156,45 @@ impl OracleContract {
             }
         }
 
-        // Calculate median from sources
-        let median_rate = median(sources.clone()).unwrap_or(rate);
+        // Pass 1: compute reference median from all sources to establish a baseline.
+        let raw_median = median(sources.clone()).unwrap_or(rate);
 
-        // Detect outliers in the source rates.
+        // Pass 2: reject sources that deviate beyond OUTLIER_THRESHOLD_BPS and emit alert events.
+        // Outliers are quarantined so they cannot influence the final stored rate.
         //
         // NOTE: Some Stellar CLI / RPC stacks are sensitive to complex contracttype values in
         // event topics; keep oracle rate updates functional even if event topic conversion would
         // otherwise fail. We still compute deviation, but we avoid publishing per-currency topics.
+        let mut clean_sources: Vec<i128> = Vec::new(&env);
         for i in 0..sources.len() {
             let source_rate = sources.get(i).unwrap();
-            let deviation_bps = calculate_deviation(source_rate, median_rate);
+            let deviation_bps = calculate_deviation(source_rate, raw_median);
 
             if deviation_bps > OUTLIER_THRESHOLD_BPS {
                 let outlier_event = OutlierDetectionEvent {
                     currency: currency.clone(),
-                    median_rate,
+                    median_rate: raw_median,
                     outlier_rate: source_rate,
                     deviation_bps,
                     timestamp: current_time,
                 };
                 env.events()
                     .publish((symbol_short!("outlier"),), outlier_event);
+            } else {
+                clean_sources.push_back(source_rate);
             }
         }
 
-        // Create rate data
+        // Final rate: median of clean sources only.
+        // If every source was an outlier (extreme disagreement), fall back to raw_median so the
+        // update is never silently dropped; this edge case should be investigated off-chain.
+        let median_rate = if clean_sources.is_empty() {
+            raw_median
+        } else {
+            median(clean_sources).unwrap_or(raw_median)
+        };
+
+        // Create rate data (original sources retained for audit trail).
         let rate_data = RateData {
             currency: currency.clone(),
             rate_usd: median_rate,
@@ -275,7 +286,7 @@ impl OracleContract {
             if let Some(weight) = basket_weights.get(currency.clone()) {
                 if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
                     // Weight is in basis points (e.g., 1800 = 18%)
-                    let contribution = (rate_data.rate_usd * weight) / 10_000;
+                    let contribution = (rate_data.rate_usd * weight) / BASIS_POINTS;
                     weighted_sum += contribution;
                     total_weight += weight;
                 }
@@ -290,7 +301,7 @@ impl OracleContract {
         }
 
         // Normalize to ensure weights sum to 100%
-        (weighted_sum * 10_000) / total_weight
+        (weighted_sum * BASIS_POINTS) / total_weight
     }
 
     /// Basket currencies in declaration order (for S-token mint/burn loops).
@@ -428,61 +439,43 @@ impl OracleContract {
         admin.require_auth();
     }
 
-    pub fn version(_env: Env) -> u32 {
-        VERSION
+    pub fn get_version(env: Env) -> u32 {
+        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
     }
 
-    pub fn migrate(env: Env) {
-        Self::check_admin(&env);
-        let current_version = VERSION;
-        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
-        if stored_version < current_version {
-            // v2 migration: reset s_tokens to avoid deserialization traps when
-            // CurrencyCode representation changes across upgrades.
-            if stored_version < 2 {
-                let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
-                env.storage()
-                    .instance()
-                    .set(&DATA_KEY.s_tokens, &s_tokens_empty);
-            }
-            // v3 migration: clear rates keyed by old CurrencyCode encoding.
-            if stored_version < 3 {
-                // Rates are also keyed by CurrencyCode; clear them to avoid traps when
-                // the serialized key format changed across upgrades.
-                let rates_empty: Map<CurrencyCode, RateData> = Map::new(&env);
-                env.storage().instance().set(&DATA_KEY.rates, &rates_empty);
-                env.storage().instance().set(&DATA_KEY.last_update, &0u64);
-            }
-            // v5+ migration: several instance-storage maps are keyed by `CurrencyCode` and have
-            // historically changed encoding across upgrades. Clear them to avoid host traps on
-            // reads/writes, then re-seed via admin calls.
-            if stored_version < 6 {
-                let currencies_empty: Vec<CurrencyCode> = Vec::new(&env);
-                let basket_weights_empty: Map<CurrencyCode, i128> = Map::new(&env);
-                env.storage()
-                    .instance()
-                    .set(&DATA_KEY.currencies, &currencies_empty);
-                env.storage()
-                    .instance()
-                    .set(&DATA_KEY.basket_weights, &basket_weights_empty);
-
-                let rates_empty: Map<CurrencyCode, RateData> = Map::new(&env);
-                env.storage().instance().set(&DATA_KEY.rates, &rates_empty);
-                env.storage().instance().set(&DATA_KEY.last_update, &0u64);
-
-                let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
-                env.storage().instance().set(&DATA_KEY.s_tokens, &s_tokens_empty);
-            }
-            env.storage()
-                .instance()
-                .set(&DATA_KEY.version, &current_version);
-        }
-    }
-
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+
+        let current_version = Self::get_version(env.clone());
+        if new_version <= current_version {
+            panic!("Invalid version upgrade");
+        }
+
         env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        // Run migrations
+        for v in current_version..new_version {
+            match v {
+                0 => migrate_v0_to_v1(env.clone()),
+                _ => {}
+            }
+        }
+
+        env.storage().instance().set(&SharedDataKey::Version, &new_version);
     }
 }
 
+// 1. Collect the validator addresses that contributed
+let mut contributors: Vec<Address> = Vec::new(env);
+for validator in validator_set.iter() {
+    contributors.push_back(validator);
+}
+
+// 2. Publish the enhanced event
+// Current: env.events().publish((symbol!("oracle"), symbol!("rate_update")), new_rate);
+// Fixed:
+env.events().publish(
+    (symbol!("oracle"), symbol!("rate_update")), 
+    (new_rate, contributors) // Now includes the non-empty validator metadata
+);

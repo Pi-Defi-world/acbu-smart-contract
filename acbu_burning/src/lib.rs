@@ -1,10 +1,13 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, vec, Address, Env, IntoVal, String as SorobanString,
-    Symbol, Vec, BytesN,
+    contract, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env, IntoVal,
+    String as SorobanString, Symbol, Vec,
 };
 
-use shared::{calculate_fee, BurnEvent, CurrencyCode, BASIS_POINTS, DECIMALS, MIN_BURN_AMOUNT};
+use shared::{
+    calculate_fee, BurnEvent, CurrencyCode, DataKey as SharedDataKey, BASIS_POINTS,
+    CONTRACT_VERSION, DECIMALS, MIN_BURN_AMOUNT,
+};
 
 mod shared {
     pub use shared::*;
@@ -31,7 +34,6 @@ pub struct DataKey {
     pub fee_single_redeem: Symbol,
     pub paused: Symbol,
     pub min_burn_amount: Symbol,
-    pub version: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -45,10 +47,9 @@ const DATA_KEY: DataKey = DataKey {
     fee_single_redeem: symbol_short!("FEE_S_R"),
     paused: symbol_short!("PAUSED"),
     min_burn_amount: symbol_short!("MIN_BURN"),
-    version: symbol_short!("VERSION"),
 };
 
-const VERSION: u32 = 2;
+// CONTRACT_VERSION is imported from shared
 
 #[contract]
 pub struct BurningContract;
@@ -101,7 +102,9 @@ impl BurningContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.min_burn_amount, &MIN_BURN_AMOUNT);
-        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Redeem ACBU for a single Afreum S-token (higher fee tier). Requires vault approval.
@@ -154,9 +157,17 @@ impl BurningContract {
         );
 
         let fee = calculate_fee(acbu_amount, fee_single);
-        let net_acbu = acbu_amount - fee;
-        let usd_out = (net_acbu * acbu_rate) / DECIMALS;
-        let stoken_out = (usd_out * DECIMALS) / rate;
+        let net_acbu = acbu_amount
+            .checked_sub(fee)
+            .expect("Underflow in net acbu calculation");
+        let usd_out = net_acbu
+            .checked_mul(acbu_rate)
+            .and_then(|v| v.checked_div(DECIMALS))
+            .expect("Overflow in usd out calculation");
+        let stoken_out = usd_out
+            .checked_mul(DECIMALS)
+            .and_then(|v| v.checked_div(rate))
+            .expect("Overflow in stoken out calculation");
 
         let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token);
         acbu_client.burn(&user, &acbu_amount);
@@ -183,7 +194,12 @@ impl BurningContract {
     }
 
     /// Redeem ACBU for proportional Afreum S-tokens across the basket (lower fee tier).
-    pub fn redeem_basket(env: Env, user: Address, recipient: Address, acbu_amount: i128) -> Vec<i128> {
+    pub fn redeem_basket(
+        env: Env,
+        user: Address,
+        recipient: Address,
+        acbu_amount: i128,
+    ) -> Vec<i128> {
         Self::check_paused(&env);
         user.require_auth();
 
@@ -208,8 +224,13 @@ impl BurningContract {
         );
 
         let total_fee = calculate_fee(acbu_amount, fee_rate);
-        let net_acbu = acbu_amount - total_fee;
-        let usd_total = (net_acbu * acbu_rate) / DECIMALS;
+        let net_acbu = acbu_amount
+            .checked_sub(total_fee)
+            .expect("Underflow in net acbu calculation");
+        let usd_total = net_acbu
+            .checked_mul(acbu_rate)
+            .and_then(|v| v.checked_div(DECIMALS))
+            .expect("Overflow in usd total calculation");
 
         let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token);
         acbu_client.burn(&user, &acbu_amount);
@@ -220,9 +241,29 @@ impl BurningContract {
             vec![&env],
         );
 
-        let mut amounts_out = Vec::new(&env);
+        if currencies.is_empty() {
+            panic!("Empty recipient list: no currencies configured");
+        }
 
-        for currency in currencies.iter() {
+        let mut amounts_out = Vec::new(&env);
+        let mut last_weighted_idx: Option<u32> = None;
+        for i in 0..currencies.len() {
+            let currency = currencies.get(i).unwrap();
+            let weight: i128 = env.invoke_contract(
+                &oracle_addr,
+                &Symbol::new(&env, "get_basket_weight"),
+                vec![&env, currency.into_val(&env)],
+            );
+            if weight > 0 {
+                last_weighted_idx = Some(i);
+            }
+        }
+
+        let mut usd_allocated = 0i128;
+        let mut fee_allocated = 0i128;
+
+        for i in 0..currencies.len() {
+            let currency = currencies.get(i).unwrap();
             let weight: i128 = env.invoke_contract(
                 &oracle_addr,
                 &Symbol::new(&env, "get_basket_weight"),
@@ -248,10 +289,36 @@ impl BurningContract {
                 vec![&env, currency.clone().into_val(&env)],
             );
 
-            let usd_i = (weight * usd_total) / BASIS_POINTS;
-            let native_i = (usd_i * DECIMALS) / rate;
-
-            let fee_i = (weight * total_fee) / BASIS_POINTS;
+            let (usd_i, fee_i) = if Some(i) == last_weighted_idx {
+                (
+                    usd_total
+                        .checked_sub(usd_allocated)
+                        .expect("Underflow in usd_i final slice"),
+                    total_fee
+                        .checked_sub(fee_allocated)
+                        .expect("Underflow in fee_i final slice"),
+                )
+            } else {
+                let usd_i = weight
+                    .checked_mul(usd_total)
+                    .and_then(|v| v.checked_div(BASIS_POINTS))
+                    .expect("Overflow in usd_i calculation");
+                let fee_i = weight
+                    .checked_mul(total_fee)
+                    .and_then(|v| v.checked_div(BASIS_POINTS))
+                    .expect("Overflow in fee_i calculation");
+                usd_allocated = usd_allocated
+                    .checked_add(usd_i)
+                    .expect("Overflow in usd_allocated");
+                fee_allocated = fee_allocated
+                    .checked_add(fee_i)
+                    .expect("Overflow in fee_allocated");
+                (usd_i, fee_i)
+            };
+            let native_i = usd_i
+                .checked_mul(DECIMALS)
+                .and_then(|v| v.checked_div(rate))
+                .expect("Overflow in native_i calculation");
 
             if native_i > 0 {
                 let token = soroban_sdk::token::Client::new(&env, &stoken);
@@ -317,7 +384,10 @@ impl BurningContract {
     }
 
     pub fn get_fee_single_redeem(env: Env) -> i128 {
-        env.storage().instance().get(&DATA_KEY.fee_single_redeem).unwrap()
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.fee_single_redeem)
+            .unwrap()
     }
 
     pub fn is_paused(env: Env) -> bool {
@@ -343,24 +413,38 @@ impl BurningContract {
         admin.require_auth();
     }
 
-    pub fn version(_env: Env) -> u32 {
-        VERSION
+    pub fn get_version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&SharedDataKey::Version)
+            .unwrap_or(0)
     }
 
-    pub fn migrate(env: Env) {
-        Self::check_admin(&env);
-        let current_version = VERSION;
-        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
-        if stored_version < current_version {
-            env.storage()
-                .instance()
-                .set(&DATA_KEY.version, &current_version);
-        }
-    }
-
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+
+        let current_version = Self::get_version(env.clone());
+        if new_version <= current_version {
+            panic!("Invalid version upgrade");
+        }
+
         env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        // Run migrations
+        for v in current_version..new_version {
+            match v {
+                0 => migrate_v0_to_v1(env.clone()),
+                _ => {}
+            }
+        }
+
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &new_version);
     }
+}
+
+fn migrate_v0_to_v1(_env: Env) {
+    // Migration logic
 }

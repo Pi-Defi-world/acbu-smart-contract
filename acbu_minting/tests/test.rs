@@ -438,3 +438,76 @@ fn test_set_operator_and_mint_demo_fiat() {
     );
     assert!(acbu > 0);
 }
+
+#[test]
+#[should_panic(expected = "Invalid mint amount")]
+fn test_mint_from_usdc_exceeds_max() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
+    let user = Address::generate(&env);
+    let usdc_sac = soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token_id);
+    
+    // Max mint amount is 1_000_000_000_000, so 2_000_000_000_000 is huge
+    let huge_amount = 2_000_000_000_000;
+    usdc_sac.mint(&user, &huge_amount);
+
+    init_mint_client(
+        &env,
+        &client,
+        &admin,
+        &oracle,
+        &reserve_tracker,
+        &acbu_token_id,
+        &usdc_token_id,
+        &admin,
+        &admin,
+        300,
+        100,
+    );
+
+    client.mint_from_usdc(&user, &huge_amount, &user);
+}
+
+#[test]
+#[should_panic(expected = "Invalid mint amount")]
+fn test_mint_from_demo_fiat_exceeds_max() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
+    let operator = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let mint_addr = client.address.clone();
+
+    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
+    stoken_sac.mint(&mint_addr, &(2_000_000_000_000));
+    oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken_id);
+
+    init_mint_client(
+        &env,
+        &client,
+        &admin,
+        &oracle,
+        &reserve_tracker,
+        &acbu_token_id,
+        &usdc_token_id,
+        &admin,
+        &admin,
+        50,
+        100,
+    );
+
+    client.set_operator(&operator);
+
+    let huge_fiat_amount = 2_000_000_000_000;
+    // huge_fiat_amount converted to USD gross will exceed max (given 1:1 rate in MockOracle)
+    client.mint_from_demo_fiat(
+        &operator,
+        &recipient,
+        &CurrencyCode::new(&env, "NGN"),
+        &huge_fiat_amount,
+    );
+}
