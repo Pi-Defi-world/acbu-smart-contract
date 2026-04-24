@@ -296,23 +296,45 @@ impl OracleContract {
             }
         }
 
-        let median_rate = median(sources.clone()).unwrap_or(rate);
+        // Pass 1: compute reference median from all sources to establish a baseline.
+        let raw_median = median(sources.clone()).unwrap_or(rate);
 
+        // Pass 2: reject sources that deviate beyond OUTLIER_THRESHOLD_BPS and emit alert events.
+        // Outliers are quarantined so they cannot influence the final stored rate.
+        //
+        // NOTE: Some Stellar CLI / RPC stacks are sensitive to complex contracttype values in
+        // event topics; keep oracle rate updates functional even if event topic conversion would
+        // otherwise fail. We still compute deviation, but we avoid publishing per-currency topics.
+        let mut clean_sources: Vec<i128> = Vec::new(&env);
         for i in 0..sources.len() {
             let source_rate = sources.get(i).unwrap();
-            let deviation_bps = calculate_deviation(source_rate, median_rate);
+            let deviation_bps = calculate_deviation(source_rate, raw_median);
+
             if deviation_bps > OUTLIER_THRESHOLD_BPS {
                 let outlier_event = OutlierDetectionEvent {
                     currency: currency.clone(),
-                    median_rate,
+                    median_rate: raw_median,
                     outlier_rate: source_rate,
                     deviation_bps,
                     timestamp: current_time,
                 };
-                env.events().publish((symbol_short!("outlier"),), outlier_event);
+                env.events()
+                    .publish((symbol_short!("outlier"),), outlier_event);
+            } else {
+                clean_sources.push_back(source_rate);
             }
         }
 
+        // Final rate: median of clean sources only.
+        // If every source was an outlier (extreme disagreement), fall back to raw_median so the
+        // update is never silently dropped; this edge case should be investigated off-chain.
+        let median_rate = if clean_sources.is_empty() {
+            raw_median
+        } else {
+            median(clean_sources).unwrap_or(raw_median)
+        };
+
+        // Create rate data (original sources retained for audit trail).
         let rate_data = RateData {
             currency: currency.clone(),
             rate_usd: median_rate,
@@ -368,6 +390,56 @@ impl OracleContract {
         }
     }
 
+    /// Get rate data with timestamp for staleness validation
+    pub fn get_rate_with_timestamp(env: Env, currency: CurrencyCode) -> (i128, u64) {
+        if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
+            (rate_data.rate_usd, rate_data.timestamp)
+        } else {
+            panic!("Rate not found for currency");
+        }
+    }
+
+    /// Get ACBU/USD rate with timestamp
+    pub fn get_acbu_usd_rate_with_timestamp(env: Env) -> (i128, u64) {
+        let basket_weights: Map<CurrencyCode, i128> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.basket_weights)
+            .unwrap_or(Map::new(&env));
+        let currencies: Vec<CurrencyCode> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.currencies)
+            .unwrap_or(Vec::new(&env));
+
+        let mut weighted_sum = 0i128;
+        let mut total_weight = 0i128;
+        let mut oldest_timestamp = u64::MAX;
+
+        for currency in currencies.iter() {
+            if let Some(weight) = basket_weights.get(currency.clone()) {
+                if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
+                    let contribution = (rate_data.rate_usd * weight) / BASIS_POINTS;
+                    weighted_sum += contribution;
+                    total_weight += weight;
+                    if rate_data.timestamp < oldest_timestamp {
+                        oldest_timestamp = rate_data.timestamp;
+                    }
+                }
+            }
+        }
+
+        let rate = if total_weight > 0 {
+            weighted_sum / total_weight
+        } else {
+            DECIMALS // Neutral rate if no weights
+        };
+
+        (rate, if oldest_timestamp == u64::MAX { 0 } else { oldest_timestamp })
+    }
+
+
+    /// Get ACBU/USD rate (basket-weighted)
     pub fn get_acbu_usd_rate(env: Env) -> i128 {
         let basket_weights: Map<CurrencyCode, i128> = env
             .storage()

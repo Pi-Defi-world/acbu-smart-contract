@@ -4,7 +4,10 @@ use soroban_sdk::{
     String as SorobanString, Symbol, Vec,
 };
 
-use shared::{calculate_fee, BurnEvent, CurrencyCode, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, DataKey as SharedDataKey, MIN_BURN_AMOUNT};
+use shared::{
+    calculate_fee, BurnEvent, CurrencyCode, DataKey as SharedDataKey, BASIS_POINTS,
+    CONTRACT_VERSION, DECIMALS, MIN_BURN_AMOUNT,
+};
 
 mod shared {
     pub use shared::*;
@@ -99,7 +102,9 @@ impl BurningContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.min_burn_amount, &MIN_BURN_AMOUNT);
-        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Redeem ACBU for a single Afreum S-token (higher fee tier). Requires vault approval.
@@ -235,6 +240,10 @@ impl BurningContract {
             &Symbol::new(&env, "get_currencies"),
             vec![&env],
         );
+
+        if currencies.is_empty() {
+            panic!("Empty recipient list: no currencies configured");
+        }
 
         let mut amounts_out = Vec::new(&env);
         let mut last_weighted_idx: Option<u32> = None;
@@ -405,7 +414,10 @@ impl BurningContract {
     }
 
     pub fn get_version(env: Env) -> u32 {
-        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&SharedDataKey::Version)
+            .unwrap_or(0)
     }
 
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
@@ -427,7 +439,9 @@ impl BurningContract {
             }
         }
 
-        env.storage().instance().set(&SharedDataKey::Version, &new_version);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &new_version);
     }
 }
 
