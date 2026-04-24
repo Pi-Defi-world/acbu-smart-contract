@@ -8,6 +8,7 @@ on:
       - 'acbu_minting/src/lib.rs'
       - 'acbu_burning/src/lib.rs'
       - 'acbu_reserve_tracker/src/lib.rs'
+      - 'scripts/check_budget.sh'
       - 'Cargo.lock'
       - '.github/workflows/verify-wasm-integrity.yml'
   pull_request:
@@ -17,6 +18,7 @@ on:
       - 'acbu_minting/src/lib.rs'
       - 'acbu_burning/src/lib.rs'
       - 'acbu_reserve_tracker/src/lib.rs'
+      - 'scripts/check_budget.sh'
       - 'Cargo.lock'
 
 jobs:
