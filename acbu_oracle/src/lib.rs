@@ -4,9 +4,9 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_deviation, median, ContractError, CurrencyCode, DataKey as SharedDataKey,
-    OutlierDetectionEvent, RateData, RateUpdateEvent, BASIS_POINTS, CONTRACT_VERSION, DECIMALS,
-    EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, UPDATE_INTERVAL_SECONDS,
+    calculate_deviation, median, CurrencyCode, OutlierDetectionEvent, RateData, RateUpdateEvent,
+    BASIS_POINTS, DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, STALE_RATE_MAX_LEDGERS,
+    UPDATE_INTERVAL_SECONDS,
 };
 
 mod shared {
@@ -81,6 +81,17 @@ pub struct AdminTransferCancelledEvent {
     pub admin: Address,
     pub cancelled_pending: Address,
     pub timestamp: u64,
+}
+
+/// Emitted when a rate read is rejected because the stored rate is too old.
+/// Consumers (e.g. monitoring bots) can subscribe to this to alert on stale feeds.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct StaleRateEvent {
+    pub currency: CurrencyCode,
+    pub stored_ledger: u32,
+    pub current_ledger: u32,
+    pub max_stale_ledgers: u32,
 }
 
 #[contracttype]
@@ -367,6 +378,7 @@ impl OracleContract {
             rate_usd: median_rate,
             timestamp: current_time,
             sources,
+            ledger: env.ledger().sequence(),
         };
 
         let mut rates: Map<CurrencyCode, RateData> = env
@@ -400,6 +412,8 @@ impl OracleContract {
             rate_usd: rate,
             timestamp: current_time,
             sources: Vec::new(&env),
+            // Admin override: stamp with current ledger so the rate is immediately fresh.
+            ledger: env.ledger().sequence(),
         };
         let mut rates: Map<CurrencyCode, RateData> = env
             .storage()
@@ -415,6 +429,7 @@ impl OracleContract {
 
     pub fn get_rate(env: Env, currency: CurrencyCode) -> i128 {
         if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
+            Self::assert_rate_fresh(&env, &rate_data, &currency);
             rate_data.rate_usd
         } else {
             panic!("Rate not found for currency");
@@ -424,6 +439,7 @@ impl OracleContract {
     /// Get rate data with timestamp for staleness validation
     pub fn get_rate_with_timestamp(env: Env, currency: CurrencyCode) -> (i128, u64) {
         if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
+            Self::assert_rate_fresh(&env, &rate_data, &currency);
             (rate_data.rate_usd, rate_data.timestamp)
         } else {
             panic!("Rate not found for currency");
@@ -450,6 +466,8 @@ impl OracleContract {
         for currency in currencies.iter() {
             if let Some(weight) = basket_weights.get(currency.clone()) {
                 if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
+                    // Enforce staleness: a stale basket component blocks the whole basket rate.
+                    Self::assert_rate_fresh(&env, &rate_data, &currency);
                     let contribution = (rate_data.rate_usd * weight) / BASIS_POINTS;
                     weighted_sum += contribution;
                     total_weight += weight;
@@ -495,6 +513,8 @@ impl OracleContract {
         for currency in currencies.iter() {
             if let Some(weight) = basket_weights.get(currency.clone()) {
                 if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
+                    // Enforce staleness: a stale basket component blocks the whole basket rate.
+                    Self::assert_rate_fresh(&env, &rate_data, &currency);
                     let contribution = (rate_data.rate_usd * weight) / 10_000;
                     weighted_sum += contribution;
                     total_weight += weight;
@@ -708,6 +728,33 @@ impl OracleContract {
             .get(&DATA_KEY.rates)
             .unwrap_or(Map::new(env));
         rates.get(currency.clone())
+    }
+
+    /// Panics if the stored rate is older than `STALE_RATE_MAX_LEDGERS` ledgers.
+    ///
+    /// Using ledger sequence (not timestamp) as the staleness signal is intentional:
+    /// ledger sequence is set by the network and cannot be forged by a validator.
+    /// This is the oracle-side enforcement; the minting contract adds a second,
+    /// timestamp-based layer via `check_oracle_freshness`.
+    ///
+    /// Admin override path: call `set_rate_admin` to refresh the stored rate with
+    /// the current ledger sequence, which immediately unblocks reads.
+    fn assert_rate_fresh(env: &Env, rate_data: &RateData, currency: &CurrencyCode) {
+        let current_ledger = env.ledger().sequence();
+        let age = current_ledger.saturating_sub(rate_data.ledger);
+        if age > STALE_RATE_MAX_LEDGERS {
+            // Emit an observable event before panicking so monitoring bots can alert.
+            env.events().publish(
+                (symbol_short!("stale_rt"),),
+                StaleRateEvent {
+                    currency: currency.clone(),
+                    stored_ledger: rate_data.ledger,
+                    current_ledger,
+                    max_stale_ledgers: STALE_RATE_MAX_LEDGERS,
+                },
+            );
+            panic!("Rate is stale: stored ledger is too old; admin must refresh via set_rate_admin");
+        }
     }
 
     fn check_admin(env: &Env) {

@@ -380,3 +380,178 @@ fn test_update_rate_falls_back_to_provided_rate_when_sources_empty() {
     );
     assert_eq!(client.get_rate(&ngn), submitted_rate);
 }
+
+// ─── Staleness tests ──────────────────────────────────────────────────────────
+
+/// Acceptance check: a rate stored N+1 ledgers ago must be rejected at read time.
+/// This is the core acceptance criterion: stale rate cannot be used for new mints.
+#[test]
+fn test_stale_rate_rejected_at_read() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| {
+        l.timestamp = 1_000_000;
+        l.sequence_number = 100;
+    });
+
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn.clone(), 10_000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
+
+    // Write a fresh rate at ledger 100.
+    let mut sources = Vec::new(&env);
+    sources.push_back(1_000_000i128);
+    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+
+    // Advance ledger sequence past STALE_RATE_MAX_LEDGERS (4_320).
+    env.ledger().with_mut(|l| {
+        l.sequence_number = 100 + 4_321; // one beyond the limit
+        l.timestamp = 1_000_000 + 21_601; // also past the timestamp window
+    });
+
+    // get_rate must now panic with a stale-rate error.
+    let result = client.try_get_rate(&ngn);
+    assert!(result.is_err(), "expected stale rate to be rejected");
+
+    // A stale_rt event must have been emitted.
+    let events = env.events().all();
+    let stale_event_found = events.iter().any(|e| {
+        if e.0 != contract_id { return false; }
+        !e.1.is_empty()
+            && Symbol::from_val(&env, &e.1.get(0).unwrap()) == symbol_short!("stale_rt")
+    });
+    assert!(stale_event_found, "expected stale_rt event to be emitted");
+}
+
+/// A rate that is exactly at the staleness boundary (age == STALE_RATE_MAX_LEDGERS) must still be accepted.
+#[test]
+fn test_rate_at_boundary_is_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| {
+        l.timestamp = 1_000_000;
+        l.sequence_number = 100;
+    });
+
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn.clone(), 10_000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
+
+    let mut sources = Vec::new(&env);
+    sources.push_back(1_000_000i128);
+    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+
+    // Advance exactly to the limit — should still pass.
+    env.ledger().with_mut(|l| {
+        l.sequence_number = 100 + 4_320; // exactly at limit
+    });
+
+    let rate = client.get_rate(&ngn);
+    assert_eq!(rate, 1_000_000, "rate at boundary should be accepted");
+}
+
+/// Admin override: set_rate_admin refreshes the ledger stamp, unblocking a stale feed.
+#[test]
+fn test_admin_override_unblocks_stale_rate() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| {
+        l.timestamp = 1_000_000;
+        l.sequence_number = 100;
+    });
+
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn.clone(), 10_000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
+
+    let mut sources = Vec::new(&env);
+    sources.push_back(1_000_000i128);
+    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+
+    // Advance past staleness window.
+    env.ledger().with_mut(|l| {
+        l.sequence_number = 100 + 4_321;
+        l.timestamp = 1_000_000 + 21_601;
+    });
+
+    // Admin refreshes the rate — this stamps the current ledger sequence.
+    let override_rate = 1_050_000i128;
+    client.set_rate_admin(&ngn, &override_rate);
+
+    // Now get_rate must succeed with the admin-set value.
+    let rate = client.get_rate(&ngn);
+    assert_eq!(rate, override_rate, "admin override should unblock stale rate");
+}
+
+/// Basket rate (get_acbu_usd_rate_with_timestamp) must also be blocked when any
+/// basket component is stale — a stale component cannot silently contribute to mints.
+#[test]
+fn test_stale_basket_component_blocks_acbu_rate() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| {
+        l.timestamp = 1_000_000;
+        l.sequence_number = 100;
+    });
+
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn.clone(), 10_000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
+
+    let mut sources = Vec::new(&env);
+    sources.push_back(1_000_000i128);
+    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+
+    // Advance past staleness window.
+    env.ledger().with_mut(|l| {
+        l.sequence_number = 100 + 4_321;
+        l.timestamp = 1_000_000 + 21_601;
+    });
+
+    let result = client.try_get_acbu_usd_rate_with_timestamp();
+    assert!(result.is_err(), "stale basket component must block acbu rate");
+}
