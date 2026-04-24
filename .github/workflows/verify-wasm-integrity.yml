@@ -8,6 +8,7 @@ on:
       - 'acbu_minting/src/lib.rs'
       - 'acbu_burning/src/lib.rs'
       - 'acbu_reserve_tracker/src/lib.rs'
+      - 'scripts/check_budget.sh'
       - 'Cargo.lock'
       - '**/Cargo.toml'
       - '.github/workflows/verify-wasm-integrity.yml'
@@ -18,6 +19,7 @@ on:
       - 'acbu_minting/src/lib.rs'
       - 'acbu_burning/src/lib.rs'
       - 'acbu_reserve_tracker/src/lib.rs'
+      - 'scripts/check_budget.sh'
       - 'Cargo.lock'
       - '**/Cargo.toml'
 
@@ -126,6 +128,9 @@ jobs:
 
       - name: Build contracts
         run: cargo build --target wasm32-unknown-unknown --release
+
+      - name: Check Contract Budget
+        run: ./scripts/check_budget.sh
 
       - name: Verify build artifacts
         run: |
