@@ -3,8 +3,7 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol,
 };
 
-use shared::{BASIS_POINTS, CONTRACT_VERSION, DataKey as SharedDataKey};
-
+use shared::{DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -23,6 +22,8 @@ const DATA_KEY: DataKey = DataKey {
 };
 
 // CONTRACT_VERSION is imported from shared
+// Use shared version key to avoid drift
+const VERSION: u32 = CONTRACT_VERSION;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,6 +36,28 @@ pub struct LoanData {
     pub amount: i128,
     pub collateral_amount: i128,
     pub start_timestamp: u64,
+}
+
+// Renamed fields to match spec: creator=borrower, amount, token
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BorrowEvent {
+    pub creator: Address, // borrower is the creator in lending context
+    pub amount: i128,
+    pub token: Address,
+    pub loan_id: u64,
+    pub timestamp: u64,
+}
+
+// Renamed fields to match spec: creator=borrower, amount, token
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct RepayEvent {
+    pub creator: Address,
+    pub amount: i128,
+    pub token: Address,
+    pub loan_id: u64,
+    pub timestamp: u64,
 }
 
 #[contracttype]
@@ -79,6 +102,8 @@ pub enum Error {
     InsufficientBalance = 2004,
     LoanAlreadyExists = 2005,
     InvalidRepaymentAmount = 2006,
+
+    TokenError = 2007,
 }
 
 #[contract]
@@ -100,10 +125,16 @@ impl LendingPool {
             return Err(Error::InvalidAmount);
         }
         env.storage().instance().set(&DATA_KEY.admin, &admin);
-        env.storage().instance().set(&DATA_KEY.acbu_token, &acbu_token);
-        env.storage().instance().set(&DATA_KEY.fee_rate, &fee_rate_bps);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.acbu_token, &acbu_token);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.fee_rate, &fee_rate_bps);
         env.storage().instance().set(&DATA_KEY.paused, &false);
-        env.storage().instance().set(&DATA_KEY.version, &VERSION);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &VERSION);
         Ok(())
     }
 
@@ -111,7 +142,11 @@ impl LendingPool {
     pub fn deposit(env: Env, lender: Address, amount: i128) -> Result<i128, Error> {
         // Auth first: caller must be the lender themselves
         lender.require_auth();
-        let paused: bool = env.storage().instance().get(&DATA_KEY.paused).unwrap_or(false);
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.paused)
+            .unwrap_or(false);
         if paused {
             return Err(Error::Paused);
         }
@@ -134,14 +169,22 @@ impl LendingPool {
     pub fn withdraw(env: Env, lender: Address, amount: i128) -> Result<(), Error> {
         // Auth first: caller must be the lender themselves
         lender.require_auth();
-        let paused: bool = env.storage().instance().get(&DATA_KEY.paused).unwrap_or(false);
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.paused)
+            .unwrap_or(false);
         if paused {
             return Err(Error::Paused);
         }
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        let balance: i128 = env.storage().temporary().get(&lender).ok_or(Error::NotFound)?;
+        let balance: i128 = env
+            .storage()
+            .temporary()
+            .get(&lender)
+            .ok_or(Error::NotFound)?;
         if balance < amount {
             return Err(Error::InsufficientBalance);
         }
@@ -170,7 +213,11 @@ impl LendingPool {
         loan_id: u64,
     ) -> Result<(), Error> {
         borrower.require_auth();
-        let paused: bool = env.storage().instance().get(&DATA_KEY.paused).unwrap_or(false);
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.paused)
+            .unwrap_or(false);
         if paused {
             return Err(Error::Paused);
         }
@@ -201,14 +248,12 @@ impl LendingPool {
         env.storage().temporary().set(&key, &loan);
 
         env.events().publish(
-            (symbol_short!("loan_crt"), borrower.clone()),
-            LoanCreatedEvent {
-                loan_id,
-                lender: env.current_contract_address(),
-                borrower,
+            (symbol_short!("borrow"),),
+            BorrowEvent {
+                creator: borrower.clone(),
                 amount,
-                interest_bps: 0, // MVP
-                term_seconds: 0, // MVP
+                token: acbu,
+                loan_id,
                 timestamp: env.ledger().timestamp(),
             },
         );
@@ -217,20 +262,11 @@ impl LendingPool {
     }
 
     /// Repay a loan
-    pub fn repay(
-        env: Env,
-        borrower: Address,
-        amount: i128,
-        loan_id: u64,
-    ) -> Result<(), Error> {
+    pub fn repay(env: Env, borrower: Address, amount: i128, loan_id: u64) -> Result<(), Error> {
         borrower.require_auth();
 
         let key = LoanId(borrower.clone(), loan_id);
-        let mut loan: LoanData = env
-            .storage()
-            .temporary()
-            .get(&key)
-            .ok_or(Error::NotFound)?;
+        let mut loan: LoanData = env.storage().temporary().get(&key).ok_or(Error::NotFound)?;
 
         if amount > loan.amount {
             return Err(Error::InvalidRepaymentAmount);
@@ -252,16 +288,23 @@ impl LendingPool {
         }
 
         env.events().publish(
-            (symbol_short!("repay"), borrower.clone()),
-            LoanRepaidEvent {
-                loan_id,
-                borrower,
+            (symbol_short!("repay"),),
+            RepayEvent {
+                creator: borrower.clone(),
                 amount,
+                token: acbu,
+                loan_id,
                 timestamp: env.ledger().timestamp(),
             },
         );
 
         Ok(())
+    }
+
+    // Getter for loan state so integration test can verify transitions
+    pub fn get_loan(env: Env, borrower: Address, loan_id: u64) -> Option<LoanData> {
+        let key = LoanId(borrower, loan_id);
+        env.storage().temporary().get(&key)
     }
 
     pub fn pause(env: Env) -> Result<(), Error> {
@@ -287,7 +330,10 @@ impl LendingPool {
     }
 
     pub fn get_version(env: Env) -> u32 {
-        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&SharedDataKey::Version)
+            .unwrap_or(0)
     }
 
     pub fn migrate(env: Env) -> Result<(), Error> {
@@ -299,7 +345,7 @@ impl LendingPool {
         admin.require_auth();
 
         let current_version = Self::get_version(env.clone());
-        if new_version <= current_version {
+        if VERSION <= current_version {
             panic!("Invalid version upgrade");
         }
         Ok(())
@@ -320,4 +366,3 @@ impl LendingPool {
 fn migrate_v0_to_v1(_env: Env) {
     // Migration logic for v0 to v1 if needed
 }
-
