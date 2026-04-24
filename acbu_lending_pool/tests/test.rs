@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use acbu_lending_pool::{LendingPool, LendingPoolClient};
+use acbu_lending_pool::{Error, LendingPool, LendingPoolClient};
 use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, Symbol};
 // Add these imports for the lifecycle test
 use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
@@ -191,7 +191,6 @@ fn test_borrow_basic() {
     let collateral: i128 = 200_000;
     let loan_id: u64 = 1;
 
-    // Borrower needs collateral tokens in their wallet for the transfer
     // (contract transfers ACBU *out* to borrower; collateral is recorded but not transferred in MVP)
     client.borrow(&borrower, &borrow_amount, &collateral, &loan_id);
 
@@ -285,8 +284,11 @@ fn test_borrow_exceeds_liquidity_fails() {
     let result = client.try_borrow(&borrower, &over_amount, &0, &1u64);
 
     assert!(
-        result.is_err(),
-        "borrow exceeding pool liquidity must fail"
+        matches!(
+            result,
+            Err(Ok(Error::InsufficientBalance))
+        ),
+        "borrow exceeding pool liquidity must return Error::InsufficientBalance"
     );
 }
 
@@ -322,8 +324,11 @@ fn test_repay_wrong_loan_id_fails() {
     let result = client.try_repay(&borrower, &borrow_amount, &wrong_loan_id);
 
     assert!(
-        result.is_err(),
-        "repay with wrong loan_id must return an error"
+        matches!(
+            result,
+            Err(Ok(Error::NotFound))
+        ),
+        "repay with wrong loan_id must return Error::NotFound"
     );
 }
 

@@ -234,6 +234,14 @@ impl LendingPool {
             .ok_or(Error::NotFound)?;
         let client = soroban_sdk::token::Client::new(&env, &acbu);
 
+        // Explicit liquidity guard: reject before attempting the transfer so the
+        // caller receives a clean Error::InsufficientBalance rather than a token
+        // panic when the pool does not hold enough ACBU.
+        let available: i128 = client.balance(&env.current_contract_address());
+        if amount > available {
+            return Err(Error::InsufficientBalance);
+        }
+
         // In MVP, we just transfer ACBU to borrower.
         // Real logic would check collateral value via oracle.
         client.transfer(&env.current_contract_address(), &borrower, &amount);
