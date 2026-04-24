@@ -23,6 +23,10 @@ mod oracle_mock {
             DECIMALS
         }
 
+        pub fn get_acbu_usd_rate_with_timestamp(env: Env) -> (i128, u64) {
+            (DECIMALS, env.ledger().timestamp())
+        }
+
         pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
             let mut v = Vec::new(&env);
             v.push_back(CurrencyCode::new(&env, "NGN"));
@@ -35,6 +39,10 @@ mod oracle_mock {
 
         pub fn get_rate(_env: Env, _c: CurrencyCode) -> i128 {
             DECIMALS
+        }
+
+        pub fn get_rate_with_timestamp(env: Env, _c: CurrencyCode) -> (i128, u64) {
+            (DECIMALS, env.ledger().timestamp())
         }
 
         pub fn get_s_token_address(env: Env, _c: CurrencyCode) -> Address {
@@ -64,23 +72,43 @@ mod reserve_mock {
     }
 }
 
-fn oracle_mock_client(env: &Env, oracle: &Address) -> oracle_mock::MockOracleClient {
+fn oracle_mock_client<'a>(env: &'a Env, oracle: &'a Address) -> oracle_mock::MockOracleClient<'a> {
     oracle_mock::MockOracleClient::new(env, oracle)
 }
 
-fn setup_test(env: &Env) -> (Address, Address, Address, Address, Address, MintingContractClient) {
+fn setup_test(
+    env: &Env,
+) -> (
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    MintingContractClient,
+) {
     let admin = Address::generate(env);
     let oracle = env.register_contract(None, oracle_mock::MockOracle);
     let reserve_tracker = env.register_contract(None, reserve_mock::MockReserveTracker);
 
     let contract_id = env.register_contract(None, MintingContract);
-    let acbu_token = env.register_stellar_asset_contract_v2(contract_id.clone()).address();
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(contract_id.clone())
+        .address();
 
-    let usdc_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let usdc_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let client = MintingContractClient::new(env, &contract_id);
 
-    (admin, oracle, reserve_tracker, acbu_token, usdc_token, client)
+    (
+        admin,
+        oracle,
+        reserve_tracker,
+        acbu_token,
+        usdc_token,
+        client,
+    )
 }
 
 fn init_mint_client(
@@ -121,7 +149,9 @@ fn test_mint_from_fiat_success() {
     let recipient = Address::generate(&env);
     let mint_addr = client.address.clone();
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
@@ -170,7 +200,9 @@ fn test_mint_from_fiat_unauthorized_caller() {
     let attacker = Address::generate(&env);
     let mint_addr = client.address.clone();
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
@@ -193,7 +225,7 @@ fn test_mint_from_fiat_unauthorized_caller() {
 
     let fiat_amount = 50 * DECIMALS;
     let fintech_tx_id = SorobanString::from_str(&env, "fintech_tx_001");
-    
+
     // Attacker tries to call mint_from_fiat - should fail
     client.mint_from_fiat(
         &attacker,
@@ -215,7 +247,9 @@ fn test_mint_from_fiat_recipient_self_mint() {
     let recipient = Address::generate(&env);
     let mint_addr = client.address.clone();
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
@@ -260,7 +294,9 @@ fn test_mint_from_fiat_empty_tx_id() {
     let recipient = Address::generate(&env);
     let mint_addr = client.address.clone();
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
@@ -305,7 +341,9 @@ fn test_mint_from_fiat_duplicate_tx_id() {
     let recipient = Address::generate(&env);
     let mint_addr = client.address.clone();
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&mint_addr, &(500 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
@@ -359,7 +397,9 @@ fn test_mint_from_fiat_below_min_amount() {
     let recipient = Address::generate(&env);
     let mint_addr = client.address.clone();
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
@@ -404,7 +444,9 @@ fn test_mint_from_fiat_above_max_amount() {
     let recipient = Address::generate(&env);
     let mint_addr = client.address.clone();
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&mint_addr, &(100_000 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
@@ -448,7 +490,9 @@ fn test_mint_from_fiat_admin_not_default_operator() {
     let recipient = Address::generate(&env);
     let mint_addr = client.address.clone();
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
@@ -495,7 +539,9 @@ fn test_mint_from_fiat_admin_when_operator_set() {
     let recipient = Address::generate(&env);
     let mint_addr = client.address.clone();
 
-    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);

@@ -1,7 +1,9 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol, Vec,
+};
 
-use shared::{calculate_fee, BASIS_POINTS, CONTRACT_VERSION, DataKey as SharedDataKey};
+use shared::{calculate_fee, DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION};
 
 mod shared {
     pub use shared::*;
@@ -10,7 +12,7 @@ mod shared {
 // ---------------------------------------------------------------------------
 // Error codes — every contract_error code is documented here.
 // ---------------------------------------------------------------------------
-#[contracterror]
+#[soroban_sdk::contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Error {
@@ -28,6 +30,7 @@ pub enum Error {
     InvalidYieldRate = 1012,
     NoFeeRate = 1013,
     NoYieldRate = 1014,
+    ZeroNetDeposit = 1015,
 }
 
 // ---------------------------------------------------------------------------
@@ -135,72 +138,76 @@ impl SavingsVault {
     }
 
     // -----------------------------------------------------------------------
-    // Public API
+    // Public logic
     // -----------------------------------------------------------------------
 
-    /// Initialize the savings vault contract.
     pub fn initialize(
         env: Env,
         admin: Address,
         acbu_token: Address,
         fee_rate_bps: i128,
         yield_rate_bps: i128,
-    ) -> Result<(), Error> {
+    ) {
         if env.storage().instance().has(&DATA_KEY.admin) {
-            return Err(Error::AlreadyInitialized);
+            env.panic_with_error(Error::AlreadyInitialized);
         }
         if !(0..=BASIS_POINTS).contains(&fee_rate_bps) {
-            return Err(Error::InvalidFeeRate);
+            env.panic_with_error(Error::InvalidFeeRate);
         }
         if !(0..=BASIS_POINTS).contains(&yield_rate_bps) {
-            return Err(Error::InvalidYieldRate);
+            env.panic_with_error(Error::InvalidYieldRate);
         }
         env.storage().instance().set(&DATA_KEY.admin, &admin);
-        env.storage().instance().set(&DATA_KEY.acbu_token, &acbu_token);
-        env.storage().instance().set(&DATA_KEY.fee_rate, &fee_rate_bps);
-        env.storage().instance().set(&DATA_KEY.yield_rate, &yield_rate_bps);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.acbu_token, &acbu_token);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.fee_rate, &fee_rate_bps);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.yield_rate, &yield_rate_bps);
         env.storage().instance().set(&DATA_KEY.paused, &false);
-        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
-        Ok(())
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Deposit (lock) ACBU for a term. User transfers ACBU to this contract.
-    pub fn deposit(
-        env: Env,
-        user: Address,
-        amount: i128,
-        term_seconds: u64,
-    ) -> Result<i128, Error> {
+    pub fn deposit(env: Env, user: Address, amount: i128, term_seconds: u64) -> i128 {
         user.require_auth();
 
         if Self::is_paused(&env) {
-            return Err(Error::Paused);
+            env.panic_with_error(Error::Paused);
         }
         if amount <= 0 {
-            return Err(Error::InvalidAmount);
+            env.panic_with_error(Error::InvalidAmount);
         }
         if term_seconds == 0 {
-            return Err(Error::InvalidTerm);
+            env.panic_with_error(Error::InvalidTerm);
         }
 
         // Load fee_rate and calculate fee before transfer.
-        let fee_rate = Self::load_fee_rate(&env)?;
+        let fee_rate = Self::load_fee_rate(&env).unwrap_or_else(|e| env.panic_with_error(e));
         let fee_amount = calculate_fee(amount, fee_rate);
-        let net_amount = amount - fee_amount;
+        let net_amount = amount
+            .checked_sub(fee_amount)
+            .unwrap_or_else(|| env.panic_with_error(Error::Overflow));
 
         // Guard against fee consuming entire deposit.
         if net_amount <= 0 {
-            return Err(soroban_sdk::Error::from_contract_error(ERR_ZERO_NET_DEPOSIT));
+            env.panic_with_error(Error::ZeroNetDeposit);
         }
 
-        let acbu = Self::load_acbu_token(&env)?;
-        let client = soroban_sdk::token::Client::new(&env, &acbu);
-        client.transfer(&user, &env.current_contract_address(), &amount);
+        let acbu = Self::load_acbu_token(&env).unwrap_or_else(|e| env.panic_with_error(e));
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
+        let token = soroban_sdk::token::Client::new(&env, &acbu);
+        let vault_addr = env.current_contract_address();
 
-        // Immediately forward fee to admin if non-zero.
+        // Transfer the net amount to the vault and the fee to the admin
+        token.transfer(&user, &vault_addr, &net_amount);
         if fee_amount > 0 {
-            let admin = Self::load_admin(&env)?;
-            client.transfer(&env.current_contract_address(), &admin, &fee_amount);
+            token.transfer(&user, &admin, &fee_amount);
         }
 
         let key = (DEPOSIT_KEY, user.clone(), term_seconds);
@@ -209,19 +216,19 @@ impl SavingsVault {
             .temporary()
             .get(&key)
             .unwrap_or(Vec::new(&env));
+
         lots.push_back(DepositLot {
-                        //Store net_amount instead of gross amount.
             amount: net_amount,
             timestamp: env.ledger().timestamp(),
             term_seconds,
         });
+
         env.storage().temporary().set(&key, &lots);
 
         env.events().publish(
             (symbol_short!("Deposit"), user.clone()),
             DepositEvent {
                 user,
-                // Emit gross, fee, and net for transparency.
                 gross_amount: amount,
                 fee_amount,
                 net_amount,
@@ -229,24 +236,19 @@ impl SavingsVault {
                 timestamp: env.ledger().timestamp(),
             },
         );
-        //Return net balance. get_balance will now reflect fees.
-        Ok(Self::sum_lots(&lots))
+
+        net_amount
     }
 
-    /// Withdraw (unlock) ACBU after term. Applies the stored protocol fee.
-    pub fn withdraw(
-        env: Env,
-        user: Address,
-        term_seconds: u64,
-        amount: i128,
-    ) -> Result<(), Error> {
+    /// Withdraw unlocked ACBU + yield for a specific term.
+    pub fn withdraw(env: Env, user: Address, term_seconds: u64, amount: i128) -> i128 {
         user.require_auth();
 
         if Self::is_paused(&env) {
-            return Err(Error::Paused);
+            env.panic_with_error(Error::Paused);
         }
         if amount <= 0 {
-            return Err(Error::InvalidAmount);
+            env.panic_with_error(Error::InvalidAmount);
         }
 
         let key = (DEPOSIT_KEY, user.clone(), term_seconds);
@@ -254,59 +256,57 @@ impl SavingsVault {
             .storage()
             .temporary()
             .get(&key)
-            .ok_or(Error::NoDeposit)?;
+            .unwrap_or_else(|| env.panic_with_error(Error::NoDeposit));
 
         let now = env.ledger().timestamp();
-        let unlocked_balance: i128 = lots
-            .iter()
-            .filter(|lot| now >= lot.timestamp.saturating_add(lot.term_seconds))
-            .fold(Ok(0i128), |acc: Result<i128, soroban_sdk::Error>, lot| {
-                acc.and_then(|a| {
-                    a.checked_add(lot.amount)
-                        .ok_or(soroban_sdk::Error::from_contract_error(1005))
-                })
-            })?;
+        let mut unlocked_balance = 0i128;
+        for lot in lots.iter() {
+            if now >= lot.timestamp.saturating_add(lot.term_seconds) {
+                unlocked_balance = unlocked_balance
+                    .checked_add(lot.amount)
+                    .unwrap_or_else(|| env.panic_with_error(Error::Overflow));
+            }
+        }
 
-        if unlocked_balance < amount {
-            return Err(Error::InsufficientUnlocked);
+        if amount > unlocked_balance {
+            env.panic_with_error(Error::InsufficientUnlocked);
         }
 
         // Removed load_fee_rate and calculate_fee. Fee no longer charged on withdraw.
-        
-        let yield_rate = Self::load_yield_rate(&env)?;
-        
+        let yield_rate = Self::load_yield_rate(&env).unwrap_or_else(|e| env.panic_with_error(e));
 
         let mut amount_left = amount;
+        let mut yield_amount = 0i128;
         let mut updated_lots = Vec::new(&env);
-        let mut yield_amount: i128 = 0;
 
         for lot in lots.iter() {
-            if amount_left == 0 {
+            if amount_left == 0 || now < lot.timestamp.saturating_add(lot.term_seconds) {
                 updated_lots.push_back(lot);
                 continue;
             }
-            let unlocked = now >= lot.timestamp.saturating_add(lot.term_seconds);
-            if !unlocked {
-                updated_lots.push_back(lot);
-                continue;
-            }
+
             if lot.amount <= amount_left {
                 amount_left = amount_left
                     .checked_sub(lot.amount)
-                    .ok_or(soroban_sdk::Error::from_contract_error(1004))?;
+                    .unwrap_or_else(|| env.panic_with_error(Error::Overflow));
                 let elapsed = now.saturating_sub(lot.timestamp);
+                let lot_yield = Self::calculate_yield(lot.amount, yield_rate, elapsed)
+                    .unwrap_or_else(|e| env.panic_with_error(e));
                 yield_amount = yield_amount
-                    .checked_add(Self::calculate_yield(lot.amount, yield_rate, elapsed)?)
-                    .ok_or(soroban_sdk::Error::from_contract_error(1005))?;
+                    .checked_add(lot_yield)
+                    .unwrap_or_else(|| env.panic_with_error(Error::Overflow));
             } else {
                 let consumed = amount_left;
-                let remaining = lot.amount
+                let remaining = lot
+                    .amount
                     .checked_sub(consumed)
-                    .ok_or(soroban_sdk::Error::from_contract_error(1004))?;
+                    .unwrap_or_else(|| env.panic_with_error(Error::Overflow));
                 let elapsed = now.saturating_sub(lot.timestamp);
+                let lot_yield = Self::calculate_yield(consumed, yield_rate, elapsed)
+                    .unwrap_or_else(|e| env.panic_with_error(e));
                 yield_amount = yield_amount
-                    .checked_add(Self::calculate_yield(consumed, yield_rate, elapsed)?)
-                    .ok_or(soroban_sdk::Error::from_contract_error(1005))?;
+                    .checked_add(lot_yield)
+                    .unwrap_or_else(|| env.panic_with_error(Error::Overflow));
                 updated_lots.push_back(DepositLot {
                     amount: remaining,
                     timestamp: lot.timestamp,
@@ -317,7 +317,7 @@ impl SavingsVault {
         }
 
         if amount_left > 0 {
-            return Err(Error::AccountingError);
+            env.panic_with_error(Error::AccountingError);
         }
 
         if updated_lots.is_empty() {
@@ -326,18 +326,21 @@ impl SavingsVault {
             env.storage().temporary().set(&key, &updated_lots);
         }
 
-        let net_amount: i128 = amount
-            .checked_sub(fee_amount)
-            .ok_or(soroban_sdk::Error::from_contract_error(1004))?;
-        let payout_amount: i128 = net_amount
+        let payout_amount = amount
             .checked_add(yield_amount)
-            .ok_or(soroban_sdk::Error::from_contract_error(1005))?;
+            .unwrap_or_else(|| env.panic_with_error(Error::Overflow));
 
         // Single storage read for the token — reuse the client for both transfers.
-        let acbu = Self::load_acbu_token(&env)?;
-        let client = soroban_sdk::token::Client::new(&env, &acbu);
-        client.transfer(&env.current_contract_address(), &user, &payout_amount);
-        // Removed fee transfer to admin. Fee already paid on deposit.
+        let acbu = Self::load_acbu_token(&env).unwrap_or_else(|e| env.panic_with_error(e));
+        let token = soroban_sdk::token::Client::new(&env, &acbu);
+        let vault_addr = env.current_contract_address();
+
+        // 1. Return the principal from this contract to user.
+        token.transfer(&vault_addr, &user, &amount);
+        // 2. Mint the yield (assumes this contract is a minter on ACBU token or has balance).
+        if yield_amount > 0 {
+            token.transfer(&vault_addr, &user, &yield_amount);
+        }
 
         env.events().publish(
             (symbol_short!("Withdraw"), user.clone()),
@@ -346,13 +349,13 @@ impl SavingsVault {
                 amount,
                 fee_amount: 0,
                 yield_amount,
-                timestamp: env.ledger().timestamp(),
+                timestamp: now,
             },
         );
-        Ok(())
+
+        payout_amount
     }
 
-    /// Get total deposited balance for a user + term combination. Net of deposit fees.
     pub fn get_balance(env: Env, user: Address, term_seconds: u64) -> i128 {
         let key = (DEPOSIT_KEY, user, term_seconds);
         let lots: Vec<DepositLot> = env
@@ -363,53 +366,51 @@ impl SavingsVault {
         Self::sum_lots(&lots)
     }
 
-        pub fn get_pending_yield(env: Env, user: Address, term_seconds: u64) -> Result<i128, soroban_sdk::Error> {
+    pub fn get_pending_yield(env: Env, user: Address, term_seconds: u64) -> i128 {
         let key = (DEPOSIT_KEY, user, term_seconds);
         let lots: Vec<DepositLot> = env
-           .storage()
-           .temporary()
-           .get(&key)
-           .unwrap_or(Vec::new(&env));
+            .storage()
+            .temporary()
+            .get(&key)
+            .unwrap_or_else(|| env.panic_with_error(Error::NoDeposit));
 
+        let yield_rate = Self::load_yield_rate(&env).unwrap_or_else(|e| env.panic_with_error(e));
         let now = env.ledger().timestamp();
-        let yield_rate = Self::load_yield_rate(&env)?;
-        let mut yield_amount: i128 = 0;
+        let mut yield_amount = 0i128;
 
         for lot in lots.iter() {
-            let unlocked = now >= lot.timestamp.saturating_add(lot.term_seconds);
-            if!unlocked {
-                continue;
-            }
             let elapsed = now.saturating_sub(lot.timestamp);
-            yield_amount += Self::calculate_yield(lot.amount, yield_rate, elapsed)?;
+            let lot_yield = Self::calculate_yield(lot.amount, yield_rate, elapsed)
+                .unwrap_or_else(|e| env.panic_with_error(e));
+            yield_amount = yield_amount
+                .checked_add(lot_yield)
+                .unwrap_or_else(|| env.panic_with_error(Error::Overflow));
         }
-        Ok(yield_amount)
+
+        yield_amount
     }
 
-    pub fn pause(env: Env) -> Result<(), soroban_sdk::Error> {
-        let admin = Self::load_admin(&env)?;
+    pub fn pause(env: Env) {
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &true);
-        Ok(())
     }
 
-    pub fn unpause(env: Env) -> Result<(), Error> {
-        let admin = Self::load_admin(&env)?;
+    pub fn unpause(env: Env) {
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &false);
-        Ok(())
     }
 
-    pub fn get_version(env: Env) -> u32 {
-        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
-    }
-
-
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) -> Result<(), soroban_sdk::Error> {
-        let admin = Self::load_admin(&env)?;
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
 
-        let current_version = Self::get_version(env.clone());
+        let current_version = env
+            .storage()
+            .instance()
+            .get(&SharedDataKey::Version)
+            .unwrap_or(0);
         if new_version <= current_version {
             panic!("Invalid version upgrade");
         }
@@ -419,19 +420,19 @@ impl SavingsVault {
         // Run migrations
         for v in current_version..new_version {
             match v {
-                0 => migrate_v0_to_v1(env.clone()),
+                0 => Self::migrate_v0_to_v1(env.clone()),
                 _ => {}
             }
         }
 
-        env.storage().instance().set(&SharedDataKey::Version, &new_version);
-        Ok(())
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &new_version);
     }
-}
 
-fn migrate_v0_to_v1(_env: Env) {
-    // Migration logic
-}
+    fn migrate_v0_to_v1(_env: Env) {
+        // Migration logic
+    }
 
     // -----------------------------------------------------------------------
     // Private helpers

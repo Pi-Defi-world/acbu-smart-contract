@@ -66,21 +66,15 @@ pub struct Escrow;
 #[contractimpl]
 impl Escrow {
     fn get_admin(env: &Env) -> Result<Address, soroban_sdk::Error> {
-        env.storage()
-            .instance()
-            .get(&DATA_KEY.admin)
-            .ok_or(soroban_sdk::Error::from_contract_error(
-                ERR_UNINITIALIZED_ADMIN,
-            ))
+        env.storage().instance().get(&DATA_KEY.admin).ok_or(
+            soroban_sdk::Error::from_contract_error(ERR_UNINITIALIZED_ADMIN),
+        )
     }
 
     fn get_acbu_token(env: &Env) -> Result<Address, soroban_sdk::Error> {
-        env.storage()
-            .instance()
-            .get(&DATA_KEY.acbu_token)
-            .ok_or(soroban_sdk::Error::from_contract_error(
-                ERR_UNINITIALIZED_ACBU_TOKEN,
-            ))
+        env.storage().instance().get(&DATA_KEY.acbu_token).ok_or(
+            soroban_sdk::Error::from_contract_error(ERR_UNINITIALIZED_ACBU_TOKEN),
+        )
     }
 
     /// Initialize the escrow contract
@@ -163,7 +157,9 @@ impl Escrow {
             .storage()
             .temporary()
             .get(&key)
-            .ok_or(soroban_sdk::Error::from_contract_error(ERR_ESCROW_NOT_FOUND))?;
+            .ok_or(soroban_sdk::Error::from_contract_error(
+                ERR_ESCROW_NOT_FOUND,
+            ))?;
         if stored_payer != payer {
             return Err(soroban_sdk::Error::from_contract_error(ERR_PAYER_MISMATCH));
         }
@@ -197,7 +193,9 @@ impl Escrow {
             .storage()
             .temporary()
             .get(&key)
-            .ok_or(soroban_sdk::Error::from_contract_error(ERR_ESCROW_NOT_FOUND))?;
+            .ok_or(soroban_sdk::Error::from_contract_error(
+                ERR_ESCROW_NOT_FOUND,
+            ))?;
 
         if stored_payer != payer {
             return Err(soroban_sdk::Error::from_contract_error(ERR_PAYER_MISMATCH));
