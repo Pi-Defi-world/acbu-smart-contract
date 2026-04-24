@@ -24,3 +24,14 @@ overflow-checks = true
 [profile.release-with-logs]
 inherits = "release"
 debug = true
+
+# ---------------------------------------------------------------------------
+# Workspace-wide lint policy — enforced by `cargo clippy` in CI.
+# ---------------------------------------------------------------------------
+[workspace.lints.rust]
+unused_imports    = "deny"   # the original hygiene issue; hard-fail in CI
+dead_code         = "warn"
+unused_variables  = "warn"
+
+[workspace.lints.clippy]
+all  = "warn"   # surface all default clippy lints across every crate
