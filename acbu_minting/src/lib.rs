@@ -5,8 +5,8 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_amount_after_fee, calculate_fee, CurrencyCode, MintEvent, BASIS_POINTS, CONTRACT_VERSION,
-    DECIMALS, DataKey as SharedDataKey, MAX_MINT_AMOUNT, MIN_MINT_AMOUNT,
+    calculate_amount_after_fee, calculate_fee, CurrencyCode, DataKey as SharedDataKey, MintEvent,
+    BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MAX_MINT_AMOUNT, MIN_MINT_AMOUNT,
 };
 
 mod shared {
@@ -125,7 +125,9 @@ impl MintingContract {
             .instance()
             .set(&DATA_KEY.max_mint_amount, &MAX_MINT_AMOUNT);
         env.storage().instance().set(&DATA_KEY.total_supply, &0i128);
-        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Mint ACBU from USDC deposit (unchanged reserve/oracle flow).
@@ -203,7 +205,7 @@ impl MintingContract {
 
         let fee = calculate_fee(usdc_amount, fee_rate);
 
-        let tx_id = SorobanString::from_str(&env, "mint_tx_static");
+        let tx_id = generate_unique_tx_id(&env, &recipient, acbu_amount, "mint_usdc");
         let mint_event = MintEvent {
             transaction_id: tx_id,
             user: recipient.clone(),
@@ -347,7 +349,7 @@ impl MintingContract {
             acbu_sac.mint(&treasury, &fee_acbu);
         }
 
-        let tx_id = SorobanString::from_str(&env, "mint_basket");
+        let tx_id = generate_unique_tx_id(&env, &recipient, net_mint, "mint_basket");
         let mint_event = MintEvent {
             transaction_id: tx_id,
             user: recipient.clone(),
@@ -360,7 +362,6 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
-        mark_proof_used(&env, &proof_id);
         acbu_amount
     }
 
@@ -464,8 +465,9 @@ impl MintingContract {
         acbu_sac.mint(&recipient, &acbu_amount);
 
         let fee = calculate_fee(usd_gross, fee_single);
+        let tx_id = generate_unique_tx_id(&env, &recipient, acbu_amount, "mint_single");
         let mint_event = MintEvent {
-            transaction_id: SorobanString::from_str(&env, "mint_single"),
+            transaction_id: tx_id,
             user: recipient.clone(),
             usdc_amount: usd_gross,
             acbu_amount,
@@ -731,7 +733,10 @@ impl MintingContract {
     }
 
     pub fn get_version(env: Env) -> u32 {
-        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&SharedDataKey::Version)
+            .unwrap_or(0)
     }
 
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
@@ -753,10 +758,25 @@ impl MintingContract {
             }
         }
 
-        env.storage().instance().set(&SharedDataKey::Version, &new_version);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &new_version);
     }
 }
 
 fn migrate_v0_to_v1(_env: Env) {
     // Migration logic
+}
+
+fn generate_unique_tx_id(env: &Env, user: &Address, amount: i128, prefix: &str) -> SorobanString {
+    let timestamp = env.ledger().timestamp();
+    let seq = env.ledger().sequence();
+    let mut hash: u64 = 0u64; 
+    hash = hash.wrapping_mul(31).wrapping_add(prefix.as_bytes().iter().fold(0u64, |h, &b| h.wrapping_mul(31).wrapping_add(b as u64)));
+    hash = hash.wrapping_mul(31).wrapping_add(user.as_val().get(0).unwrap_or(0) as u64));
+    hash = hash.wrapping_mul(31).wrapping_add((amount & 0xFFFFFFFF) as u64);
+    hash = hash.wrapping_mul(31).wrapping_add(timestamp as u64);
+    hash = hash.wrapping_mul(31).wrapping_add(seq as u64);
+    let id_str = format!("{}_{:x}", prefix, hash);
+    SorobanString::from_str(env, &id_str)
 }
