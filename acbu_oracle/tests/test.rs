@@ -162,9 +162,11 @@ fn test_outlier_detection() {
 
     client.update_rate(&validator, &ngn, &rate, &sources, &env.ledger().timestamp());
 
+    // raw_median([1000000, 1005000, 1350000]) = 1005000
+    // 1350000 deviates ~3432 bps > 300 bps → quarantined
+    // clean_sources = [1000000, 1005000], median = (1000000 + 1005000) / 2 = 1002500
     let stored_rate = client.get_rate(&ngn);
-    // Median of [1000000, 1005000, 1350000] is 1005000
-    assert_eq!(stored_rate, 1005000);
+    assert_eq!(stored_rate, 1002500);
 
     let events = env.events().all();
     let mut outlier_found = false;
@@ -183,9 +185,9 @@ fn test_outlier_detection() {
             } else if event_symbol == symbol_short!("outlier") {
                 let event_data: OutlierDetectionEvent = event.2.into_val(&env);
                 assert_eq!(event_data.currency, ngn.clone());
+                // median_rate in the event is the raw_median used as reference
                 assert_eq!(event_data.median_rate, 1005000);
                 assert_eq!(event_data.outlier_rate, 1350000);
-                // Deviation should be > 300 bps (3%)
                 assert!(event_data.deviation_bps > 300);
                 outlier_found = true;
             }
@@ -194,6 +196,103 @@ fn test_outlier_detection() {
 
     assert!(rate_update_found, "expected rate_upd event");
     assert!(outlier_found, "expected outlier detection event");
+}
+
+/// Acceptance check: a poisoned source must not be able to move the stored median.
+/// Four sources — three clean, one extreme attacker. After quarantine the stored
+/// rate must equal the clean-sources median and must be within OUTLIER_THRESHOLD_BPS
+/// of each clean source.
+#[test]
+fn test_outlier_source_cannot_move_median() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1_000_000);
+
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn.clone(), 10_000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
+
+    // Three honest sources clustered around 1_001_000; one attacker at 5_000_000.
+    let mut sources = Vec::new(&env);
+    sources.push_back(1_000_000i128);
+    sources.push_back(1_001_000i128);
+    sources.push_back(1_002_000i128);
+    sources.push_back(5_000_000i128); // poisoned source
+
+    client.update_rate(&validator, &ngn, &1_001_000i128, &sources, &env.ledger().timestamp());
+
+    let stored_rate = client.get_rate(&ngn);
+
+    // raw_median([1_000_000, 1_001_000, 1_002_000, 5_000_000]) = (1_001_000 + 1_002_000) / 2 = 1_001_500
+    // 5_000_000 deviates (5_000_000 - 1_001_500) / 1_001_500 * 10_000 ≈ 39_926 bps → quarantined
+    // clean = [1_000_000, 1_001_000, 1_002_000], median = 1_001_000
+    assert_eq!(stored_rate, 1_001_000, "poisoned source shifted the median");
+
+    // Confirm the attacker's event was emitted
+    let events = env.events().all();
+    let mut outlier_count = 0u32;
+    for event in events.iter() {
+        if event.0 != contract_id { continue; }
+        let topics = event.1;
+        if !topics.is_empty()
+            && Symbol::from_val(&env, &topics.get(0).unwrap()) == symbol_short!("outlier")
+        {
+            let event_data: OutlierDetectionEvent = event.2.into_val(&env);
+            assert_eq!(event_data.outlier_rate, 5_000_000);
+            outlier_count += 1;
+        }
+    }
+    assert_eq!(outlier_count, 1, "expected exactly one outlier event");
+}
+
+/// Edge case: when every submitted source is an outlier (extreme disagreement),
+/// the contract should not trap — it falls back to the raw median.
+#[test]
+fn test_all_sources_outlier_falls_back_to_raw_median() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1_000_000);
+
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn.clone(), 10_000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
+
+    // Two maximally-separated sources: both deviate > 300 bps from their average.
+    // raw_median = (500_000 + 2_000_000) / 2 = 1_250_000
+    // |500_000 - 1_250_000| / 1_250_000 * 10_000 = 6_000 bps > 300 → outlier
+    // |2_000_000 - 1_250_000| / 1_250_000 * 10_000 = 6_000 bps > 300 → outlier
+    // All filtered → fallback to raw_median = 1_250_000
+    let mut sources = Vec::new(&env);
+    sources.push_back(500_000i128);
+    sources.push_back(2_000_000i128);
+
+    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+
+    // Must not trap; fallback value is the raw median
+    let stored_rate = client.get_rate(&ngn);
+    assert_eq!(stored_rate, 1_250_000);
 }
 
 #[test]
