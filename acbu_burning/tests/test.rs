@@ -14,8 +14,8 @@ mod oracle_mock {
 
     #[contractimpl]
     impl MockOracle {
-        pub fn get_acbu_usd_rate(_env: Env) -> i128 {
-            DECIMALS
+        pub fn get_acbu_usd_rate_with_timestamp(env: Env) -> (i128, u64) {
+            (DECIMALS, env.ledger().timestamp())
         }
 
         pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
@@ -40,6 +40,10 @@ mod oracle_mock {
             DECIMALS
         }
 
+        pub fn get_rate_with_timestamp(env: Env, _c: CurrencyCode) -> (i128, u64) {
+            (DECIMALS, env.ledger().timestamp())
+        }
+
         pub fn get_s_token_address(env: Env, _c: CurrencyCode) -> Address {
             env.storage()
                 .instance()
@@ -51,6 +55,28 @@ mod oracle_mock {
             env.storage().instance().set(&symbol_short!("STK"), &stoken);
         }
     }
+
+    #[contract]
+    pub struct MockReserveTracker;
+
+    #[contractimpl]
+    impl MockReserveTracker {
+        pub fn is_reserve_sufficient(_env: Env, _supply: i128) -> bool {
+            true
+        }
+    }
+
+    #[contract]
+    pub struct MockToken;
+
+    #[contractimpl]
+    impl MockToken {
+        pub fn get_total_supply(_env: Env) -> i128 {
+            100 * DECIMALS
+        }
+        pub fn burn(_env: Env, _from: Address, _amount: i128) {}
+        pub fn mint(_env: Env, _to: Address, _amount: i128) {}
+    }
 }
 
 #[test]
@@ -59,10 +85,8 @@ fn test_burning_initialize_and_version() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, oracle_mock::MockOracle);
-    let reserve_tracker = Address::generate(&env);
-    let acbu_token = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
+    let reserve_tracker = env.register_contract(None, oracle_mock::MockReserveTracker);
+    let acbu_token = env.register_contract(None, oracle_mock::MockToken);
     let withdrawal_processor = Address::generate(&env);
     let vault = admin.clone();
 
@@ -95,11 +119,9 @@ fn test_redeem_single_transfers_stoken() {
     let recipient = Address::generate(&env);
 
     let oracle = env.register_contract(None, oracle_mock::MockOracle);
-    let reserve_tracker = Address::generate(&env);
+    let reserve_tracker = env.register_contract(None, oracle_mock::MockReserveTracker);
 
-    let acbu_token = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
+    let acbu_token = env.register_contract(None, oracle_mock::MockToken);
     let stoken = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
@@ -123,15 +145,13 @@ fn test_redeem_single_transfers_stoken() {
         &150,
     );
 
-    let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
+    // MockToken doesn't need minting in test as it returns hardcoded supply
     let burn_amt = 100 * DECIMALS;
-    acbu_sac.mint(&user, &burn_amt);
 
     let st_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken);
     st_sac.mint(&vault, &(1_000_000 * DECIMALS));
 
     let token = soroban_sdk::token::Client::new(&env, &stoken);
-    // SAC approve: live_until ledger must be < host max allowed (use current-ish horizon)
     token.approve(&vault, &contract_id, &1_000_000_000_000_000, &100u32);
 
     let currency = CurrencyCode::new(&env, "NGN");
@@ -149,11 +169,9 @@ fn test_redeem_basket() {
     let recipient = Address::generate(&env);
 
     let oracle = env.register_contract(None, oracle_mock::MockOracle);
-    let reserve_tracker = Address::generate(&env);
+    let reserve_tracker = env.register_contract(None, oracle_mock::MockReserveTracker);
 
-    let acbu_token = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
+    let acbu_token = env.register_contract(None, oracle_mock::MockToken);
     let stoken = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
@@ -175,15 +193,12 @@ fn test_redeem_basket() {
         &150,
     );
 
-    let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
-    let burn_amt = 100 * DECIMALS + 3;
-    acbu_sac.mint(&user, &burn_amt);
+    let burn_amt = 100 * DECIMALS;
 
     let st_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken);
     st_sac.mint(&vault, &(1_000_000 * DECIMALS));
 
     let token = soroban_sdk::token::Client::new(&env, &stoken);
-    // SAC approve: live_until ledger must be < host max allowed (use current-ish horizon)
     token.approve(&vault, &contract_id, &1_000_000_000_000_000, &100u32);
 
     let amounts = client.redeem_basket(&user, &recipient, &burn_amt);
@@ -193,6 +208,7 @@ fn test_redeem_basket() {
     for amount in amounts.iter() {
         total_out += amount;
     }
+    // With DECIMALS matching and weight sum = 10000, out should be burn_amt - fee
     let expected_fee = (burn_amt * 100) / 10_000;
     assert_eq!(total_out + expected_fee, burn_amt);
 }

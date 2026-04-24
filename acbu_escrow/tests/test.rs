@@ -376,8 +376,8 @@ fn test_unauthorized_release_fails() {
     let amount = 10_000_000i128;
 
     let acbu_token = env
-       .register_stellar_asset_contract_v2(admin.clone())
-       .address();
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
     env.mock_all_auths();
     token_admin.mint(&payer, &amount);
@@ -412,8 +412,8 @@ fn test_payer_can_release() {
     let amount = 12_500_000i128;
 
     let acbu_token = env
-       .register_stellar_asset_contract_v2(admin.clone())
-       .address();
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
     env.mock_all_auths();
     token_admin.mint(&payer, &amount);
@@ -446,7 +446,9 @@ fn test_release_missing_escrow_returns_not_found() {
 
     let admin = Address::generate(&env);
     let payer = Address::generate(&env);
-    let acbu_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let contract_id = env.register_contract(None, Escrow);
     let client = EscrowClient::new(&env, &contract_id);
@@ -464,7 +466,9 @@ fn test_refund_missing_escrow_returns_not_found() {
 
     let admin = Address::generate(&env);
     let payer = Address::generate(&env);
-    let acbu_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let contract_id = env.register_contract(None, Escrow);
     let client = EscrowClient::new(&env, &contract_id);

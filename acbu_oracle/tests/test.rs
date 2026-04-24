@@ -230,7 +230,13 @@ fn test_outlier_source_cannot_move_median() {
     sources.push_back(1_002_000i128);
     sources.push_back(5_000_000i128); // poisoned source
 
-    client.update_rate(&validator, &ngn, &1_001_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_001_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     let stored_rate = client.get_rate(&ngn);
 
@@ -243,7 +249,9 @@ fn test_outlier_source_cannot_move_median() {
     let events = env.events().all();
     let mut outlier_count = 0u32;
     for event in events.iter() {
-        if event.0 != contract_id { continue; }
+        if event.0 != contract_id {
+            continue;
+        }
         let topics = event.1;
         if !topics.is_empty()
             && Symbol::from_val(&env, &topics.get(0).unwrap()) == symbol_short!("outlier")
@@ -288,7 +296,13 @@ fn test_all_sources_outlier_falls_back_to_raw_median() {
     sources.push_back(500_000i128);
     sources.push_back(2_000_000i128);
 
-    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     // Must not trap; fallback value is the raw median
     let stored_rate = client.get_rate(&ngn);

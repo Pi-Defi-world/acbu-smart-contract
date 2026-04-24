@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger, LedgerInfo},
-    Address, Env, Map, Vec,
+    Address, Env, IntoVal, Map, Vec,
 };
 
 use crate::{OracleContract, OracleContractClient, ADMIN_TIMELOCK_SECONDS};

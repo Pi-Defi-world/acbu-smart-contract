@@ -130,19 +130,33 @@ impl OracleContract {
         }
 
         env.storage().instance().set(&DATA_KEY.admin, &admin);
-        env.storage().instance().set(&DATA_KEY.validators, &validators);
-        env.storage().instance().set(&DATA_KEY.min_signatures, &min_signatures);
-        env.storage().instance().set(&DATA_KEY.currencies, &currencies);
-        env.storage().instance().set(&DATA_KEY.basket_weights, &basket_weights);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.validators, &validators);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.min_signatures, &min_signatures);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.currencies, &currencies);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.basket_weights, &basket_weights);
 
         let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
-        env.storage().instance().set(&DATA_KEY.s_tokens, &s_tokens_empty);
-        env.storage().instance().set(&DATA_KEY.update_interval, &UPDATE_INTERVAL_SECONDS);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.s_tokens, &s_tokens_empty);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.update_interval, &UPDATE_INTERVAL_SECONDS);
 
         let rates: Map<CurrencyCode, RateData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.rates, &rates);
         env.storage().instance().set(&DATA_KEY.last_update, &0u64);
-        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -160,8 +174,12 @@ impl OracleContract {
         Self::check_admin(&env);
 
         let eligible_at = env.ledger().timestamp() + ADMIN_TIMELOCK_SECONDS;
-        env.storage().instance().set(&DATA_KEY.pending_admin, &new_admin);
-        env.storage().instance().set(&DATA_KEY.pending_admin_eligible_at, &eligible_at);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.pending_admin, &new_admin);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.pending_admin_eligible_at, &eligible_at);
 
         let current_admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         env.events().publish(
@@ -201,11 +219,15 @@ impl OracleContract {
         let old_admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
 
         // Commit the new admin
-        env.storage().instance().set(&DATA_KEY.admin, &pending_admin);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.admin, &pending_admin);
 
         // Clear pending state
         env.storage().instance().remove(&DATA_KEY.pending_admin);
-        env.storage().instance().remove(&DATA_KEY.pending_admin_eligible_at);
+        env.storage()
+            .instance()
+            .remove(&DATA_KEY.pending_admin_eligible_at);
 
         env.events().publish(
             (symbol_short!("adm_done"),),
@@ -232,7 +254,9 @@ impl OracleContract {
             .unwrap_or_else(|| panic!("No pending admin transfer to cancel"));
 
         env.storage().instance().remove(&DATA_KEY.pending_admin);
-        env.storage().instance().remove(&DATA_KEY.pending_admin_eligible_at);
+        env.storage()
+            .instance()
+            .remove(&DATA_KEY.pending_admin_eligible_at);
 
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         env.events().publish(
@@ -257,7 +281,9 @@ impl OracleContract {
 
     /// Ledger timestamp at which the pending admin may call `accept_admin`
     pub fn get_pending_admin_eligible_at(env: Env) -> Option<u64> {
-        env.storage().instance().get(&DATA_KEY.pending_admin_eligible_at)
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.pending_admin_eligible_at)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -362,7 +388,9 @@ impl OracleContract {
             .unwrap_or(Map::new(&env));
         rates.set(currency.clone(), rate_data);
         env.storage().instance().set(&DATA_KEY.rates, &rates);
-        env.storage().instance().set(&DATA_KEY.last_update, &current_time);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.last_update, &current_time);
 
         let event = RateUpdateEvent {
             currency: currency.clone(),
@@ -394,7 +422,9 @@ impl OracleContract {
             .unwrap_or(Map::new(&env));
         rates.set(currency, rate_data);
         env.storage().instance().set(&DATA_KEY.rates, &rates);
-        env.storage().instance().set(&DATA_KEY.last_update, &current_time);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.last_update, &current_time);
     }
 
     pub fn get_rate(env: Env, currency: CurrencyCode) -> i128 {
@@ -454,9 +484,15 @@ impl OracleContract {
             DECIMALS // Neutral rate if no weights
         };
 
-        (rate, if oldest_timestamp == u64::MAX { 0 } else { oldest_timestamp })
+        (
+            rate,
+            if oldest_timestamp == u64::MAX {
+                0
+            } else {
+                oldest_timestamp
+            },
+        )
     }
-
 
     /// Get ACBU/USD rate (basket-weighted)
     pub fn get_acbu_usd_rate(env: Env) -> i128 {
@@ -498,7 +534,10 @@ impl OracleContract {
     // ─────────────────────────────────────────────────────────────────────────
 
     pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
-        env.storage().instance().get(&DATA_KEY.currencies).unwrap_or(Vec::new(&env))
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.currencies)
+            .unwrap_or(Vec::new(&env))
     }
 
     pub fn get_basket_weight(env: Env, currency: CurrencyCode) -> i128 {
@@ -516,8 +555,12 @@ impl OracleContract {
         basket_weights: Map<CurrencyCode, i128>,
     ) {
         Self::check_admin(&env);
-        env.storage().instance().set(&DATA_KEY.currencies, &currencies);
-        env.storage().instance().set(&DATA_KEY.basket_weights, &basket_weights);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.currencies, &currencies);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.basket_weights, &basket_weights);
     }
 
     pub fn set_s_token_address(env: Env, currency: CurrencyCode, token_address: Address) {
@@ -558,13 +601,19 @@ impl OracleContract {
         }
         let mut new_validators = validators.clone();
         new_validators.push_back(validator);
-        env.storage().instance().set(&DATA_KEY.validators, &new_validators);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.validators, &new_validators);
     }
 
     pub fn remove_validator(env: Env, validator: Address) {
         Self::check_admin(&env);
         let validators: Vec<Address> = env.storage().instance().get(&DATA_KEY.validators).unwrap();
-        let min_sigs: u32 = env.storage().instance().get(&DATA_KEY.min_signatures).unwrap();
+        let min_sigs: u32 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.min_signatures)
+            .unwrap();
         if validators.len() <= min_sigs {
             panic!("Cannot remove validator: would violate minimum signatures");
         }
@@ -574,7 +623,9 @@ impl OracleContract {
                 new_validators.push_back(v.clone());
             }
         }
-        env.storage().instance().set(&DATA_KEY.validators, &new_validators);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.validators, &new_validators);
     }
 
     pub fn get_validators(env: Env) -> Vec<Address> {
@@ -582,7 +633,10 @@ impl OracleContract {
     }
 
     pub fn get_min_signatures(env: Env) -> u32 {
-        env.storage().instance().get(&DATA_KEY.min_signatures).unwrap()
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.min_signatures)
+            .unwrap()
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -590,7 +644,10 @@ impl OracleContract {
     // ─────────────────────────────────────────────────────────────────────────
 
     pub fn get_version(env: Env) -> u32 {
-        env.storage().instance().get(&SharedDataKey::Version).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&SharedDataKey::Version)
+            .unwrap_or(0)
     }
 
     pub fn migrate(env: Env) {
@@ -600,7 +657,9 @@ impl OracleContract {
         if stored_version < current_version {
             if stored_version < 2 {
                 let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
-                env.storage().instance().set(&DATA_KEY.s_tokens, &s_tokens_empty);
+                env.storage()
+                    .instance()
+                    .set(&DATA_KEY.s_tokens, &s_tokens_empty);
             }
             if stored_version < 3 {
                 let rates_empty: Map<CurrencyCode, RateData> = Map::new(&env);
@@ -610,23 +669,31 @@ impl OracleContract {
             if stored_version < 6 {
                 let currencies_empty: Vec<CurrencyCode> = Vec::new(&env);
                 let basket_weights_empty: Map<CurrencyCode, i128> = Map::new(&env);
-                env.storage().instance().set(&DATA_KEY.currencies, &currencies_empty);
-                env.storage().instance().set(&DATA_KEY.basket_weights, &basket_weights_empty);
+                env.storage()
+                    .instance()
+                    .set(&DATA_KEY.currencies, &currencies_empty);
+                env.storage()
+                    .instance()
+                    .set(&DATA_KEY.basket_weights, &basket_weights_empty);
 
                 let rates_empty: Map<CurrencyCode, RateData> = Map::new(&env);
                 env.storage().instance().set(&DATA_KEY.rates, &rates_empty);
                 env.storage().instance().set(&DATA_KEY.last_update, &0u64);
 
                 let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
-                env.storage().instance().set(&DATA_KEY.s_tokens, &s_tokens_empty);
+                env.storage()
+                    .instance()
+                    .set(&DATA_KEY.s_tokens, &s_tokens_empty);
             }
             // v9 migration: no data backfill needed — pending_admin keys
             // simply don't exist on upgraded contracts until a transfer is initiated.
-            env.storage().instance().set(&DATA_KEY.version, &current_version);
+            env.storage()
+                .instance()
+                .set(&DATA_KEY.version, &current_version);
         }
     }
 
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
 
@@ -645,7 +712,9 @@ impl OracleContract {
             }
         }
 
-        env.storage().instance().set(&SharedDataKey::Version, &new_version);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &new_version);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -694,3 +763,4 @@ impl OracleContract {
     }
 }
 mod tests;
+fn migrate_v0_to_v1(_env: Env) {}
