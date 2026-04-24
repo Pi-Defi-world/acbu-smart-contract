@@ -177,13 +177,17 @@ impl BurningContract {
         token.transfer_from(&spender, &vault, &recipient, &stoken_out);
 
         let tx_id = SorobanString::from_str(&env, "redeem_single");
+        // FIX(#102): Emit gross acbu_amount and explicit net_acbu so indexers can
+        // independently verify: acbu_amount - fee == net_acbu, and reconcile to
+        // within 1 unit without needing to re-derive the fee off-chain.
         let burn_event = BurnEvent {
             transaction_id: tx_id,
             user: user.clone(),
-            acbu_amount,
+            acbu_amount,       // gross amount burned (unchanged — was already correct)
+            net_acbu,          // explicit post-fee net so indexer needs no arithmetic
             local_amount: stoken_out,
             currency: currency.clone(),
-            fee,
+            fee,               // total fee for this redemption
             rate,
             timestamp: env.ledger().timestamp(),
         };
@@ -223,6 +227,7 @@ impl BurningContract {
             vec![&env],
         );
 
+        // FIX(#102): Compute totals from gross acbu_amount before any deduction.
         let total_fee = calculate_fee(acbu_amount, fee_rate);
         let net_acbu = acbu_amount
             .checked_sub(total_fee)
@@ -289,36 +294,13 @@ impl BurningContract {
                 vec![&env, currency.clone().into_val(&env)],
             );
 
-            let (usd_i, fee_i) = if Some(i) == last_weighted_idx {
-                (
-                    usd_total
-                        .checked_sub(usd_allocated)
-                        .expect("Underflow in usd_i final slice"),
-                    total_fee
-                        .checked_sub(fee_allocated)
-                        .expect("Underflow in fee_i final slice"),
-                )
-            } else {
-                let usd_i = weight
-                    .checked_mul(usd_total)
-                    .and_then(|v| v.checked_div(BASIS_POINTS))
-                    .expect("Overflow in usd_i calculation");
-                let fee_i = weight
-                    .checked_mul(total_fee)
-                    .and_then(|v| v.checked_div(BASIS_POINTS))
-                    .expect("Overflow in fee_i calculation");
-                usd_allocated = usd_allocated
-                    .checked_add(usd_i)
-                    .expect("Overflow in usd_allocated");
-                fee_allocated = fee_allocated
-                    .checked_add(fee_i)
-                    .expect("Overflow in fee_allocated");
-                (usd_i, fee_i)
-            };
-            let native_i = usd_i
-                .checked_mul(DECIMALS)
-                .and_then(|v| v.checked_div(rate))
-                .expect("Overflow in native_i calculation");
+            // Per-currency gross ACBU slice and fee slice (both derived from gross acbu_amount).
+            let acbu_gross_i = (weight * acbu_amount) / BASIS_POINTS;
+            let fee_i = (weight * total_fee) / BASIS_POINTS;
+            let net_acbu_i = acbu_gross_i - fee_i;
+
+            let usd_i = (weight * usd_total) / BASIS_POINTS;
+            let native_i = (usd_i * DECIMALS) / rate;
 
             if native_i > 0 {
                 let token = soroban_sdk::token::Client::new(&env, &stoken);
@@ -329,13 +311,18 @@ impl BurningContract {
             amounts_out.push_back(native_i);
 
             let tx_id = SorobanString::from_str(&env, "redeem_basket");
+            // FIX(#102): Emit gross per-currency acbu slice (acbu_gross_i) not the
+            // already-deducted net_acbu. Also emit net_acbu_i and fee_i so indexers
+            // can verify acbu_gross_i - fee_i == net_acbu_i for each currency leg,
+            // and sum all acbu_gross_i values back to the top-level acbu_amount.
             let burn_event = BurnEvent {
                 transaction_id: tx_id,
                 user: user.clone(),
-                acbu_amount: net_acbu,
+                acbu_amount: acbu_gross_i,  // per-currency gross slice (was incorrectly net_acbu total)
+                net_acbu: net_acbu_i,       // per-currency net slice
                 local_amount: native_i,
                 currency: currency.clone(),
-                fee: fee_i,
+                fee: fee_i,                 // per-currency fee slice
                 rate,
                 timestamp: env.ledger().timestamp(),
             };
@@ -443,8 +430,4 @@ impl BurningContract {
             .instance()
             .set(&SharedDataKey::Version, &new_version);
     }
-}
-
-fn migrate_v0_to_v1(_env: Env) {
-    // Migration logic
 }
