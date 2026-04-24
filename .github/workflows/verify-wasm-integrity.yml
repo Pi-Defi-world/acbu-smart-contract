@@ -125,6 +125,9 @@ jobs:
       - name: Build contracts
         run: cargo build --target wasm32-unknown-unknown --release
 
+      - name: Check Contract Budget
+        run: ./scripts/check_budget.sh
+
       - name: Verify build artifacts
         run: |
           echo "Verifying build artifacts..."
