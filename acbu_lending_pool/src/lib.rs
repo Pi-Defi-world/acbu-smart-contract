@@ -106,7 +106,7 @@ impl LendingPool {
             .persistent()
             .get(&DataKey::Balance(lender.clone()))
             .unwrap_or(0);
-        let new_balance = current_balance += amount;
+        let new_balance = current_balance + amount;
         env.storage()
             .persistent()
             .set(&DataKey::Balance(lender.clone()), &new_balance);
@@ -137,7 +137,7 @@ impl LendingPool {
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
         token.transfer(&env.current_contract_address(), &lender, &amount);
 
-        let new_balance = current_balance -= amount;
+        let new_balance = current_balance - amount;
         env.storage()
             .persistent()
             .set(&DataKey::Balance(lender.clone()), &new_balance);
@@ -163,12 +163,19 @@ impl LendingPool {
         borrower.require_auth();
         Self::check_not_paused(&env);
 
-        if amount <= 0 || collateral_amount <= 0 {
+        if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
         }
 
         let acbu_token: Address = env.storage().instance().get(&DataKey::AcbuToken).unwrap();
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
+        
+        // Check if contract has enough balance
+        let contract_balance = token.balance(&env.current_contract_address());
+        if contract_balance < amount {
+            env.panic_with_error(Error::InsufficientBalance);
+        }
+        
         token.transfer(&env.current_contract_address(), &borrower, &amount);
 
         let loan_data = LoanData {
@@ -212,7 +219,8 @@ impl LendingPool {
             .storage()
             .persistent()
             .get(&DataKey::Loan(loan_key.clone()))
-            .unwrap();
+            .ok_or_else(|| Error::NotFound)
+            .unwrap_or_else(|e| env.panic_with_error(e));
 
         if amount > loan_data.amount {
             env.panic_with_error(Error::InvalidAmount);
