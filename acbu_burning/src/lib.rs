@@ -199,9 +199,20 @@ impl BurningContract {
             env.panic_with_error(ContractError::InsufficientReserves);
         }
 
+        // C-038: The burn call requires `user` to have authorized this contract
+        // to burn on their behalf.  Soroban propagates the auth tree automatically
+        // when `user.require_auth()` is called above, but we document the
+        // dependency explicitly: the token contract will verify that the invoking
+        // contract (this contract's address) is in the auth tree for `user`.
         let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token);
         acbu_client.burn(&user, &acbu_amount);
 
+        // C-038: `transfer_from` uses this contract as the spender.  The vault
+        // must have pre-approved this contract address as an allowed spender for
+        // the S-token (via `approve`).  This is an explicit trust assumption:
+        //   vault → approve(burning_contract, stoken, allowance)
+        // If that approval is absent the call will revert with an auth error,
+        // which is the correct safe-fail behaviour.
         let token = soroban_sdk::token::Client::new(&env, &stoken);
         let spender = env.current_contract_address();
         token.transfer_from(&spender, &vault, &recipient, &stoken_out);
@@ -298,6 +309,11 @@ impl BurningContract {
             env.panic_with_error(ContractError::InsufficientReserves);
         }
 
+        // C-038: The burn call requires `user` to have authorized this contract
+        // to burn on their behalf.  Soroban propagates the auth tree automatically
+        // when `user.require_auth()` is called above, but we document the
+        // dependency explicitly: the token contract will verify that the invoking
+        // contract (this contract's address) is in the auth tree for `user`.
         let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token);
         acbu_client.burn(&user, &acbu_amount);
 
@@ -348,6 +364,12 @@ impl BurningContract {
             let native_i = (usd_i * DECIMALS) / rate;
 
             if native_i > 0 {
+                // C-038: `transfer_from` uses this contract as the spender.  The vault
+                // must have pre-approved this contract address as an allowed spender for
+                // each S-token (via `approve`).  This is an explicit trust assumption:
+                //   vault → approve(burning_contract, stoken, allowance)
+                // If that approval is absent the call will revert with an auth error,
+                // which is the correct safe-fail behaviour.
                 let token = soroban_sdk::token::Client::new(&env, &stoken);
                 let spender = env.current_contract_address();
                 token.transfer_from(&spender, &vault, &recipient, &native_i);
