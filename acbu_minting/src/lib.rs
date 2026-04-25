@@ -818,6 +818,7 @@ impl MintingContract {
     pub fn set_operator(env: Env, new_operator: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        Self::check_paused(&env);
         env.storage()
             .instance()
             .set(&DATA_KEY.operator, &new_operator);
@@ -826,6 +827,7 @@ impl MintingContract {
     pub fn sync_supply(env: Env, new_supply: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        Self::check_paused(&env);
         env.storage()
             .instance()
             .set(&DATA_KEY.total_supply, &new_supply);
@@ -853,6 +855,7 @@ impl MintingContract {
     pub fn set_fee_rate(env: Env, fee_rate_bps: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        Self::check_paused(&env);
         if !(0..=BASIS_POINTS).contains(&fee_rate_bps) {
             panic!("Invalid fee rate");
         }
@@ -864,6 +867,7 @@ impl MintingContract {
     pub fn set_fee_single(env: Env, fee_single_bps: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        Self::check_paused(&env);
         if !(0..=BASIS_POINTS).contains(&fee_single_bps) {
             panic!("Invalid fee rate");
         }
@@ -908,6 +912,7 @@ impl MintingContract {
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        Self::check_paused(&env);
 
         let current_version = Self::get_version(env.clone());
         if new_version <= current_version {
