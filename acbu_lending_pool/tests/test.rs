@@ -2,6 +2,7 @@
 
 use acbu_lending_pool::{LendingPool, LendingPoolClient};
 use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, Symbol};
+use shared::DECIMALS;
 // Add these imports for the lifecycle test
 use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
 
@@ -22,7 +23,7 @@ fn test_deposit_and_withdraw() {
     client.initialize(&admin, &acbu_token, &fee_rate);
 
     let lender = Address::generate(&env);
-    let amount = 10_000_000; // 1000 ACBU
+    let amount = DECIMALS; // 1000 ACBU
 
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &amount);
@@ -55,7 +56,7 @@ fn test_withdraw_more_than_balance_fails() {
     client.initialize(&admin, &acbu_token, &fee_rate);
 
     let lender = Address::generate(&env);
-    let amount = 10_000_000;
+    let amount = DECIMALS;
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &amount);
     client.deposit(&lender, &amount);
@@ -87,7 +88,7 @@ fn test_unauthorized_deposit_fails() {
 
     let lender = Address::generate(&env);
     let attacker = Address::generate(&env);
-    let amount: i128 = 10_000_000;
+    let amount: i128 = DECIMALS;
 
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &amount);
@@ -133,7 +134,7 @@ fn test_unauthorized_withdraw_fails() {
 
     let lender = Address::generate(&env);
     let attacker = Address::generate(&env);
-    let amount: i128 = 10_000_000;
+    let amount: i128 = DECIMALS;
 
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &amount);

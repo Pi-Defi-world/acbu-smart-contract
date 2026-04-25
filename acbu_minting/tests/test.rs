@@ -199,7 +199,7 @@ fn test_mint_from_usdc() {
     let usdc_client = soroban_sdk::token::Client::new(&env, &usdc_token_id);
     let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token_id);
 
-    let usdc_amount = 100 * 10_000_000;
+    let usdc_amount = 100 * DECIMALS;
     usdc_token_client.mint(&user, &usdc_amount);
 
     init_mint_client(
@@ -216,7 +216,7 @@ fn test_mint_from_usdc() {
         fee_single,
     );
 
-    let mint_amount = 50 * 10_000_000;
+    let mint_amount = 50 * DECIMALS;
     let acbu_minted = client.mint_from_usdc(&user, &mint_amount, &user);
 
     let expected_fee = 15_000_000;
@@ -224,7 +224,7 @@ fn test_mint_from_usdc() {
 
     assert_eq!(acbu_minted, expected_acbu);
     assert_eq!(acbu_client.balance(&user), expected_acbu);
-    assert_eq!(usdc_client.balance(&user), 50 * 10_000_000);
+    assert_eq!(usdc_client.balance(&user), 50 * DECIMALS);
     assert_eq!(client.get_total_supply(), expected_acbu);
 
     let events = env.events().all();
@@ -314,9 +314,9 @@ fn test_mint_insufficient_reserves() {
 
     let user = Address::generate(&env);
     let usdc_sac = soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token);
-    usdc_sac.mint(&user, &10_000_000);
+    usdc_sac.mint(&user, &DECIMALS);
 
-    client.mint_from_usdc(&user, &10_000_000, &user);
+    client.mint_from_usdc(&user, &DECIMALS, &user);
 }
 
 #[test]

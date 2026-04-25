@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use acbu_reserve_tracker::{ReserveTrackerContract, ReserveTrackerContractClient};
-use shared::CurrencyCode;
+use shared::{CurrencyCode, DECIMALS};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env,
@@ -26,8 +26,8 @@ fn verify_reserves_uses_passed_supply_not_contract_balance() {
     client.update_reserve(&admin, &ngn, &1_000_000_000, &100_000_000); // 10 USD @ 7 decimals
 
     // 10 USD reserves vs 10 ACBU supply (10 * 10^7) at 100% min ratio → sufficient
-    assert!(client.verify_reserves(&(10 * 10_000_000)));
+    assert!(client.verify_reserves(&(10 * DECIMALS)));
 
     // Same reserves vs double the supply → insufficient
-    assert!(!client.verify_reserves(&(20 * 10_000_000)));
+    assert!(!client.verify_reserves(&(20 * DECIMALS)));
 }
