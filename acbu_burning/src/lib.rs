@@ -1,12 +1,12 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env,
+    contract, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env,
     IntoVal, String as SorobanString, Symbol, Vec,
 };
 
 use shared::{
     calculate_fee, BurnEvent, ContractError, CurrencyCode, DataKey as SharedDataKey, BASIS_POINTS,
-    CONTRACT_VERSION, DECIMALS, MIN_BURN_AMOUNT, UPDATE_INTERVAL_SECONDS,
+    DECIMALS, MIN_BURN_AMOUNT, UPDATE_INTERVAL_SECONDS,
 };
 
 mod shared {
@@ -228,14 +228,35 @@ impl BurningContract {
     }
 
     /// Redeem ACBU for proportional Afreum S-tokens across the basket (lower fee tier).
+    ///
+    /// `recipients` must be non-empty and contain no duplicate addresses — one entry per
+    /// basket currency (in the same order returned by the oracle's `get_currencies`).
+    /// Duplicate or empty recipient lists are rejected to prevent double-payment in
+    /// off-chain mapping (C-057).
     pub fn redeem_basket(
         env: Env,
         user: Address,
-        recipient: Address,
+        recipients: Vec<Address>,
         acbu_amount: i128,
     ) -> Vec<i128> {
         Self::check_paused(&env);
         user.require_auth();
+
+        // C-057: Validate recipients list is non-empty.
+        if recipients.is_empty() {
+            env.panic_with_error(ContractError::InvalidRecipient);
+        }
+
+        // C-057: Enforce all recipient addresses are distinct.
+        // O(n²) is acceptable here — basket sizes are small (≤ ~20 currencies).
+        let rlen = recipients.len();
+        for i in 0..rlen {
+            for j in (i + 1)..rlen {
+                if recipients.get(i).unwrap() == recipients.get(j).unwrap() {
+                    env.panic_with_error(ContractError::InvalidRecipient);
+                }
+            }
+        }
 
         let min_amount: i128 = env
             .storage()
@@ -314,6 +335,14 @@ impl BurningContract {
         let mut amounts_out = Vec::new(&env);
         for i in 0..currencies.len() {
             let currency = currencies.get(i).unwrap();
+
+            // C-057: Each currency slot maps to the corresponding recipient by index.
+            // If the caller supplied fewer recipients than currencies, reject.
+            if i >= recipients.len() {
+                env.panic_with_error(ContractError::InvalidRecipient);
+            }
+            let recipient = recipients.get(i).unwrap();
+
             let weight: i128 = env.invoke_contract(
                 &oracle_addr,
                 &Symbol::new(&env, "get_basket_weight"),
