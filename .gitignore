@@ -1,9 +1,6 @@
 # Build artifacts
 /target/
 
-# Cargo lock (for libraries; keep for application crates if preferred)
-Cargo.lock
-
 # Editor/IDE files
 .idea/
 .vscode/
@@ -19,7 +16,6 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 target/
-Cargo.lock
 **/*.rs.bk
 .soroban/
 .stellar/
