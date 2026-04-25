@@ -119,11 +119,15 @@ impl Escrow {
 
         let acbu = Self::get_acbu_token(&env)?;
         let client = soroban_sdk::token::Client::new(&env, &acbu);
-        client.transfer(&payer, &env.current_contract_address(), &amount);
 
+        // CEI: write state before the external token transfer so any token-level
+        // callback observes the escrow as already recorded.
         env.storage()
             .temporary()
             .set(&key, &(payer.clone(), payee.clone(), amount));
+
+        client.transfer(&payer, &env.current_contract_address(), &amount);
+
         env.events().publish(
             (symbol_short!("esc_crtd"), escrow_id),
             EscrowCreatedEvent {
@@ -166,9 +170,13 @@ impl Escrow {
 
         let acbu = Self::get_acbu_token(&env)?;
         let client = soroban_sdk::token::Client::new(&env, &acbu);
+
+        // CEI: remove the escrow record before the external transfer so the
+        // escrow cannot be claimed a second time if the token executes a callback.
+        env.storage().temporary().remove(&key);
+
         client.transfer(&env.current_contract_address(), &payee, &amount);
 
-        env.storage().temporary().remove(&key);
         env.events().publish(
             (symbol_short!("esc_rel"), escrow_id),
             EscrowReleasedEvent {
@@ -203,9 +211,13 @@ impl Escrow {
 
         let acbu = Self::get_acbu_token(&env)?;
         let client = soroban_sdk::token::Client::new(&env, &acbu);
+
+        // CEI: remove the escrow record before the external transfer so the
+        // escrow cannot be refunded twice if the token executes a callback.
+        env.storage().temporary().remove(&key);
+
         client.transfer(&env.current_contract_address(), &payer, &amount);
 
-        env.storage().temporary().remove(&key);
         env.events().publish(
             (symbol_short!("esc_ref"), escrow_id),
             EscrowRefundedEvent {
