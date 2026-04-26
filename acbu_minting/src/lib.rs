@@ -204,6 +204,10 @@ impl MintingContract {
         let usdc_client = soroban_sdk::token::Client::new(&env, &usdc_token);
         usdc_client.transfer(&user, &env.current_contract_address(), &usdc_amount);
 
+        // C-038: `StellarAssetClient::mint` requires this contract to be the
+        // issuer or an authorized minter on the ACBU Stellar Asset Contract.
+        // The Soroban auth tree for this call is: admin/issuer → minting_contract.
+        // If this contract is not the SAC minter the call will revert.
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &acbu_amount);
 
@@ -344,6 +348,11 @@ impl MintingContract {
                 .and_then(|v| v.checked_div(rate))
                 .expect("Overflow in native_i calculation");
             if native_i > 0 {
+                // C-038: `transfer` pulls S-tokens from `user` into `vault`.
+                // This requires `user` to have pre-approved this contract as a
+                // spender (via `approve`) OR for the token to accept the
+                // invoking contract in the auth tree.  `user.require_auth()`
+                // above satisfies the Soroban auth propagation requirement.
                 let token = soroban_sdk::token::Client::new(&env, &stoken);
                 token.transfer(&user, &vault, &native_i);
             }
@@ -354,6 +363,10 @@ impl MintingContract {
             .instance()
             .set(&DATA_KEY.total_supply, &total_supply);
 
+        // C-038: `StellarAssetClient::mint` requires this contract to be the
+        // issuer or an authorized minter on the ACBU Stellar Asset Contract.
+        // The Soroban auth tree for this call is: admin/issuer → minting_contract.
+        // If this contract is not the SAC minter the call will revert.
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &net_mint);
         if fee_acbu > 0 {
@@ -689,27 +702,40 @@ impl MintingContract {
             .get(&DATA_KEY.total_supply)
             .unwrap_or(0);
 
-        let acbu_rate: i128 = env.invoke_contract(
+        // C-038: Use timestamped oracle reads and enforce freshness on every
+        // cross-contract rate call so a stale feed cannot be exploited to mint
+        // ACBU at an incorrect price.
+        let (acbu_rate, acbu_oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, "get_acbu_usd_rate"),
+            &Symbol::new(&env, "get_acbu_usd_rate_with_timestamp"),
             vec![&env],
         );
-        let rate: i128 = env.invoke_contract(
+        check_oracle_freshness(&env, acbu_oracle_timestamp, UPDATE_INTERVAL_SECONDS);
+
+        let (rate, rate_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, "get_rate"),
+            &Symbol::new(&env, "get_rate_with_timestamp"),
             vec![&env, currency.clone().into_val(&env)],
         );
+        check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS);
+
         if rate == 0 {
             panic!("Invalid oracle rate");
         }
 
-        let usd_gross = (fiat_amount * rate) / DECIMALS;
+        let usd_gross = fiat_amount
+            .checked_mul(rate)
+            .and_then(|v| v.checked_div(DECIMALS))
+            .expect("Overflow in usd_gross calculation");
         if usd_gross < min_amount || usd_gross > max_amount {
             panic!("Invalid mint amount");
         }
 
         let usd_after_fee = calculate_amount_after_fee(usd_gross, fee_rate);
-        let acbu_amount = (usd_after_fee * DECIMALS) / acbu_rate;
+        let acbu_amount = usd_after_fee
+            .checked_mul(DECIMALS)
+            .and_then(|v| v.checked_div(acbu_rate))
+            .expect("Overflow in acbu amount calculation");
 
         let projected_supply = total_supply + acbu_amount;
         let reserve_ok: bool = env.invoke_contract(
