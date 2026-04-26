@@ -4,9 +4,9 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_deviation, median, CurrencyCode, OutlierDetectionEvent, RateData, RateUpdateEvent,
-    BASIS_POINTS, CONTRACT_VERSION, DataKey as SharedDataKey, DECIMALS, EMERGENCY_THRESHOLD_BPS,
-    OUTLIER_THRESHOLD_BPS, STALE_RATE_MAX_LEDGERS, UPDATE_INTERVAL_SECONDS,
+    calculate_deviation, median, CONTRACT_VERSION, CurrencyCode, DataKey as SharedDataKey, OutlierDetectionEvent, RateData, RateUpdateEvent,
+    BASIS_POINTS, DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, STALE_RATE_MAX_LEDGERS,
+    UPDATE_INTERVAL_SECONDS,
 };
 
 mod shared {

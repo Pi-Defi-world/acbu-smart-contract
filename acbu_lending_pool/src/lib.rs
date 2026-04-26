@@ -113,6 +113,8 @@ impl LendingPool {
     pub fn withdraw(env: Env, lender: Address, amount: i128) {
         lender.require_auth();
 
+        Self::check_not_paused(&env);
+
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
         }
@@ -137,6 +139,7 @@ impl LendingPool {
 
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         Self::check_admin(&env);
+        Self::check_not_paused(&env);
 
         let current_version = env
             .storage()

@@ -444,6 +444,7 @@ impl BurningContract {
     /// Set basket redemption fee (admin only)
     pub fn set_fee_rate(env: Env, fee_rate_bps: i128) {
         Self::check_admin(&env);
+        Self::check_paused(&env);
         if !(0..=BASIS_POINTS).contains(&fee_rate_bps) {
             env.panic_with_error(ContractError::InvalidRate);
         }
@@ -454,6 +455,7 @@ impl BurningContract {
 
     pub fn set_fee_single_redeem(env: Env, fee_bps: i128) {
         Self::check_admin(&env);
+        Self::check_paused(&env);
         if !(0..=BASIS_POINTS).contains(&fee_bps) {
             env.panic_with_error(ContractError::InvalidRate);
         }
@@ -506,6 +508,7 @@ impl BurningContract {
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        Self::check_paused(&env);
 
         let current_version = Self::version(env.clone());
         if new_version <= current_version {

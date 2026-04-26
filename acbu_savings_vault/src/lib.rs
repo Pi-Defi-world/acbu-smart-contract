@@ -408,6 +408,10 @@ impl SavingsVault {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
 
+        if Self::is_paused(&env) {
+            env.panic_with_error(Error::Paused);
+        }
+
         let current_version = env
             .storage()
             .instance()

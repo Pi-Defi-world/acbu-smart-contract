@@ -273,6 +273,14 @@ impl Escrow {
             .get(&DATA_KEY.admin)
             .expect("admin not set — contract not initialized");
         admin.require_auth();
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.paused)
+            .unwrap_or(false);
+        if paused {
+            panic!("Contract is paused");
+        }
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 }
