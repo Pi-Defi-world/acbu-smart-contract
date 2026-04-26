@@ -57,7 +57,8 @@ pub struct BurningContract;
 #[contractimpl]
 impl BurningContract {
     /// Initialize the burning contract.
-    /// `vault` holds Afreum S-tokens (must have approved this contract for `transfer_from`).
+    /// `vault` holds Afreum S-tokens. Redemption flows use a pull model:
+    /// the vault must approve this contract for `transfer_from` on each S-token.
     /// `fee_rate_bps` applies to full basket redemption; `fee_single_redeem_bps` to single-currency payout (typically higher).
     pub fn initialize(
         env: Env,
@@ -204,6 +205,8 @@ impl BurningContract {
 
         let token = soroban_sdk::token::Client::new(&env, &stoken);
         let spender = env.current_contract_address();
+        // C-056: This redemption flow pulls the S-token from the configured
+        // vault using the vault's allowance for this contract.
         token.transfer_from(&spender, &vault, &recipient, &stoken_out);
 
         let tx_id = SorobanString::from_str(&env, "redeem_single");
@@ -350,6 +353,9 @@ impl BurningContract {
             if native_i > 0 {
                 let token = soroban_sdk::token::Client::new(&env, &stoken);
                 let spender = env.current_contract_address();
+                // C-056: Basket redemption pulls each S-token leg from the
+                // configured vault via allowance, so the vault must grant this
+                // contract sufficient transfer_from approval.
                 token.transfer_from(&spender, &vault, &recipient, &native_i);
             }
 

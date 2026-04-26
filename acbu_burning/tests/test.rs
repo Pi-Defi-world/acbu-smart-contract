@@ -160,6 +160,87 @@ fn test_redeem_single_transfers_stoken() {
 }
 
 #[test]
+#[should_panic]
+fn test_redeem_single_requires_vault_allowance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let oracle = env.register_contract(None, oracle_mock::MockOracle);
+    let reserve_tracker = env.register_contract(None, oracle_mock::MockReserveTracker);
+
+    let acbu_token = env.register_contract(None, oracle_mock::MockToken);
+    let stoken = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken);
+
+    let contract_id = env.register_contract(None, BurningContract);
+    let client = BurningContractClient::new(&env, &contract_id);
+
+    let vault = admin.clone();
+    let withdrawal_processor = Address::generate(&env);
+
+    client.initialize(
+        &admin,
+        &oracle,
+        &reserve_tracker,
+        &acbu_token,
+        &withdrawal_processor,
+        &vault,
+        &300,
+        &150,
+    );
+
+    let burn_amt = 100 * DECIMALS;
+    let currency = CurrencyCode::new(&env, "NGN");
+    client.redeem_single(&user, &recipient, &burn_amt, &currency);
+}
+
+#[test]
+#[should_panic]
+fn test_redeem_basket_requires_vault_allowance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let oracle = env.register_contract(None, oracle_mock::MockOracle);
+    let reserve_tracker = env.register_contract(None, oracle_mock::MockReserveTracker);
+
+    let acbu_token = env.register_contract(None, oracle_mock::MockToken);
+    let stoken = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken);
+
+    let contract_id = env.register_contract(None, BurningContract);
+    let client = BurningContractClient::new(&env, &contract_id);
+
+    let vault = admin.clone();
+    client.initialize(
+        &admin,
+        &oracle,
+        &reserve_tracker,
+        &acbu_token,
+        &Address::generate(&env),
+        &vault,
+        &100,
+        &150,
+    );
+
+    let burn_amt = 100 * DECIMALS;
+    client.redeem_basket(&user, &recipient, &burn_amt);
+}
+
+#[test]
 fn test_redeem_basket() {
     let env = Env::default();
     env.mock_all_auths();

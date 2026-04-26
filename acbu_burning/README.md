@@ -56,6 +56,12 @@ Check if contract is paused.
 - **Admin functions:** Admin only
 - **Withdrawal limits:** Enforced per currency
 
+## Token transfer model
+
+- `redeem_single` and `redeem_basket` use a pull model for S-token redemption.
+- The configured `vault` address must grant this contract allowance via `approve` on the underlying S-token contracts.
+- The contract then consumes that allowance with `transfer_from` to move S-tokens from the vault to the recipient.
+
 ## Events
 
 ### BurnEvent
