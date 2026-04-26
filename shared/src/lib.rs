@@ -8,6 +8,74 @@ pub enum DataKey {
     Version,
 }
 
+// ---------------------------------------------------------------------------
+// C-043 — Emergency multisig for admin operations
+//
+// These shared types are used by the `acbu_multisig` contract and referenced
+// by every contract that delegates admin authority to a multisig address.
+//
+// Design:
+//   • A separate `MultisigContract` holds the signer list and threshold.
+//   • Each protected contract stores the multisig contract address as its
+//     "admin".  Admin-only functions call `admin.require_auth()` as before —
+//     Soroban's auth tree propagates the M-of-N approval automatically when
+//     the multisig contract is the invoker.
+//   • The multisig contract exposes `propose` / `approve` / `execute` so that
+//     M signers must independently authorise before any admin action fires.
+// ---------------------------------------------------------------------------
+
+/// On-chain proposal stored inside the multisig contract.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminProposal {
+    /// Arbitrary tag identifying the intended action (e.g. "pause", "upgrade").
+    pub action_tag: SorobanString,
+    /// Addresses that have already approved this proposal.
+    pub approvals: Vec<Address>,
+    /// Whether the proposal has been executed.
+    pub executed: bool,
+    /// Ledger timestamp after which the proposal expires and can no longer be executed.
+    pub expires_at: u64,
+}
+
+/// Multisig configuration stored inside the multisig contract.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MultisigConfig {
+    /// Ordered list of authorised signers.
+    pub signers: Vec<Address>,
+    /// Minimum number of approvals required to execute a proposal.
+    pub threshold: u32,
+}
+
+/// Event emitted when a new proposal is created.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalCreatedEvent {
+    pub proposal_id: u64,
+    pub proposer: Address,
+    pub action_tag: SorobanString,
+    pub expires_at: u64,
+}
+
+/// Event emitted when a signer approves a proposal.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalApprovedEvent {
+    pub proposal_id: u64,
+    pub approver: Address,
+    pub approval_count: u32,
+}
+
+/// Event emitted when a proposal reaches threshold and is executed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalExecutedEvent {
+    pub proposal_id: u64,
+    pub action_tag: SorobanString,
+    pub executed_by: Address,
+}
+
 pub const CONTRACT_VERSION: u32 = 1;
 
 /// Currency code type (e.g., "NGN", "KES", "RWF")
