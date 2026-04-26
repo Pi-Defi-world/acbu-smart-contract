@@ -167,6 +167,12 @@ impl LendingPool {
             env.panic_with_error(Error::InvalidAmount);
         }
 
+        let loan_key = LoanId(borrower.clone(), loan_id);
+        if env.storage().persistent().has(&DataKey::Loan(loan_key.clone())) {
+            env.panic_with_error(Error::InvalidState);
+        }
+
+
         let acbu_token: Address = env.storage().instance().get(&DataKey::AcbuToken).unwrap();
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
         
@@ -176,6 +182,8 @@ impl LendingPool {
             env.panic_with_error(Error::InsufficientBalance);
         }
         
+        // Pull collateral in BEFORE paying out the loan principal.
+        token.transfer(&borrower, &env.current_contract_address(), &collateral_amount);
         token.transfer(&env.current_contract_address(), &borrower, &amount);
 
         let loan_data = LoanData {
@@ -184,7 +192,7 @@ impl LendingPool {
             collateral_amount,
             start_timestamp: env.ledger().timestamp(),
         };
-        let loan_key = LoanId(borrower.clone(), loan_id);
+        
         env.storage()
             .persistent()
             .set(&DataKey::Loan(loan_key), &loan_data);
