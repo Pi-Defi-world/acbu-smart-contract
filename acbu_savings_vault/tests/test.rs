@@ -29,7 +29,7 @@ fn test_withdraw_after_term_has_correct_30day_yield() {
     let yield_rate = 1_000; // 10% APR
     client.initialize(&admin, &acbu_token, &fee_rate, &yield_rate);
 
-    let deposit_amount = 10_000_000i128;
+    let deposit_amount = DECIMALS;
     let term_seconds = 30 * 24 * 3600u64; // 2_592_000 seconds
 
     // Expected: 10M * 1000 bps * 2_592_000 / (10000 * 31_536_000) = 82_191
@@ -93,7 +93,7 @@ fn test_withdraw_after_one_year_has_positive_yield_and_event_value() {
     let yield_rate = 1_000; // 10% APR
     client.initialize(&admin, &acbu_token, &fee_rate, &yield_rate);
 
-    let deposit_amount = 10_000_000;
+    let deposit_amount = DECIMALS;
     let expected_fee = 300_000;
     // Base everything on net
     let net_deposit = 9_700_000;
@@ -208,7 +208,7 @@ fn test_early_withdrawal_is_rejected() {
 
     client.initialize(&admin, &acbu_token, &300, &1_000);
 
-    let deposit_amount = 10_000_000;
+    let deposit_amount = DECIMALS;
 
     let net_deposit = 9_700_000;
     let term_seconds: u64 = 30 * 24 * 3600; // 30 days
@@ -250,7 +250,7 @@ fn test_withdraw_at_exact_term_boundary_succeeds() {
     let yield_rate = 0i128;
     client.initialize(&admin, &acbu_token, &fee_rate, &yield_rate);
 
-    let deposit_amount = 10_000_000i128;
+    let deposit_amount = DECIMALS;
     let term_seconds: u64 = 60 * 60; // 1 hour
 
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
@@ -327,7 +327,7 @@ fn test_deposit_fee_reflected_in_balance() {
     let yield_rate = 0;
     client.initialize(&admin, &acbu_token, &fee_rate, &yield_rate);
 
-    let gross_deposit = 10_000_000i128;
+    let gross_deposit = DECIMALS;
     let expected_fee = 300_000i128;
     let expected_net = 9_700_000i128;
     let term_seconds = 3600u64;
@@ -362,9 +362,9 @@ fn test_deposit_event_has_fee_fields() {
 
     client.initialize(&admin, &acbu_token, &300, &0);
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
-    token_admin.mint(&user, &10_000_000);
+    token_admin.mint(&user, &DECIMALS);
 
-    client.deposit(&user, &10_000_000, &3600);
+    client.deposit(&user, &DECIMALS, &3600);
 
     let events = env.events().all();
     let deposit_event = events
@@ -377,7 +377,7 @@ fn test_deposit_event_has_fee_fields() {
         .unwrap();
     let deposit_event: DepositEvent = deposit_event.2.into_val(&env);
 
-    assert_eq!(deposit_event.gross_amount, 10_000_000);
+    assert_eq!(deposit_event.gross_amount, DECIMALS);
     assert_eq!(deposit_event.fee_amount, 300_000);
     assert_eq!(deposit_event.net_amount, 9_700_000);
 }

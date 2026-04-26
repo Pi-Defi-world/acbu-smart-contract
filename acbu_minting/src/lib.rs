@@ -204,6 +204,10 @@ impl MintingContract {
         let usdc_client = soroban_sdk::token::Client::new(&env, &usdc_token);
         usdc_client.transfer(&user, &env.current_contract_address(), &usdc_amount);
 
+        // C-038: `StellarAssetClient::mint` requires this contract to be the
+        // issuer or an authorized minter on the ACBU Stellar Asset Contract.
+        // The Soroban auth tree for this call is: admin/issuer → minting_contract.
+        // If this contract is not the SAC minter the call will revert.
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &acbu_amount);
 
@@ -344,6 +348,11 @@ impl MintingContract {
                 .and_then(|v| v.checked_div(rate))
                 .expect("Overflow in native_i calculation");
             if native_i > 0 {
+                // C-038: `transfer` pulls S-tokens from `user` into `vault`.
+                // This requires `user` to have pre-approved this contract as a
+                // spender (via `approve`) OR for the token to accept the
+                // invoking contract in the auth tree.  `user.require_auth()`
+                // above satisfies the Soroban auth propagation requirement.
                 let token = soroban_sdk::token::Client::new(&env, &stoken);
                 token.transfer(&user, &vault, &native_i);
             }
@@ -354,6 +363,10 @@ impl MintingContract {
             .instance()
             .set(&DATA_KEY.total_supply, &total_supply);
 
+        // C-038: `StellarAssetClient::mint` requires this contract to be the
+        // issuer or an authorized minter on the ACBU Stellar Asset Contract.
+        // The Soroban auth tree for this call is: admin/issuer → minting_contract.
+        // If this contract is not the SAC minter the call will revert.
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &net_mint);
         if fee_acbu > 0 {
@@ -646,10 +659,9 @@ impl MintingContract {
         }
         operator.require_auth();
 
-        // Validate fintech_tx_id is not empty
-        if fintech_tx_id.len() == 0 {
-            panic!("fintech_tx_id cannot be empty");
-        }
+        // C-039: Strict input validation — enforce length bounds and charset
+        // before touching any storage, so garbage IDs are rejected cheaply.
+        validate_fintech_tx_id(&env, &fintech_tx_id);
 
         // Check if fintech_tx_id has already been processed
         let mut processed_ids: soroban_sdk::Map<SorobanString, bool> = env
@@ -689,27 +701,40 @@ impl MintingContract {
             .get(&DATA_KEY.total_supply)
             .unwrap_or(0);
 
-        let acbu_rate: i128 = env.invoke_contract(
+        // C-038: Use timestamped oracle reads and enforce freshness on every
+        // cross-contract rate call so a stale feed cannot be exploited to mint
+        // ACBU at an incorrect price.
+        let (acbu_rate, acbu_oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, "get_acbu_usd_rate"),
+            &Symbol::new(&env, "get_acbu_usd_rate_with_timestamp"),
             vec![&env],
         );
-        let rate: i128 = env.invoke_contract(
+        check_oracle_freshness(&env, acbu_oracle_timestamp, UPDATE_INTERVAL_SECONDS);
+
+        let (rate, rate_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, "get_rate"),
+            &Symbol::new(&env, "get_rate_with_timestamp"),
             vec![&env, currency.clone().into_val(&env)],
         );
+        check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS);
+
         if rate == 0 {
             panic!("Invalid oracle rate");
         }
 
-        let usd_gross = (fiat_amount * rate) / DECIMALS;
+        let usd_gross = fiat_amount
+            .checked_mul(rate)
+            .and_then(|v| v.checked_div(DECIMALS))
+            .expect("Overflow in usd_gross calculation");
         if usd_gross < min_amount || usd_gross > max_amount {
             panic!("Invalid mint amount");
         }
 
         let usd_after_fee = calculate_amount_after_fee(usd_gross, fee_rate);
-        let acbu_amount = (usd_after_fee * DECIMALS) / acbu_rate;
+        let acbu_amount = usd_after_fee
+            .checked_mul(DECIMALS)
+            .and_then(|v| v.checked_div(acbu_rate))
+            .expect("Overflow in acbu amount calculation");
 
         let projected_supply = total_supply + acbu_amount;
         let reserve_ok: bool = env.invoke_contract(
@@ -981,3 +1006,58 @@ fn mark_proof_used(env: &Env, proof_id: &SorobanString) {
         .set(&(symbol_short!("PRF_SET"), proof_id.clone()), &true);
 }
 fn migrate_v0_to_v1(_env: Env) {}
+
+// ---------------------------------------------------------------------------
+// C-039: fintech_tx_id validation
+//
+// Rules enforced at the contract boundary:
+//   • Length: 8 – 64 characters (inclusive).
+//     - Minimum 8 prevents trivially short IDs that carry no entropy.
+//     - Maximum 64 caps storage cost and prevents DoS via huge strings.
+//   • Charset: ASCII alphanumeric (A-Z, a-z, 0-9), hyphen (-), underscore (_).
+//     Spaces, control characters, and non-ASCII bytes are all rejected.
+//     This matches the character set used by common fintech transaction ID
+//     schemes (UUIDs, Flutterwave, Paystack, etc.) and is safe for indexers.
+//
+// Panics with a descriptive message so the caller knows exactly which rule
+// was violated.
+// ---------------------------------------------------------------------------
+
+/// Minimum allowed length for a `fintech_tx_id`.
+const FINTECH_TX_ID_MIN_LEN: u32 = 8;
+/// Maximum allowed length for a `fintech_tx_id`.
+const FINTECH_TX_ID_MAX_LEN: u32 = 64;
+
+/// Validate a `fintech_tx_id` string against length and charset rules.
+///
+/// Panics if any rule is violated.
+fn validate_fintech_tx_id(env: &Env, id: &SorobanString) {
+    let len = id.len();
+
+    if len == 0 {
+        panic!("fintech_tx_id cannot be empty");
+    }
+    if len < FINTECH_TX_ID_MIN_LEN {
+        panic!("fintech_tx_id too short: minimum 8 characters");
+    }
+    if len > FINTECH_TX_ID_MAX_LEN {
+        panic!("fintech_tx_id too long: maximum 64 characters");
+    }
+
+    // Validate charset: ASCII alphanumeric, hyphen, or underscore only.
+    // Copy into a fixed-size stack buffer (max 64 bytes, enforced above).
+    // FINTECH_TX_ID_MAX_LEN is 64, so this buffer is always large enough.
+    let mut buf = [0u8; 64];
+    let slice = &mut buf[..len as usize];
+    id.copy_into_slice(slice);
+
+    for &b in slice.iter() {
+        let valid = matches!(b,
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_'
+        );
+        if !valid {
+            panic!("fintech_tx_id contains invalid character: only alphanumeric, hyphen, and underscore are allowed");
+        }
+    }
+    let _ = env; // env kept in signature for future on-chain logging
+}
