@@ -5,8 +5,8 @@ use soroban_sdk::{
 
 use shared::{
     calculate_deviation, median, CurrencyCode, OutlierDetectionEvent, RateData, RateUpdateEvent,
-    BASIS_POINTS, DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, STALE_RATE_MAX_LEDGERS,
-    UPDATE_INTERVAL_SECONDS,
+    BASIS_POINTS, CONTRACT_VERSION, DataKey as SharedDataKey, DECIMALS, EMERGENCY_THRESHOLD_BPS,
+    OUTLIER_THRESHOLD_BPS, STALE_RATE_MAX_LEDGERS, UPDATE_INTERVAL_SECONDS,
 };
 
 mod shared {
@@ -17,6 +17,9 @@ mod shared {
 /// How long the pending admin must wait before they can claim ownership.
 /// 24 hours gives the current admin time to cancel a mistaken/malicious transfer.
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
+
+/// Minimum number of oracle source feeds required to derive a quorum-based rate.
+const MIN_ORACLE_SOURCE_FEEDS: u32 = 3;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -332,6 +335,10 @@ impl OracleContract {
             if !allow_update && current_time < existing_rate.timestamp + update_interval {
                 panic!("Update interval not met");
             }
+        }
+
+        if sources.len() > 0 && sources.len() < MIN_ORACLE_SOURCE_FEEDS {
+            panic!("Insufficient oracle sources");
         }
 
         // Pass 1: compute reference median from all sources to establish a baseline.
