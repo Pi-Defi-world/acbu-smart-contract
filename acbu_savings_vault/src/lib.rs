@@ -204,12 +204,8 @@ impl SavingsVault {
         let token = soroban_sdk::token::Client::new(&env, &acbu);
         let vault_addr = env.current_contract_address();
 
-        // Transfer the net amount to the vault and the fee to the admin
-        token.transfer(&user, &vault_addr, &net_amount);
-        if fee_amount > 0 {
-            token.transfer(&user, &admin, &fee_amount);
-        }
-
+        // CEI: record the deposit lot before the external token transfers so any
+        // token-level callback sees the new deposit as already committed.
         let key = (DEPOSIT_KEY, user.clone(), term_seconds);
         let mut lots: Vec<DepositLot> = env
             .storage()
@@ -224,6 +220,12 @@ impl SavingsVault {
         });
 
         env.storage().temporary().set(&key, &lots);
+
+        // Transfer the net amount to the vault and the fee to the admin.
+        token.transfer(&user, &vault_addr, &net_amount);
+        if fee_amount > 0 {
+            token.transfer(&user, &admin, &fee_amount);
+        }
 
         env.events().publish(
             (symbol_short!("Deposit"), user.clone()),

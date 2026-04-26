@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use acbu_reserve_tracker::{ReserveTrackerContract, ReserveTrackerContractClient};
-use shared::CurrencyCode;
+use shared::{CurrencyCode, DECIMALS};
 use soroban_sdk::{
     contract, contractimpl,
     testutils::{Address as _, Ledger},
