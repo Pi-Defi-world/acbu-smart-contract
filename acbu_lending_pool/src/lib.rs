@@ -106,7 +106,9 @@ impl LendingPool {
             .persistent()
             .get(&DataKey::Balance(lender.clone()))
             .unwrap_or(0);
-        let new_balance = current_balance + amount;
+        let new_balance = current_balance
+            .checked_add(amount)
+            .unwrap_or_else(|| env.panic_with_error(Error::InvalidAmount));
         env.storage()
             .persistent()
             .set(&DataKey::Balance(lender.clone()), &new_balance);
@@ -137,7 +139,9 @@ impl LendingPool {
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
         token.transfer(&env.current_contract_address(), &lender, &amount);
 
-        let new_balance = current_balance - amount;
+        let new_balance = current_balance
+            .checked_sub(amount)
+            .unwrap_or_else(|| env.panic_with_error(Error::InsufficientBalance));
         env.storage()
             .persistent()
             .set(&DataKey::Balance(lender.clone()), &new_balance);
