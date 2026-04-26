@@ -244,6 +244,14 @@ impl LendingPool {
 
         loan_data.amount -= amount;
         if loan_data.amount == 0 {
+            // Return collateral on full repayment.
+            if loan_data.collateral_amount > 0 {
+                token.transfer(
+                    &env.current_contract_address(),
+                    &borrower,
+                    &loan_data.collateral_amount,
+                );
+            }
             env.storage().persistent().remove(&DataKey::Loan(loan_key));
         } else {
             env.storage()
