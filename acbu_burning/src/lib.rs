@@ -1,12 +1,12 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env,
+    contract, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env,
     IntoVal, String as SorobanString, Symbol, Vec,
 };
 
 use shared::{
     calculate_fee, BurnEvent, ContractError, CurrencyCode, DataKey as SharedDataKey, BASIS_POINTS,
-    CONTRACT_VERSION, DECIMALS, MIN_BURN_AMOUNT, UPDATE_INTERVAL_SECONDS,
+    DECIMALS, MIN_BURN_AMOUNT, UPDATE_INTERVAL_SECONDS,
 };
 
 mod shared {
@@ -199,9 +199,20 @@ impl BurningContract {
             env.panic_with_error(ContractError::InsufficientReserves);
         }
 
+        // C-038: The burn call requires `user` to have authorized this contract
+        // to burn on their behalf.  Soroban propagates the auth tree automatically
+        // when `user.require_auth()` is called above, but we document the
+        // dependency explicitly: the token contract will verify that the invoking
+        // contract (this contract's address) is in the auth tree for `user`.
         let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token);
         acbu_client.burn(&user, &acbu_amount);
 
+        // C-038: `transfer_from` uses this contract as the spender.  The vault
+        // must have pre-approved this contract address as an allowed spender for
+        // the S-token (via `approve`).  This is an explicit trust assumption:
+        //   vault → approve(burning_contract, stoken, allowance)
+        // If that approval is absent the call will revert with an auth error,
+        // which is the correct safe-fail behaviour.
         let token = soroban_sdk::token::Client::new(&env, &stoken);
         let spender = env.current_contract_address();
         token.transfer_from(&spender, &vault, &recipient, &stoken_out);
@@ -228,14 +239,35 @@ impl BurningContract {
     }
 
     /// Redeem ACBU for proportional Afreum S-tokens across the basket (lower fee tier).
+    ///
+    /// `recipients` must be non-empty and contain no duplicate addresses — one entry per
+    /// basket currency (in the same order returned by the oracle's `get_currencies`).
+    /// Duplicate or empty recipient lists are rejected to prevent double-payment in
+    /// off-chain mapping (C-057).
     pub fn redeem_basket(
         env: Env,
         user: Address,
-        recipient: Address,
+        recipients: Vec<Address>,
         acbu_amount: i128,
     ) -> Vec<i128> {
         Self::check_paused(&env);
         user.require_auth();
+
+        // C-057: Validate recipients list is non-empty.
+        if recipients.is_empty() {
+            env.panic_with_error(ContractError::InvalidRecipient);
+        }
+
+        // C-057: Enforce all recipient addresses are distinct.
+        // O(n²) is acceptable here — basket sizes are small (≤ ~20 currencies).
+        let rlen = recipients.len();
+        for i in 0..rlen {
+            for j in (i + 1)..rlen {
+                if recipients.get(i).unwrap() == recipients.get(j).unwrap() {
+                    env.panic_with_error(ContractError::InvalidRecipient);
+                }
+            }
+        }
 
         let min_amount: i128 = env
             .storage()
@@ -298,6 +330,11 @@ impl BurningContract {
             env.panic_with_error(ContractError::InsufficientReserves);
         }
 
+        // C-038: The burn call requires `user` to have authorized this contract
+        // to burn on their behalf.  Soroban propagates the auth tree automatically
+        // when `user.require_auth()` is called above, but we document the
+        // dependency explicitly: the token contract will verify that the invoking
+        // contract (this contract's address) is in the auth tree for `user`.
         let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token);
         acbu_client.burn(&user, &acbu_amount);
 
@@ -314,6 +351,14 @@ impl BurningContract {
         let mut amounts_out = Vec::new(&env);
         for i in 0..currencies.len() {
             let currency = currencies.get(i).unwrap();
+
+            // C-057: Each currency slot maps to the corresponding recipient by index.
+            // If the caller supplied fewer recipients than currencies, reject.
+            if i >= recipients.len() {
+                env.panic_with_error(ContractError::InvalidRecipient);
+            }
+            let recipient = recipients.get(i).unwrap();
+
             let weight: i128 = env.invoke_contract(
                 &oracle_addr,
                 &Symbol::new(&env, "get_basket_weight"),
@@ -348,6 +393,12 @@ impl BurningContract {
             let native_i = (usd_i * DECIMALS) / rate;
 
             if native_i > 0 {
+                // C-038: `transfer_from` uses this contract as the spender.  The vault
+                // must have pre-approved this contract address as an allowed spender for
+                // each S-token (via `approve`).  This is an explicit trust assumption:
+                //   vault → approve(burning_contract, stoken, allowance)
+                // If that approval is absent the call will revert with an auth error,
+                // which is the correct safe-fail behaviour.
                 let token = soroban_sdk::token::Client::new(&env, &stoken);
                 let spender = env.current_contract_address();
                 token.transfer_from(&spender, &vault, &recipient, &native_i);
@@ -393,6 +444,7 @@ impl BurningContract {
     /// Set basket redemption fee (admin only)
     pub fn set_fee_rate(env: Env, fee_rate_bps: i128) {
         Self::check_admin(&env);
+        Self::check_paused(&env);
         if !(0..=BASIS_POINTS).contains(&fee_rate_bps) {
             env.panic_with_error(ContractError::InvalidRate);
         }
@@ -403,6 +455,7 @@ impl BurningContract {
 
     pub fn set_fee_single_redeem(env: Env, fee_bps: i128) {
         Self::check_admin(&env);
+        Self::check_paused(&env);
         if !(0..=BASIS_POINTS).contains(&fee_bps) {
             env.panic_with_error(ContractError::InvalidRate);
         }
@@ -455,6 +508,7 @@ impl BurningContract {
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        Self::check_paused(&env);
 
         let current_version = Self::version(env.clone());
         if new_version <= current_version {

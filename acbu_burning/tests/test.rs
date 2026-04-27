@@ -2,7 +2,7 @@
 
 use acbu_burning::{BurningContract, BurningContractClient};
 use shared::{CurrencyCode, DECIMALS};
-use soroban_sdk::{contract, contractimpl, symbol_short, testutils::Address as _, Address, Env};
+use soroban_sdk::{contract, contractimpl, symbol_short, testutils::Address as _, vec, Address, Env, Vec};
 
 mod oracle_mock {
     use super::*;
@@ -166,7 +166,6 @@ fn test_redeem_basket() {
 
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
-    let recipient = Address::generate(&env);
 
     let oracle = env.register_contract(None, oracle_mock::MockOracle);
     let reserve_tracker = env.register_contract(None, oracle_mock::MockReserveTracker);
@@ -201,7 +200,13 @@ fn test_redeem_basket() {
     let token = soroban_sdk::token::Client::new(&env, &stoken);
     token.approve(&vault, &contract_id, &1_000_000_000_000_000, &100u32);
 
-    let amounts = client.redeem_basket(&user, &recipient, &burn_amt);
+    // C-057: provide 3 distinct recipients (one per basket currency)
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let r3 = Address::generate(&env);
+    let recipients = vec![&env, r1, r2, r3];
+
+    let amounts = client.redeem_basket(&user, &recipients, &burn_amt);
     assert_eq!(amounts.len(), 3);
 
     let mut total_out = 0i128;
@@ -211,4 +216,69 @@ fn test_redeem_basket() {
     // With DECIMALS matching and weight sum = 10000, out should be burn_amt - fee
     let expected_fee = (burn_amt * 100) / 10_000;
     assert_eq!(total_out + expected_fee, burn_amt);
+}
+
+// C-057: empty recipients list must be rejected
+#[test]
+fn test_redeem_basket_rejects_empty_recipients() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let oracle = env.register_contract(None, oracle_mock::MockOracle);
+    let reserve_tracker = env.register_contract(None, oracle_mock::MockReserveTracker);
+    let acbu_token = env.register_contract(None, oracle_mock::MockToken);
+    let stoken = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken);
+
+    let contract_id = env.register_contract(None, BurningContract);
+    let client = BurningContractClient::new(&env, &contract_id);
+
+    let vault = admin.clone();
+    client.initialize(
+        &admin, &oracle, &reserve_tracker, &acbu_token,
+        &Address::generate(&env), &vault, &100, &150,
+    );
+
+    let empty: Vec<Address> = Vec::new(&env);
+    let result = client.try_redeem_basket(&user, &empty, &(100 * DECIMALS));
+    assert!(result.is_err());
+}
+
+// C-057: duplicate recipients must be rejected
+#[test]
+fn test_redeem_basket_rejects_duplicate_recipients() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let oracle = env.register_contract(None, oracle_mock::MockOracle);
+    let reserve_tracker = env.register_contract(None, oracle_mock::MockReserveTracker);
+    let acbu_token = env.register_contract(None, oracle_mock::MockToken);
+    let stoken = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken);
+
+    let contract_id = env.register_contract(None, BurningContract);
+    let client = BurningContractClient::new(&env, &contract_id);
+
+    let vault = admin.clone();
+    client.initialize(
+        &admin, &oracle, &reserve_tracker, &acbu_token,
+        &Address::generate(&env), &vault, &100, &150,
+    );
+
+    let dup = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    // First and third are the same — duplicate
+    let recipients = vec![&env, dup.clone(), r2, dup.clone()];
+    let result = client.try_redeem_basket(&user, &recipients, &(100 * DECIMALS));
+    assert!(result.is_err());
 }
