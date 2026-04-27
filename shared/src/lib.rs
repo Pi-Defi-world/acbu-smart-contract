@@ -148,6 +148,7 @@ pub const MIN_BURN_AMOUNT: i128 = 10_000_000; // 10 ACBU (7 decimals)
 pub const UPDATE_INTERVAL_SECONDS: u64 = 21_600; // 6 hours
 pub const EMERGENCY_THRESHOLD_BPS: i128 = 500; // 5% deviation threshold
 pub const OUTLIER_THRESHOLD_BPS: i128 = 300; // 3% deviation for outlier detection
+pub const MAX_VALIDATORS: u32 = 50; // Maximum number of validators to prevent gas griefing
 /// Maximum ledger age of a stored rate before it is considered stale and rejected
 /// at read time. Stellar closes ~1 ledger every 5 seconds; 720 ledgers ≈ 1 hour.
 /// Rates must be refreshed within this window or consumers (minting) will be blocked.

@@ -4,9 +4,9 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_deviation, median, CurrencyCode, OutlierDetectionEvent, RateData, RateUpdateEvent,
-    BASIS_POINTS, DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, STALE_RATE_MAX_LEDGERS,
-    UPDATE_INTERVAL_SECONDS,
+    calculate_deviation, median, CurrencyCode, DataKey as SharedDataKey, OutlierDetectionEvent,
+    RateData, RateUpdateEvent, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, EMERGENCY_THRESHOLD_BPS,
+    MAX_VALIDATORS, OUTLIER_THRESHOLD_BPS, STALE_RATE_MAX_LEDGERS, UPDATE_INTERVAL_SECONDS,
 };
 
 mod shared {
@@ -127,6 +127,9 @@ impl OracleContract {
         }
         if min_signatures == 0 {
             panic!("Minimum signatures must be > 0");
+        }
+        if validators.len() > MAX_VALIDATORS {
+            panic!("Too many validators: maximum allowed is {}", MAX_VALIDATORS);
         }
 
         env.storage().instance().set(&DATA_KEY.admin, &admin);
@@ -599,6 +602,12 @@ impl OracleContract {
                 panic!("Validator already exists");
             }
         }
+        if validators.len() >= MAX_VALIDATORS {
+            panic!(
+                "Cannot add validator: maximum number of validators ({}) reached",
+                MAX_VALIDATORS
+            );
+        }
         let mut new_validators = validators.clone();
         new_validators.push_back(validator);
         env.storage()
@@ -753,7 +762,9 @@ impl OracleContract {
                     max_stale_ledgers: STALE_RATE_MAX_LEDGERS,
                 },
             );
-            panic!("Rate is stale: stored ledger is too old; admin must refresh via set_rate_admin");
+            panic!(
+                "Rate is stale: stored ledger is too old; admin must refresh via set_rate_admin"
+            );
         }
     }
 
