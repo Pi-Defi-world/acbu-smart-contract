@@ -403,7 +403,7 @@ impl OracleContract {
             currency: currency.clone(),
             rate: median_rate,
             timestamp: current_time,
-            validators,
+            validator: validator.clone(),
         };
         env.events().publish((symbol_short!("rate_upd"),), event);
     }

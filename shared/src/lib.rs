@@ -108,7 +108,7 @@ pub struct RateUpdateEvent {
     pub currency: CurrencyCode,
     pub rate: i128,
     pub timestamp: u64,
-    pub validators: soroban_sdk::Vec<Address>,
+    pub validator: Address,
 }
 
 /// Outlier detection event data

@@ -70,7 +70,7 @@ pub struct RateUpdateEvent {
     pub currency: CurrencyCode,
     pub rate: i128,
     pub timestamp: u64,
-    pub validators: Vec<Address>,
+    pub validator: Address,
 }
 ```
 
