@@ -7,6 +7,7 @@ members = [
     "acbu_savings_vault",
     "acbu_lending_pool",
     "acbu_escrow",
+    "acbu_multisig",
     "shared",
 ]
 resolver = "2"
