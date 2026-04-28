@@ -1,7 +1,11 @@
 #![cfg(test)]
 
-use acbu_lending_pool::{Error, LendingPool, LendingPoolClient};
-use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, Symbol};
+use acbu_lending_pool::{BorrowEvent, LendingPool, LendingPoolClient, RepayEvent};
+use soroban_sdk::{
+    symbol_short,
+    testutils::{Address as _, Events},
+    Address, Env, Error as SdkError, TryIntoVal,
+};
 use shared::DECIMALS;
 // Add these imports for the lifecycle test
 use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
@@ -287,9 +291,9 @@ fn test_borrow_exceeds_liquidity_fails() {
     assert!(
         matches!(
             result,
-            Err(Ok(Error::InsufficientBalance))
+            Err(Ok(e)) if e == SdkError::from_contract_error(4007)
         ),
-        "borrow exceeding pool liquidity must return Error::InsufficientBalance"
+        "borrow exceeding pool liquidity must return InsufficientBalance (4007)"
     );
 }
 
@@ -327,9 +331,9 @@ fn test_repay_wrong_loan_id_fails() {
     assert!(
         matches!(
             result,
-            Err(Ok(Error::NotFound))
+            Err(Ok(e)) if e == SdkError::from_contract_error(4001)
         ),
-        "repay with wrong loan_id must return Error::NotFound"
+        "repay with wrong loan_id must return NotFound (4001)"
     );
 }
 
@@ -458,7 +462,7 @@ fn test_loan_lifecycle_emits_events() {
     let token_id = env
         .register_stellar_asset_contract_v2(token_admin.clone())
         .address();
-    let token_client = TokenClient::new(&env, &token_id);
+    let _token_client = TokenClient::new(&env, &token_id);
     let token_admin_client = StellarAssetClient::new(&env, &token_id);
 
     let contract_id = env.register_contract(None, LendingPool);
@@ -496,18 +500,11 @@ fn test_loan_lifecycle_emits_events() {
         })
         .expect("borrow event not found");
 
-    // BorrowEvent has 5 fields: creator, amount, token, loan_id, timestamp
-    let (event_creator, event_amount, event_token, event_loan_id, _ts): (
-        Address,
-        i128,
-        Address,
-        u64,
-        u64,
-    ) = borrow_event.2.try_into_val(&env).unwrap();
-    assert_eq!(event_creator, borrower);
-    assert_eq!(event_amount, borrow_amount);
-    assert_eq!(event_token, token_id);
-    assert_eq!(event_loan_id, loan_id);
+    let borrow_payload: BorrowEvent = borrow_event.2.try_into_val(&env).unwrap();
+    assert_eq!(borrow_payload.creator, borrower);
+    assert_eq!(borrow_payload.amount, borrow_amount);
+    assert_eq!(borrow_payload.token, token_id);
+    assert_eq!(borrow_payload.loan_id, loan_id);
 
     // 2. Repay partial
     let repay_amount = 100_000i128;
@@ -529,18 +526,11 @@ fn test_loan_lifecycle_emits_events() {
         })
         .expect("repay event not found");
 
-    // RepayEvent also has 5 fields: creator, amount, token, loan_id, timestamp
-    let (event_creator, event_amount, event_token, event_loan_id, _ts): (
-        Address,
-        i128,
-        Address,
-        u64,
-        u64,
-    ) = repay_event.2.try_into_val(&env).unwrap();
-    assert_eq!(event_creator, borrower);
-    assert_eq!(event_amount, repay_amount);
-    assert_eq!(event_token, token_id);
-    assert_eq!(event_loan_id, loan_id);
+    let repay_payload: RepayEvent = repay_event.2.try_into_val(&env).unwrap();
+    assert_eq!(repay_payload.creator, borrower);
+    assert_eq!(repay_payload.amount, repay_amount);
+    assert_eq!(repay_payload.token, token_id);
+    assert_eq!(repay_payload.loan_id, loan_id);
 
     // 3. Repay full - loan removed
     client.repay(&borrower, &(borrow_amount - repay_amount), &loan_id);

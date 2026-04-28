@@ -122,9 +122,12 @@ pub struct OutlierDetectionEvent {
     pub timestamp: u64,
 }
 
-/// Error types
+/// Error types for the **burning** contract (and any crate that re-uses this enum).
+///
+/// Numeric codes are stable for client UX; see `docs/ERROR_CODES.md` in the workspace root.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
 pub enum ContractError {
     Unauthorized = 1,
     Paused = 2,
@@ -137,6 +140,8 @@ pub enum ContractError {
     ReserveError = 9,
     InsufficientBalance = 10,
     InvalidRecipient = 11,
+    /// WASM upgrade rejected: `new_version` must be greater than the stored version.
+    InvalidVersion = 12,
 }
 
 /// Constants

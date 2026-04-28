@@ -1,6 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map,
+    Symbol, Vec,
 };
 
 use shared::{
@@ -11,6 +12,28 @@ use shared::{
 
 mod shared {
     pub use shared::*;
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum OracleError {
+    AlreadyInitialized = 7001,
+    InvalidMinSignatures = 7002,
+    MinSignaturesZero = 7003,
+    NoPendingAdmin = 7004,
+    AdminTimelockNotElapsed = 7005,
+    NoPendingAdminToCancel = 7006,
+    UnauthorizedValidator = 7007,
+    UpdateIntervalNotMet = 7008,
+    InsufficientOracleSources = 7009,
+    InvalidRate = 7010,
+    RateNotFound = 7011,
+    STokenNotConfigured = 7012,
+    ValidatorAlreadyExists = 7013,
+    CannotRemoveValidator = 7014,
+    InvalidVersion = 7015,
+    RateStaleLedger = 7016,
 }
 
 // ─── Admin rotation timelock (seconds) ───────────────────────────────────────
@@ -122,14 +145,14 @@ impl OracleContract {
         basket_weights: Map<CurrencyCode, i128>,
     ) {
         if env.storage().instance().has(&DATA_KEY.admin) {
-            panic!("Contract already initialized");
+            env.panic_with_error(OracleError::AlreadyInitialized);
         }
 
         if !((1..=validators.len()).contains(&min_signatures)) {
-            panic!("Invalid min_signatures configuration");
+            env.panic_with_error(OracleError::InvalidMinSignatures);
         }
         if min_signatures == 0 {
-            panic!("Minimum signatures must be > 0");
+            env.panic_with_error(OracleError::MinSignaturesZero);
         }
 
         env.storage().instance().set(&DATA_KEY.admin, &admin);
@@ -200,11 +223,10 @@ impl OracleContract {
     /// The nominated address calls this after the timelock has elapsed.
     /// On success the pending state is cleared and the new admin is stored.
     pub fn accept_admin(env: Env) {
-        let pending_admin: Address = env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.pending_admin)
-            .unwrap_or_else(|| panic!("No pending admin transfer"));
+        let pending_admin: Address = match env.storage().instance().get(&DATA_KEY.pending_admin) {
+            Some(a) => a,
+            None => env.panic_with_error(OracleError::NoPendingAdmin),
+        };
 
         // Require signature from the incoming admin
         pending_admin.require_auth();
@@ -216,7 +238,7 @@ impl OracleContract {
             .unwrap_or(u64::MAX);
 
         if env.ledger().timestamp() < eligible_at {
-            panic!("Admin transfer timelock has not elapsed");
+            env.panic_with_error(OracleError::AdminTimelockNotElapsed);
         }
 
         let old_admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
@@ -250,11 +272,10 @@ impl OracleContract {
     pub fn cancel_admin_transfer(env: Env) {
         Self::check_admin(&env);
 
-        let pending_admin: Address = env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.pending_admin)
-            .unwrap_or_else(|| panic!("No pending admin transfer to cancel"));
+        let pending_admin: Address = match env.storage().instance().get(&DATA_KEY.pending_admin) {
+            Some(a) => a,
+            None => env.panic_with_error(OracleError::NoPendingAdminToCancel),
+        };
 
         env.storage().instance().remove(&DATA_KEY.pending_admin);
         env.storage()
@@ -312,7 +333,7 @@ impl OracleContract {
             }
         }
         if !is_validator {
-            panic!("Unauthorized: validator only");
+            env.panic_with_error(OracleError::UnauthorizedValidator);
         }
 
         let update_interval: u64 = env
@@ -333,12 +354,12 @@ impl OracleContract {
 
         if let Some(existing_rate) = existing_rate {
             if !allow_update && current_time < existing_rate.timestamp + update_interval {
-                panic!("Update interval not met");
+                env.panic_with_error(OracleError::UpdateIntervalNotMet);
             }
         }
 
         if sources.len() > 0 && sources.len() < MIN_ORACLE_SOURCE_FEEDS {
-            panic!("Insufficient oracle sources");
+            env.panic_with_error(OracleError::InsufficientOracleSources);
         }
 
         // Pass 1: compute reference median from all sources to establish a baseline.
@@ -411,7 +432,7 @@ impl OracleContract {
     pub fn set_rate_admin(env: Env, currency: CurrencyCode, rate: i128) {
         Self::check_admin(&env);
         if rate <= 0 {
-            panic!("Invalid rate");
+            env.panic_with_error(OracleError::InvalidRate);
         }
         let current_time = env.ledger().timestamp();
         let rate_data = RateData {
@@ -439,7 +460,7 @@ impl OracleContract {
             Self::assert_rate_fresh(&env, &rate_data, &currency);
             rate_data.rate_usd
         } else {
-            panic!("Rate not found for currency");
+            env.panic_with_error(OracleError::RateNotFound);
         }
     }
 
@@ -449,7 +470,7 @@ impl OracleContract {
             Self::assert_rate_fresh(&env, &rate_data, &currency);
             (rate_data.rate_usd, rate_data.timestamp)
         } else {
-            panic!("Rate not found for currency");
+            env.panic_with_error(OracleError::RateNotFound);
         }
     }
 
@@ -590,7 +611,7 @@ impl OracleContract {
         if let Some(addr) = m.get(currency.clone()) {
             addr
         } else {
-            panic!("S-token not configured for currency");
+            env.panic_with_error(OracleError::STokenNotConfigured);
         }
     }
 
@@ -603,7 +624,7 @@ impl OracleContract {
         let validators: Vec<Address> = env.storage().instance().get(&DATA_KEY.validators).unwrap();
         for v in validators.iter() {
             if v == validator {
-                panic!("Validator already exists");
+                env.panic_with_error(OracleError::ValidatorAlreadyExists);
             }
         }
         let mut new_validators = validators.clone();
@@ -622,7 +643,7 @@ impl OracleContract {
             .get(&DATA_KEY.min_signatures)
             .unwrap();
         if validators.len() <= min_sigs {
-            panic!("Cannot remove validator: would violate minimum signatures");
+            env.panic_with_error(OracleError::CannotRemoveValidator);
         }
         let mut new_validators = Vec::new(&env);
         for v in validators.iter() {
@@ -706,7 +727,7 @@ impl OracleContract {
 
         let current_version = Self::get_version(env.clone());
         if new_version <= current_version {
-            panic!("Invalid version upgrade");
+            env.panic_with_error(OracleError::InvalidVersion);
         }
 
         env.deployer().update_current_contract_wasm(new_wasm_hash);
@@ -760,7 +781,7 @@ impl OracleContract {
                     max_stale_ledgers: STALE_RATE_MAX_LEDGERS,
                 },
             );
-            panic!("Rate is stale: stored ledger is too old; admin must refresh via set_rate_admin");
+            env.panic_with_error(OracleError::RateStaleLedger);
         }
     }
 

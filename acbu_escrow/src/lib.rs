@@ -1,7 +1,21 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol,
 };
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum EscrowError {
+    Paused = 3001,
+    InvalidAmount = 3002,
+    EscrowNotFound = 3003,
+    PayerMismatch = 3004,
+    EscrowExists = 3005,
+    UninitializedAdmin = 3006,
+    UninitializedAcBuToken = 3007,
+    AlreadyInitialized = 3008,
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,13 +34,6 @@ const DATA_KEY: DataKey = DataKey {
 };
 
 const VERSION: u32 = 1;
-const ERR_PAUSED: u32 = 3001;
-const ERR_INVALID_AMOUNT: u32 = 3002;
-const ERR_ESCROW_NOT_FOUND: u32 = 3003;
-const ERR_PAYER_MISMATCH: u32 = 3004;
-const ERR_ESCROW_EXISTS: u32 = 3005;
-const ERR_UNINITIALIZED_ADMIN: u32 = 3006;
-const ERR_UNINITIALIZED_ACBU_TOKEN: u32 = 3007;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,22 +72,24 @@ pub struct Escrow;
 
 #[contractimpl]
 impl Escrow {
-    fn get_admin(env: &Env) -> Result<Address, soroban_sdk::Error> {
-        env.storage().instance().get(&DATA_KEY.admin).ok_or(
-            soroban_sdk::Error::from_contract_error(ERR_UNINITIALIZED_ADMIN),
-        )
+    fn get_admin(env: &Env) -> Result<Address, EscrowError> {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.admin)
+            .ok_or(EscrowError::UninitializedAdmin)
     }
 
-    fn get_acbu_token(env: &Env) -> Result<Address, soroban_sdk::Error> {
-        env.storage().instance().get(&DATA_KEY.acbu_token).ok_or(
-            soroban_sdk::Error::from_contract_error(ERR_UNINITIALIZED_ACBU_TOKEN),
-        )
+    fn get_acbu_token(env: &Env) -> Result<Address, EscrowError> {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.acbu_token)
+            .ok_or(EscrowError::UninitializedAcBuToken)
     }
 
     /// Initialize the escrow contract
     pub fn initialize(env: Env, admin: Address, acbu_token: Address) {
         if env.storage().instance().has(&DATA_KEY.admin) {
-            panic!("Contract already initialized");
+            env.panic_with_error(EscrowError::AlreadyInitialized);
         }
         env.storage().instance().set(&DATA_KEY.admin, &admin);
         env.storage()
@@ -98,23 +107,23 @@ impl Escrow {
         payee: Address,
         amount: i128,
         escrow_id: u64,
-    ) -> Result<(), soroban_sdk::Error> {
+    ) -> Result<(), EscrowError> {
         let paused: bool = env
             .storage()
             .instance()
             .get(&DATA_KEY.paused)
             .unwrap_or(false);
         if paused {
-            return Err(soroban_sdk::Error::from_contract_error(ERR_PAUSED));
+            return Err(EscrowError::Paused);
         }
         if amount <= 0 {
-            return Err(soroban_sdk::Error::from_contract_error(ERR_INVALID_AMOUNT));
+            return Err(EscrowError::InvalidAmount);
         }
         payer.require_auth();
         let key = EscrowId(payer.clone(), escrow_id);
 
         if env.storage().temporary().has(&key) {
-            return Err(soroban_sdk::Error::from_contract_error(ERR_ESCROW_EXISTS));
+            return Err(EscrowError::EscrowExists);
         }
 
         let acbu = Self::get_acbu_token(&env)?;
@@ -144,14 +153,14 @@ impl Escrow {
 
     /// Release escrow: payee receives ACBU (payer authorization required)
     /// caller must supply payer and escrow_id to identify which escrow to release
-    pub fn release(env: Env, escrow_id: u64, payer: Address) -> Result<(), soroban_sdk::Error> {
+    pub fn release(env: Env, escrow_id: u64, payer: Address) -> Result<(), EscrowError> {
         let paused: bool = env
             .storage()
             .instance()
             .get(&DATA_KEY.paused)
             .unwrap_or(false);
         if paused {
-            return Err(soroban_sdk::Error::from_contract_error(ERR_PAUSED));
+            return Err(EscrowError::Paused);
         }
 
         payer.require_auth();
@@ -161,11 +170,9 @@ impl Escrow {
             .storage()
             .temporary()
             .get(&key)
-            .ok_or(soroban_sdk::Error::from_contract_error(
-                ERR_ESCROW_NOT_FOUND,
-            ))?;
+            .ok_or(EscrowError::EscrowNotFound)?;
         if stored_payer != payer {
-            return Err(soroban_sdk::Error::from_contract_error(ERR_PAYER_MISMATCH));
+            return Err(EscrowError::PayerMismatch);
         }
 
         let acbu = Self::get_acbu_token(&env)?;
@@ -192,7 +199,7 @@ impl Escrow {
 
     /// Refund escrow: payer gets ACBU back (admin or dispute resolution)
     /// key is same as release since it identifies which escrow to refund
-    pub fn refund(env: Env, escrow_id: u64, payer: Address) -> Result<(), soroban_sdk::Error> {
+    pub fn refund(env: Env, escrow_id: u64, payer: Address) -> Result<(), EscrowError> {
         let admin = Self::get_admin(&env)?;
         admin.require_auth();
 
@@ -201,12 +208,10 @@ impl Escrow {
             .storage()
             .temporary()
             .get(&key)
-            .ok_or(soroban_sdk::Error::from_contract_error(
-                ERR_ESCROW_NOT_FOUND,
-            ))?;
+            .ok_or(EscrowError::EscrowNotFound)?;
 
         if stored_payer != payer {
-            return Err(soroban_sdk::Error::from_contract_error(ERR_PAYER_MISMATCH));
+            return Err(EscrowError::PayerMismatch);
         }
 
         let acbu = Self::get_acbu_token(&env)?;
@@ -231,14 +236,14 @@ impl Escrow {
         Ok(())
     }
 
-    pub fn pause(env: Env) -> Result<(), soroban_sdk::Error> {
+    pub fn pause(env: Env) -> Result<(), EscrowError> {
         let admin = Self::get_admin(&env)?;
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &true);
         Ok(())
     }
 
-    pub fn unpause(env: Env) -> Result<(), soroban_sdk::Error> {
+    pub fn unpause(env: Env) -> Result<(), EscrowError> {
         let admin = Self::get_admin(&env)?;
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &false);
@@ -254,7 +259,7 @@ impl Escrow {
             .storage()
             .instance()
             .get(&DATA_KEY.admin)
-            .expect("admin not set — contract not initialized");
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::UninitializedAdmin));
         admin.require_auth();
 
         let current_version = VERSION;
@@ -271,7 +276,7 @@ impl Escrow {
             .storage()
             .instance()
             .get(&DATA_KEY.admin)
-            .expect("admin not set — contract not initialized");
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::UninitializedAdmin));
         admin.require_auth();
         let paused: bool = env
             .storage()
@@ -279,7 +284,7 @@ impl Escrow {
             .get(&DATA_KEY.paused)
             .unwrap_or(false);
         if paused {
-            panic!("Contract is paused");
+            env.panic_with_error(EscrowError::Paused);
         }
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }

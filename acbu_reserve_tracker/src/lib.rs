@@ -1,12 +1,21 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map,
+    Symbol, Vec,
 };
 
 use shared::{CurrencyCode, DataKey as SharedDataKey, ReserveData, BASIS_POINTS, CONTRACT_VERSION};
 
 mod shared {
     pub use shared::*;
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum ReserveTrackerError {
+    AlreadyInitialized = 8001,
+    InvalidVersion = 8002,
 }
 
 #[contracttype]
@@ -43,7 +52,7 @@ impl ReserveTrackerContract {
         min_reserve_ratio_bps: i128,
     ) {
         if env.storage().instance().has(&DATA_KEY.admin) {
-            panic!("Contract already initialized");
+            env.panic_with_error(ReserveTrackerError::AlreadyInitialized);
         }
 
         env.storage().instance().set(&DATA_KEY.admin, &admin);
@@ -168,7 +177,7 @@ impl ReserveTrackerContract {
             .get(&SharedDataKey::Version)
             .unwrap_or(0);
         if new_version <= current_version {
-            panic!("Invalid version upgrade");
+            env.panic_with_error(ReserveTrackerError::InvalidVersion);
         }
 
         env.deployer().update_current_contract_wasm(new_wasm_hash);

@@ -113,7 +113,7 @@ fn test_replace_pending_nomination() {
 // ─── sad paths ───────────────────────────────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "Admin transfer timelock has not elapsed")]
+#[should_panic(expected = "#7005")]
 fn test_accept_before_timelock_panics() {
     let (env, _admin, client) = setup();
     let new_admin = Address::generate(&env);
@@ -125,14 +125,14 @@ fn test_accept_before_timelock_panics() {
 }
 
 #[test]
-#[should_panic(expected = "No pending admin transfer")]
+#[should_panic(expected = "#7004")]
 fn test_accept_without_pending_panics() {
     let (_env, _admin, client) = setup();
     client.accept_admin();
 }
 
 #[test]
-#[should_panic(expected = "No pending admin transfer to cancel")]
+#[should_panic(expected = "#7006")]
 fn test_cancel_without_pending_panics() {
     let (env, _admin, client) = setup();
     env.mock_all_auths();
