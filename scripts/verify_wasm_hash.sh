@@ -25,7 +25,9 @@ echo -e "${YELLOW}[WASM Integrity Check]${NC} Verifying token contract artifact.
 # Check if WASM file exists
 if [ ! -f "$WASM_FILE" ]; then
     echo -e "${RED}[FAIL]${NC} WASM file not found: $WASM_FILE"
-    echo "Supply chain risk: Token contract artifact missing"
+    echo ""
+    echo "The artifact is not stored in the repository."
+    echo "Download it with:  ./scripts/fetch_token_wasm.sh"
     exit 1
 fi
 
