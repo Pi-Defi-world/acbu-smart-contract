@@ -64,6 +64,12 @@ Check if contract is paused.
 - **Admin functions:** Admin only (multisig in production)
 - **Pause/Unpause:** Admin only
 
+## Token transfer model
+
+- `mint_from_usdc` uses a push model: users transfer USDC into the minting contract.
+- `mint_from_single` and `mint_from_basket` also use push semantics: users transfer underlying S-tokens into the configured vault.
+- These minting flows do not rely on `approve`/`transfer_from` allowances from the user side.
+
 ## Events
 
 ### MintEvent

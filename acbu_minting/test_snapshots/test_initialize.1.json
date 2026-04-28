@@ -388,10 +388,14 @@
                       },
                       {
                         "key": {
-                          "symbol": "VERSION"
+                          "vec": [
+                            {
+                              "symbol": "Version"
+                            }
+                          ]
                         },
                         "val": {
-                          "u32": 3
+                          "u32": 1
                         }
                       }
                     ]

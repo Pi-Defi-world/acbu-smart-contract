@@ -459,7 +459,7 @@ fn test_loan_lifecycle_emits_events() {
     let token_id = env
         .register_stellar_asset_contract_v2(token_admin.clone())
         .address();
-    let token_client = TokenClient::new(&env, &token_id);
+    let _token_client = TokenClient::new(&env, &token_id);
     let token_admin_client = StellarAssetClient::new(&env, &token_id);
 
     let contract_id = env.register_contract(None, LendingPool);

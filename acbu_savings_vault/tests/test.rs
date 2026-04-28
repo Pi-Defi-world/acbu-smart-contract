@@ -2,6 +2,7 @@
 
 use acbu_savings_vault::DepositEvent;
 use acbu_savings_vault::{SavingsVault, SavingsVaultClient, WithdrawEvent};
+use shared::DECIMALS;
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger},

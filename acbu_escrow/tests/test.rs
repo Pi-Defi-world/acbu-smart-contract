@@ -359,10 +359,10 @@
 
 #![cfg(test)]
 
-use acbu_escrow::{Escrow, EscrowClient};
+use acbu_escrow::{Escrow, EscrowClient, EscrowError};
 use soroban_sdk::{
     testutils::{Address as _, MockAuth, MockAuthInvoke},
-    Address, Env, Error, IntoVal,
+    Address, Env, IntoVal,
 };
 
 #[test]
@@ -456,7 +456,7 @@ fn test_release_missing_escrow_returns_not_found() {
     client.initialize(&admin, &acbu_token);
 
     let result = client.try_release(&1u64, &payer);
-    assert_eq!(result, Err(Ok(Error::from_contract_error(3003))));
+    assert_eq!(result, Err(Ok(EscrowError::EscrowNotFound)));
 }
 
 #[test]
@@ -476,7 +476,7 @@ fn test_refund_missing_escrow_returns_not_found() {
     client.initialize(&admin, &acbu_token);
 
     let result = client.try_refund(&1u64, &payer);
-    assert_eq!(result, Err(Ok(Error::from_contract_error(3003))));
+    assert_eq!(result, Err(Ok(EscrowError::EscrowNotFound)));
 }
 
 #[test]
@@ -488,5 +488,5 @@ fn test_pause_without_initialize_returns_uninitialized_admin_error() {
     let client = EscrowClient::new(&env, &contract_id);
 
     let result = client.try_pause();
-    assert_eq!(result, Err(Ok(Error::from_contract_error(3006))));
+    assert_eq!(result, Err(Ok(EscrowError::UninitializedAdmin)));
 }
