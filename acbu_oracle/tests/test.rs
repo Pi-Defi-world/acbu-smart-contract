@@ -124,7 +124,7 @@ fn test_update_rate() {
             let event_data: RateUpdateEvent = event.2.into_val(&env);
             assert_eq!(event_data.currency, ngn.clone());
             assert_eq!(event_data.rate, 1235000);
-            assert_eq!(event_data.validators, validators);
+            assert_eq!(event_data.validator, validator);
             found = true;
             break;
         }

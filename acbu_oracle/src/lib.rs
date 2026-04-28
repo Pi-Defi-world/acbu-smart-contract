@@ -5,6 +5,9 @@ use soroban_sdk::{
 };
 
 use shared::{
+    calculate_deviation, median, CurrencyCode, DataKey as SharedDataKey, OutlierDetectionEvent,
+    RateData, RateUpdateEvent, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, EMERGENCY_THRESHOLD_BPS,
+    MAX_VALIDATORS, OUTLIER_THRESHOLD_BPS, STALE_RATE_MAX_LEDGERS, UPDATE_INTERVAL_SECONDS,
     calculate_deviation, median, CONTRACT_VERSION, CurrencyCode, DataKey as SharedDataKey, OutlierDetectionEvent, RateData, RateUpdateEvent,
     BASIS_POINTS, DECIMALS, EMERGENCY_THRESHOLD_BPS, OUTLIER_THRESHOLD_BPS, STALE_RATE_MAX_LEDGERS,
     UPDATE_INTERVAL_SECONDS,
@@ -153,6 +156,9 @@ impl OracleContract {
         }
         if min_signatures == 0 {
             env.panic_with_error(OracleError::MinSignaturesZero);
+        }
+        if validators.len() > MAX_VALIDATORS {
+            panic!("Too many validators: maximum allowed is {}", MAX_VALIDATORS);
         }
 
         env.storage().instance().set(&DATA_KEY.admin, &admin);
@@ -424,7 +430,7 @@ impl OracleContract {
             currency: currency.clone(),
             rate: median_rate,
             timestamp: current_time,
-            validators,
+            validator: validator.clone(),
         };
         env.events().publish((symbol_short!("rate_upd"),), event);
     }
@@ -626,6 +632,12 @@ impl OracleContract {
             if v == validator {
                 env.panic_with_error(OracleError::ValidatorAlreadyExists);
             }
+        }
+        if validators.len() >= MAX_VALIDATORS {
+            panic!(
+                "Cannot add validator: maximum number of validators ({}) reached",
+                MAX_VALIDATORS
+            );
         }
         let mut new_validators = validators.clone();
         new_validators.push_back(validator);
