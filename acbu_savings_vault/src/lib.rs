@@ -31,6 +31,7 @@ pub enum Error {
     NoFeeRate = 1013,
     NoYieldRate = 1014,
     ZeroNetDeposit = 1015,
+    InvalidVersion = 1016,
 }
 
 // ---------------------------------------------------------------------------
@@ -418,7 +419,7 @@ impl SavingsVault {
             .get(&SharedDataKey::Version)
             .unwrap_or(0);
         if new_version <= current_version {
-            panic!("Invalid version upgrade");
+            env.panic_with_error(Error::InvalidVersion);
         }
 
         env.deployer().update_current_contract_wasm(new_wasm_hash);

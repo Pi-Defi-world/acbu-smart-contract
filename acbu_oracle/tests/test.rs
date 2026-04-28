@@ -8,6 +8,21 @@ use soroban_sdk::{
     Address, Env, FromVal, IntoVal, Map, Symbol, Vec,
 };
 
+/// Large `sequence_number` jumps archive instance storage under default TTL.
+/// Step the ledger in chunks and refresh instance (and code) TTL via the deployer
+/// API so the contract stays callable through multi-thousand-ledger advances.
+fn advance_ledger_to(env: &Env, contract_id: &Address, target_seq: u32) {
+    const TTL_TARGET: u32 = 1_000_000;
+    while env.ledger().sequence() < target_seq {
+        let cur = env.ledger().sequence();
+        let next = (cur + 200).min(target_seq);
+        env.ledger().with_mut(|l| l.sequence_number = next);
+        env
+            .deployer()
+            .extend_ttl(contract_id.clone(), TTL_TARGET, TTL_TARGET);
+    }
+}
+
 #[test]
 fn test_initialize() {
     let env = Env::default();
@@ -295,6 +310,9 @@ fn test_all_sources_outlier_falls_back_to_raw_median() {
     let mut sources = Vec::new(&env);
     sources.push_back(500_000i128);
     sources.push_back(2_000_000i128);
+    // Third feed at the even-count raw median so quorum (≥3) is satisfied and
+    // both extremes remain outliers vs the three-point median.
+    sources.push_back(1_250_000i128);
 
     client.update_rate(
         &validator,
@@ -409,14 +427,16 @@ fn test_stale_rate_rejected_at_read() {
     let client = OracleContractClient::new(&env, &contract_id);
     client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
 
-    // Write a fresh rate at ledger 100.
+    // Write a fresh rate at ledger 100 (≥3 oracle feeds required).
     let mut sources = Vec::new(&env);
     sources.push_back(1_000_000i128);
+    sources.push_back(1_000_001i128);
+    sources.push_back(999_999i128);
     client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
 
     // Advance ledger sequence past STALE_RATE_MAX_LEDGERS (4_320).
+    advance_ledger_to(&env, &contract_id, 100 + 4_321); // one beyond the limit
     env.ledger().with_mut(|l| {
-        l.sequence_number = 100 + 4_321; // one beyond the limit
         l.timestamp = 1_000_000 + 21_601; // also past the timestamp window
     });
 
@@ -461,12 +481,12 @@ fn test_rate_at_boundary_is_accepted() {
 
     let mut sources = Vec::new(&env);
     sources.push_back(1_000_000i128);
+    sources.push_back(1_000_001i128);
+    sources.push_back(999_999i128);
     client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
 
     // Advance exactly to the limit — should still pass.
-    env.ledger().with_mut(|l| {
-        l.sequence_number = 100 + 4_320; // exactly at limit
-    });
+    advance_ledger_to(&env, &contract_id, 100 + 4_320); // exactly at limit
 
     let rate = client.get_rate(&ngn);
     assert_eq!(rate, 1_000_000, "rate at boundary should be accepted");
@@ -499,11 +519,13 @@ fn test_admin_override_unblocks_stale_rate() {
 
     let mut sources = Vec::new(&env);
     sources.push_back(1_000_000i128);
+    sources.push_back(1_000_001i128);
+    sources.push_back(999_999i128);
     client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
 
     // Advance past staleness window.
+    advance_ledger_to(&env, &contract_id, 100 + 4_321);
     env.ledger().with_mut(|l| {
-        l.sequence_number = 100 + 4_321;
         l.timestamp = 1_000_000 + 21_601;
     });
 
@@ -544,11 +566,13 @@ fn test_stale_basket_component_blocks_acbu_rate() {
 
     let mut sources = Vec::new(&env);
     sources.push_back(1_000_000i128);
+    sources.push_back(1_000_001i128);
+    sources.push_back(999_999i128);
     client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
 
     // Advance past staleness window.
+    advance_ledger_to(&env, &contract_id, 100 + 4_321);
     env.ledger().with_mut(|l| {
-        l.sequence_number = 100 + 4_321;
         l.timestamp = 1_000_000 + 21_601;
     });
 

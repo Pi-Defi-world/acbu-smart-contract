@@ -375,7 +375,7 @@ impl BurningContract {
                 vec![&env, currency.clone().into_val(&env)],
             );
             if rate == 0 {
-                panic!("Invalid oracle rate");
+                env.panic_with_error(ContractError::InvalidRate);
             }
 
             let stoken: Address = env.invoke_contract(
@@ -489,7 +489,7 @@ impl BurningContract {
             .get(&DATA_KEY.paused)
             .unwrap_or(false);
         if paused {
-            panic!("Contract is paused");
+            env.panic_with_error(ContractError::Paused);
         }
     }
 
@@ -512,7 +512,7 @@ impl BurningContract {
 
         let current_version = Self::version(env.clone());
         if new_version <= current_version {
-            panic!("Invalid version upgrade");
+            env.panic_with_error(ContractError::InvalidVersion);
         }
 
         env.deployer().update_current_contract_wasm(new_wasm_hash);

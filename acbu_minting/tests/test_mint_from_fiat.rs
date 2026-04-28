@@ -189,7 +189,7 @@ fn test_mint_from_fiat_success() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized: only operator can call mint_from_fiat")]
+#[should_panic(expected = "#5007")]
 fn test_mint_from_fiat_unauthorized_caller() {
     let env = Env::default();
     env.mock_all_auths();
@@ -237,7 +237,7 @@ fn test_mint_from_fiat_unauthorized_caller() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized: only operator can call mint_from_fiat")]
+#[should_panic(expected = "#5007")]
 fn test_mint_from_fiat_recipient_self_mint() {
     let env = Env::default();
     env.mock_all_auths();
@@ -284,7 +284,7 @@ fn test_mint_from_fiat_recipient_self_mint() {
 }
 
 #[test]
-#[should_panic(expected = "fintech_tx_id cannot be empty")]
+#[should_panic(expected = "#5014")]
 fn test_mint_from_fiat_empty_tx_id() {
     let env = Env::default();
     env.mock_all_auths();
@@ -331,7 +331,7 @@ fn test_mint_from_fiat_empty_tx_id() {
 }
 
 #[test]
-#[should_panic(expected = "Duplicate fintech transaction ID")]
+#[should_panic(expected = "#5008")]
 fn test_mint_from_fiat_duplicate_tx_id() {
     let env = Env::default();
     env.mock_all_auths();
@@ -387,7 +387,7 @@ fn test_mint_from_fiat_duplicate_tx_id() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid mint amount")]
+#[should_panic(expected = "#5003")]
 fn test_mint_from_fiat_below_min_amount() {
     let env = Env::default();
     env.mock_all_auths();
@@ -434,7 +434,7 @@ fn test_mint_from_fiat_below_min_amount() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid mint amount")]
+#[should_panic(expected = "#5003")]
 fn test_mint_from_fiat_above_max_amount() {
     let env = Env::default();
     env.mock_all_auths();
@@ -529,7 +529,7 @@ fn test_mint_from_fiat_admin_not_default_operator() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized: only operator can call mint_from_fiat")]
+#[should_panic(expected = "#5007")]
 fn test_mint_from_fiat_admin_when_operator_set() {
     let env = Env::default();
     env.mock_all_auths();

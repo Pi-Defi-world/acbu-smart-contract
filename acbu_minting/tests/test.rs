@@ -176,7 +176,7 @@ fn test_initialize() {
 }
 
 #[test]
-#[should_panic(expected = "Contract already initialized")]
+#[should_panic(expected = "#5001")]
 fn test_initialize_twice() {
     let env = Env::default();
     env.mock_all_auths();
@@ -314,7 +314,7 @@ fn test_mint_from_basket() {
 }
 
 #[test]
-#[should_panic(expected = "Insufficient reserves")]
+#[should_panic(expected = "#5004")]
 fn test_mint_insufficient_reserves() {
     let env = Env::default();
     env.mock_all_auths();
@@ -401,7 +401,7 @@ fn test_mint_from_demo_fiat() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized operator")]
+#[should_panic(expected = "#5007")]
 fn test_mint_from_demo_fiat_wrong_operator() {
     let env = Env::default();
     env.mock_all_auths();
@@ -488,7 +488,7 @@ fn test_set_operator_and_mint_demo_fiat() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid mint amount")]
+#[should_panic(expected = "#5003")]
 fn test_mint_from_usdc_exceeds_max() {
     let env = Env::default();
     env.mock_all_auths();
@@ -519,7 +519,7 @@ fn test_mint_from_usdc_exceeds_max() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid mint amount")]
+#[should_panic(expected = "#5003")]
 fn test_mint_from_demo_fiat_exceeds_max() {
     let env = Env::default();
     env.mock_all_auths();
