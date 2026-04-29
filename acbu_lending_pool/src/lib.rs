@@ -1,28 +1,21 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map,
-    Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
 };
 
 use shared::{DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION};
 
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DataKey {
-    pub admin: Symbol,
-    pub acbu_token: Symbol,
-    pub fee_rate: Symbol,
-    pub paused: Symbol,
+#[derive(Clone)]
+pub enum DataKey {
+    Admin,
+    AcbuToken,
+    FeeRate,
+    Paused,
+    Balance(Address),
+    Loan(LoanId),
 }
 
-const DATA_KEY: DataKey = DataKey {
-    admin: symbol_short!("ADMIN"),
-    acbu_token: symbol_short!("ACBU_TKN"),
-    fee_rate: symbol_short!("FEE_RATE"),
-    paused: symbol_short!("PAUSED"),
-};
-
-const LENDER_BALANCES: Symbol = symbol_short!("LDBALS");
 const VERSION: u32 = CONTRACT_VERSION;
 
 #[contracttype]
@@ -62,14 +55,13 @@ pub struct RepayEvent {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Error {
-    NotFound = 4001,
-    InvalidState = 4002,
-    Unauthorized = 4003,
-    AlreadyInitialized = 4004,
-    InvalidAmount = 4005,
-    Paused = 4006,
-    InsufficientBalance = 4007,
-    InvalidVersion = 4008,
+    NotFound = 1,
+    InvalidState = 2,
+    Unauthorized = 3,
+    AlreadyInitialized = 4,
+    InvalidAmount = 5,
+    InsufficientBalance = 6,
+    Paused = 2001,
 }
 
 #[contract]
@@ -78,20 +70,20 @@ pub struct LendingPool;
 #[contractimpl]
 impl LendingPool {
     pub fn initialize(env: Env, admin: Address, acbu_token: Address, fee_rate_bps: i128) {
-        if env.storage().instance().has(&DATA_KEY.admin) {
+        if env.storage().instance().has(&DataKey::Admin) {
             env.panic_with_error(Error::AlreadyInitialized);
         }
         if fee_rate_bps < 0 || fee_rate_bps > BASIS_POINTS {
             env.panic_with_error(Error::InvalidAmount);
         }
-        env.storage().instance().set(&DATA_KEY.admin, &admin);
+        env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
-            .set(&DATA_KEY.acbu_token, &acbu_token);
+            .set(&DataKey::AcbuToken, &acbu_token);
         env.storage()
             .instance()
-            .set(&DATA_KEY.fee_rate, &fee_rate_bps);
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+            .set(&DataKey::FeeRate, &fee_rate_bps);
+        env.storage().instance().set(&DataKey::Paused, &false);
         env.storage()
             .instance()
             .set(&LENDER_BALANCES, &Map::<Address, i128>::new(&env));
@@ -113,21 +105,21 @@ impl LendingPool {
             env.panic_with_error(Error::InvalidAmount);
         }
 
-        let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let acbu_token: Address = env.storage().instance().get(&DataKey::AcbuToken).unwrap();
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
         token.transfer(&lender, &env.current_contract_address(), &amount);
 
-        let mut bals: Map<Address, i128> = env
+        let current_balance: i128 = env
             .storage()
-            .instance()
-            .get(&LENDER_BALANCES)
-            .unwrap_or_else(|| Map::new(&env));
-        let cur = bals.get(lender.clone()).unwrap_or(0);
-        bals.set(
-            lender.clone(),
-            cur.checked_add(amount).expect("overflow lender balance"),
-        );
-        env.storage().instance().set(&LENDER_BALANCES, &bals);
+            .persistent()
+            .get(&DataKey::Balance(lender.clone()))
+            .unwrap_or(0);
+        let new_balance = current_balance
+            .checked_add(amount)
+            .unwrap_or_else(|| env.panic_with_error(Error::InvalidAmount));
+        env.storage()
+            .persistent()
+            .set(&DataKey::Balance(lender.clone()), &new_balance);
 
         env.events()
             .publish((symbol_short!("deposit"), lender), amount);
@@ -142,28 +134,44 @@ impl LendingPool {
             env.panic_with_error(Error::InvalidAmount);
         }
 
-        let bal = Self::lender_balance(&env, &lender);
-        if bal < amount {
+        let current_balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Balance(lender.clone()))
+            .unwrap_or(0);
+        if current_balance < amount {
             env.panic_with_error(Error::InsufficientBalance);
         }
 
-        let mut bals: Map<Address, i128> = env
-            .storage()
-            .instance()
-            .get(&LENDER_BALANCES)
-            .unwrap_or_else(|| Map::new(&env));
-        bals.set(lender.clone(), bal - amount);
-        env.storage().instance().set(&LENDER_BALANCES, &bals);
-
-        let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let acbu_token: Address = env.storage().instance().get(&DataKey::AcbuToken).unwrap();
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
         token.transfer(&env.current_contract_address(), &lender, &amount);
+
+        let new_balance = current_balance
+            .checked_sub(amount)
+            .unwrap_or_else(|| env.panic_with_error(Error::InsufficientBalance));
+        env.storage()
+            .persistent()
+            .set(&DataKey::Balance(lender.clone()), &new_balance);
 
         env.events()
             .publish((symbol_short!("withdraw"), lender), amount);
     }
 
-    pub fn borrow(env: Env, borrower: Address, amount: i128, collateral_amount: i128, loan_id: u64) {
+    pub fn get_balance(env: Env, lender: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Balance(lender))
+            .unwrap_or(0)
+    }
+
+    pub fn borrow(
+        env: Env,
+        borrower: Address,
+        amount: i128,
+        collateral_amount: i128,
+        loan_id: u64,
+    ) {
         borrower.require_auth();
         Self::check_not_paused(&env);
 
@@ -171,38 +179,51 @@ impl LendingPool {
             env.panic_with_error(Error::InvalidAmount);
         }
 
-        let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
-        let token = soroban_sdk::token::Client::new(&env, &acbu_token);
-        let pool_balance = token.balance(&env.current_contract_address());
-        if pool_balance < amount {
-            env.panic_with_error(Error::InsufficientBalance);
-        }
-
         let loan_key = LoanId(borrower.clone(), loan_id);
-        if env.storage().instance().has(&loan_key) {
+        if env.storage().persistent().has(&DataKey::Loan(loan_key.clone())) {
             env.panic_with_error(Error::InvalidState);
         }
 
-        let loan = LoanData {
+
+        let acbu_token: Address = env.storage().instance().get(&DataKey::AcbuToken).unwrap();
+        let token = soroban_sdk::token::Client::new(&env, &acbu_token);
+        
+        // Check if contract has enough balance
+        let contract_balance = token.balance(&env.current_contract_address());
+        if contract_balance < amount {
+            env.panic_with_error(Error::InsufficientBalance);
+        }
+        
+        // Pull collateral in BEFORE paying out the loan principal.
+        token.transfer(&borrower, &env.current_contract_address(), &collateral_amount);
+        token.transfer(&env.current_contract_address(), &borrower, &amount);
+
+        let loan_data = LoanData {
             borrower: borrower.clone(),
             amount,
             collateral_amount,
             start_timestamp: env.ledger().timestamp(),
         };
-        env.storage().instance().set(&loan_key, &loan);
-
-        token.transfer(&env.current_contract_address(), &borrower, &amount);
+        
+        env.storage()
+            .persistent()
+            .set(&DataKey::Loan(loan_key), &loan_data);
 
         env.events().publish(
             (symbol_short!("borrow"), borrower.clone()),
             BorrowEvent {
-                creator: borrower.clone(),
+                creator: borrower,
                 amount,
-                token: acbu_token.clone(),
+                token: acbu_token,
                 loan_id,
                 timestamp: env.ledger().timestamp(),
             },
         );
+    }
+
+    pub fn get_loan(env: Env, borrower: Address, loan_id: u64) -> Option<LoanData> {
+        let loan_key = LoanId(borrower, loan_id);
+        env.storage().persistent().get(&DataKey::Loan(loan_key))
     }
 
     pub fn repay(env: Env, borrower: Address, amount: i128, loan_id: u64) {
@@ -214,32 +235,36 @@ impl LendingPool {
         }
 
         let loan_key = LoanId(borrower.clone(), loan_id);
-        let loan: LoanData = match env.storage().instance().get(&loan_key) {
-            Some(l) => l,
-            None => env.panic_with_error(Error::NotFound),
-        };
+        let mut loan_data: LoanData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Loan(loan_key.clone()))
+            .ok_or_else(|| Error::NotFound)
+            .unwrap_or_else(|e| env.panic_with_error(e));
 
-        if amount > loan.amount {
+        if amount > loan_data.amount {
             env.panic_with_error(Error::InvalidAmount);
         }
 
-        let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let acbu_token: Address = env.storage().instance().get(&DataKey::AcbuToken).unwrap();
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
         token.transfer(&borrower, &env.current_contract_address(), &amount);
 
-        let new_amount = loan.amount - amount;
-        if new_amount == 0 {
-            env.storage().instance().remove(&loan_key);
+        loan_data.amount -= amount;
+        if loan_data.amount == 0 {
+            // Return collateral on full repayment.
+            if loan_data.collateral_amount > 0 {
+                token.transfer(
+                    &env.current_contract_address(),
+                    &borrower,
+                    &loan_data.collateral_amount,
+                );
+            }
+            env.storage().persistent().remove(&DataKey::Loan(loan_key));
         } else {
-            env.storage().instance().set(
-                &loan_key,
-                &LoanData {
-                    borrower: loan.borrower,
-                    amount: new_amount,
-                    collateral_amount: loan.collateral_amount,
-                    start_timestamp: loan.start_timestamp,
-                },
-            );
+            env.storage()
+                .persistent()
+                .set(&DataKey::Loan(loan_key), &loan_data);
         }
 
         env.events().publish(
@@ -254,19 +279,14 @@ impl LendingPool {
         );
     }
 
-    pub fn get_loan(env: Env, borrower: Address, loan_id: u64) -> Option<LoanData> {
-        let loan_key = LoanId(borrower, loan_id);
-        env.storage().instance().get(&loan_key)
-    }
-
     pub fn pause(env: Env) {
         Self::check_admin(&env);
-        env.storage().instance().set(&DATA_KEY.paused, &true);
+        env.storage().instance().set(&DataKey::Paused, &true);
     }
 
     pub fn unpause(env: Env) {
         Self::check_admin(&env);
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DataKey::Paused, &false);
     }
 
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
@@ -307,7 +327,7 @@ impl LendingPool {
     }
 
     fn check_admin(env: &Env) {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
     }
 
@@ -315,7 +335,7 @@ impl LendingPool {
         let paused: bool = env
             .storage()
             .instance()
-            .get(&DATA_KEY.paused)
+            .get(&DataKey::Paused)
             .unwrap_or(false);
         if paused {
             env.panic_with_error(Error::Paused);

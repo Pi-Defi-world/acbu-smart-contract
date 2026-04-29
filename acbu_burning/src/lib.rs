@@ -514,7 +514,6 @@ impl BurningContract {
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
-        Self::check_paused(&env);
 
         let current_version = Self::version(env.clone());
         if new_version <= current_version {
