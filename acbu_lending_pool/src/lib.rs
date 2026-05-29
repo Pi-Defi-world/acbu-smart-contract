@@ -72,7 +72,7 @@ pub enum Error {
     InsufficientLiquidity = 8,
     InvalidVersion = 9,
     Paused = 2001,
-    InvalidVersion = 2002,
+    
 }
 
 #[contract]

@@ -189,6 +189,58 @@ fn test_mint_from_fiat_success() {
 }
 
 #[test]
+fn test_mint_from_fiat_mints_fee_to_treasury() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
+    let operator = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let mint_addr = client.address.clone();
+
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
+    stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
+    oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
+
+    init_mint_client(
+        &env,
+        &client,
+        &admin,
+        &oracle,
+        &reserve_tracker,
+        &acbu_token_id,
+        &usdc_token_id,
+        &admin,
+        &treasury,
+        100,
+        0,
+    );
+
+    client.set_operator(&operator);
+
+    let fiat_amount = 100 * DECIMALS;
+    let fintech_tx_id = SorobanString::from_str(&env, "fintech_fee_tx");
+    let acbu = client.mint_from_fiat(
+        &operator,
+        &recipient,
+        &CurrencyCode::new(&env, "NGN"),
+        &fiat_amount,
+        &fintech_tx_id,
+    );
+
+    let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token_id);
+    let expected_fee = 1 * DECIMALS;
+    let expected_acbu = 99 * DECIMALS;
+    assert_eq!(acbu, expected_acbu);
+    assert_eq!(acbu_client.balance(&recipient), expected_acbu);
+    assert_eq!(acbu_client.balance(&treasury), expected_fee);
+}
+
+#[test]
 #[should_panic(expected = "#5007")]
 fn test_mint_from_fiat_unauthorized_caller() {
     let env = Env::default();

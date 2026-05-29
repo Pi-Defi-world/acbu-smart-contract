@@ -14,7 +14,7 @@ use shared::{
 pub mod token_contract {
     soroban_sdk::contractimport!(
         file = "../soroban_token_contract.wasm",
-        sha256 = "d97a3e83c3523504e4ae1dc74b89fcaee443f77ac6c88744d0b28f963571aac5"
+        sha256 = "83fa72f2860966b0825e58a7e4a327b4bee7ab89d5a17b18406e8402c74ebaa9"
     );
 }
 
