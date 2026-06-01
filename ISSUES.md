@@ -8,7 +8,7 @@ Issues found in the smart contracts (acbu_minting, acbu_burning, acbu_oracle, ac
 
 1. **Missing access control on escrow `release`** – acbu_escrow/src/lib.rs: `release` has no auth check. Any address can call `release(escrow_id)` and send funds to the payee.
 2. **Unrestricted minting in `mint_from_fiat`** – acbu_minting/src/lib.rs: `mint_from_fiat` does not validate `fintech_tx_id` or off-chain fiat deposits. With `check_admin_or_user`, the recipient can call it for themselves and mint ACBU without real fiat backing.
-3. **Escrow ID collision** – acbu_escrow/src/lib.rs: Escrow keys use only `(ESCROW, escrow_id)`. Two payers can use the same `escrow_id`; the second create overwrites the first. The first payer's funds become unrecoverable.
+3. **Escrow ID collision** – acbu_escrow/src/lib.rs: Escrow keys use only `(ESCROW, escrow_id)`. Two payers can use the same `escrow_id`; the second create overwrites the first. The first payer's funds become unrecoverable. ✅ **Resolved (#192):** EscrowId now includes payer address: `EscrowId(pub Address, pub u64)`. Keys are `(payer, escrow_id)`, preventing collisions between different payers using the same escrow_id. Covered by `acbu_escrow/tests/test.rs::test_different_payers_can_reuse_same_escrow_id_without_collision` and `acbu_escrow/tests/test_edge_cases.rs::test_two_payers_same_escrow_id_independent`.
 4. **Incorrect total supply in `verify_reserves`** – acbu_reserve_tracker/src/lib.rs: `verify_reserves` uses `acbu_client.balance(&env.current_contract_address())` as total supply. The reserve tracker does not hold ACBU, so this is always 0. The function returns `true` early and reserve checks never actually run.
 5. **Missing auth checks in savings vault** – acbu_savings_vault/src/lib.rs: `deposit` and `withdraw` lack `user.require_auth()`. Anyone can call `withdraw(user=X, term_seconds=Y, amount=Z)` and move funds without X's authorization.
 6. **Missing auth checks in lending pool** – acbu_lending_pool/src/lib.rs: `deposit` and `withdraw` lack `lender.require_auth()`. Anyone can call `withdraw(lender=X, amount=Y)` and drain X's balance.
@@ -36,7 +36,7 @@ Issues found in the smart contracts (acbu_minting, acbu_burning, acbu_oracle, ac
 
 ## Low
 
-22. **Magic number for fee cap in savings and lending** – acbu_savings_vault and acbu_lending_pool use `10_000` instead of `shared::BASIS_POINTS`, unlike minting and burning.
+22. **Magic number for fee cap in savings and lending** – ✅ **Resolved (PR #143):** acbu_savings_vault and acbu_lending_pool now use `shared::BASIS_POINTS` constant instead of hardcoded `10_000`, consistent with minting and burning.
 23. **Incorrect fee in per-account BurnEvent** – acbu_burning/src/lib.rs: Each `BurnEvent` uses `calculate_fee(amount_per_account, fee_rate)`, but the fee is taken from the total `acbu_amount`. Per-account fees in events don't match actual fee accounting.
 24. **`yield_amount` always 0 in savings** – acbu_savings_vault/src/lib.rs: `WithdrawEvent` always sets `yield_amount: 0`, suggesting yield logic is not implemented.
 25. **Fee rate stored but unused in lending pool** – acbu_lending_pool/src/lib.rs: `fee_rate` is stored during initialization but never applied to any operation.

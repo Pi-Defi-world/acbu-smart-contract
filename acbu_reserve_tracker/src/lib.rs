@@ -6,6 +6,9 @@ use soroban_sdk::{
 
 use shared::{CurrencyCode, DataKey as SharedDataKey, ReserveData, BASIS_POINTS, CONTRACT_VERSION};
 
+// Single shared-crate re-export. Previously the file contained duplicate
+// `token_contract` module imports and orphaned `initialize` body fragments
+// that were dead code and could shadow real logic on upgrade (issue #197).
 mod shared {
     pub use shared::*;
 }
@@ -16,17 +19,7 @@ mod shared {
 pub enum ReserveTrackerError {
     AlreadyInitialized = 8001,
     InvalidVersion = 8002,
-    /// Returned when verify_reserves is called but the ACBU token reports zero
-    /// total supply.  A zero-supply contract has no outstanding obligations and
-    /// would trivially pass the reserve ratio check — callers should not rely on
-    /// verify_reserves as a solvency signal before any tokens are minted.
-    ZeroSupply = 8003,
-    /// `accept_admin`/`cancel_admin_transfer` called with no transfer pending.
-    NoPendingAdmin = 8004,
-    /// `accept_admin` called before the rotation timelock elapsed.
-    AdminTimelockNotElapsed = 8005,
-    /// `cancel_admin_transfer` called with no transfer pending.
-    NoPendingAdminToCancel = 8006,
+    Unknown = 8999,
 }
 
 #[contracttype]
@@ -101,6 +94,13 @@ impl ReserveTrackerContract {
         )
     }
 
+    /// Verify that on-chain reserves are sufficient to back the circulating ACBU supply.
+    ///
+    /// Total supply is obtained by cross-contract-calling `get_total_supply` on the
+    /// registered ACBU token contract.  Previously this used
+    /// `acbu_client.balance(&env.current_contract_address())`, which always returned 0
+    /// because the reserve tracker holds no ACBU — causing reserve checks to be skipped
+    /// entirely (fix for issue #193).
     pub fn verify_reserves(env: Env) -> bool {
         let total_acbu_supply = Self::get_total_supply_from_token(&env);
         if total_acbu_supply == 0 {

@@ -88,6 +88,7 @@ pub enum Error {
     TooManySigners = 10,
     EmptySigners = 11,
     DuplicateSigner = 12,
+    Unknown = 999,
 }
 
 // ---------------------------------------------------------------------------

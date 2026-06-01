@@ -2,6 +2,8 @@
 
 use soroban_sdk::{contracterror, contracttype, Address, String as SorobanString, Vec};
 
+pub mod reentrancy_guard;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
@@ -213,12 +215,7 @@ pub enum ContractError {
     InvalidRecipient = 11,
     /// WASM upgrade rejected: `new_version` must be greater than the stored version.
     InvalidVersion = 12,
-    /// `accept_admin`/`cancel_admin_transfer` called with no transfer pending.
-    NoPendingAdmin = 13,
-    /// `accept_admin` called before the admin-rotation timelock elapsed.
-    AdminTimelockNotElapsed = 14,
-    /// `cancel_admin_transfer` called with no transfer pending.
-    NoPendingAdminToCancel = 15,
+    Unknown = 9999,
 }
 
 /// Cross-contract method name constants — prevents silent logic splits from typos
@@ -237,6 +234,7 @@ pub const BASIS_POINTS: i128 = 10_000;
 pub const DECIMALS: i128 = 10_000_000; // 7 decimals
 pub const MIN_MINT_AMOUNT: i128 = 10_000_000; // 10 USDC (7 decimals)
 pub const MAX_MINT_AMOUNT: i128 = 1_000_000_000_000; // 1M USDC (7 decimals)
+pub const MAX_TOTAL_SUPPLY: i128 = 1_000_000_000_0_000_000; // 1 billion ACBU (7 decimals)
 pub const MIN_BURN_AMOUNT: i128 = 10_000_000; // 10 ACBU (7 decimals)
 pub const UPDATE_INTERVAL_SECONDS: u64 = 21_600; // 6 hours
 pub const EMERGENCY_THRESHOLD_BPS: i128 = 500; // 5% deviation threshold

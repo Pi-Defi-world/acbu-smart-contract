@@ -15,7 +15,7 @@ use std::process;
 /// Must match the sha256 field in every contractimport! that references
 /// this artifact (acbu_minting, acbu_burning, acbu_reserve_tracker).
 const EXPECTED_HASH: &str =
-    "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d";
+    "eb1a53948744e12a6b00ec891b301ebc78a06deb984d3726c9cbc315392aedec";
 
 const WASM_PATH: &str = "soroban_token_contract.wasm";
 

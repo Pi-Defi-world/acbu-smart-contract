@@ -1,16 +1,27 @@
+use soroban_sdk::{Address, Env, String};
+fn generate_unique_tx_id(env: &Env, _user: &Address, _amount: i128, prefix: &str) -> String {     String::from_str(env, prefix) }
 #![no_std]
+use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env,
-    IntoVal, String as SorobanString, Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, vec, Address, Bytes, BytesN,
+    Env, IntoVal, String as SorobanString, Symbol,
 };
 
 use shared::{
     calculate_amount_after_fee, calculate_fee, CurrencyCode, DataKey as SharedDataKey, MintEvent,
     BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MAX_MINT_AMOUNT, MIN_MINT_AMOUNT,
+    ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_CURRENCIES, ORACLE_GET_RATE,
+    ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT,
     UPDATE_INTERVAL_SECONDS,
-    ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_RATE_WITH_TS, ORACLE_GET_CURRENCIES,
-    ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_RATE, ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT,
 };
+
+#[allow(dead_code)]
+pub mod token_contract {
+    soroban_sdk::contractimport!(
+        file = "../soroban_token_contract.wasm",
+        sha256 = "eb1a53948744e12a6b00ec891b301ebc78a06deb984d3726c9cbc315392aedec"
+    );
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,8 +50,7 @@ pub struct DataKey {
     pub operator: Symbol,
     pub used_proofs: Symbol,
     pub processed_fintech_tx_ids: Symbol,
-    pub pending_admin: Symbol,
-    pub pending_admin_eligible_at: Symbol,
+    pub max_supply: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -60,9 +70,9 @@ const DATA_KEY: DataKey = DataKey {
     operator: symbol_short!("OPERATOR"),
     used_proofs: symbol_short!("PROOFS"),
     processed_fintech_tx_ids: symbol_short!("FTX_IDS"),
-    pending_admin: symbol_short!("PEND_ADM"),
-    pending_admin_eligible_at: symbol_short!("PEND_ETA"),
+    max_supply: symbol_short!("MAX_SUP"),
 };
+const TX_NONCE_KEY: Symbol = symbol_short!("TX_NONCE");
 
 /// Admin rotation timelock: the pending admin must wait this long before
 /// claiming ownership, giving the current admin a window to cancel a mistaken
@@ -93,12 +103,7 @@ pub enum MintingError {
     FintechTxIdTooLong = 5016,
     FintechTxIdInvalidChar = 5017,
     InvalidVersion = 5018,
-    /// `accept_admin`/`cancel_admin_transfer` called with no transfer pending.
-    NoPendingAdmin = 5019,
-    /// `accept_admin` called before the admin-rotation timelock elapsed.
-    AdminTimelockNotElapsed = 5020,
-    /// `cancel_admin_transfer` called with no transfer pending.
-    NoPendingAdminToCancel = 5021,
+    Unknown = 5999,
 }
 
 #[contract]
@@ -162,11 +167,17 @@ impl MintingContract {
         env.storage().instance().set(&DATA_KEY.total_supply, &0i128);
         env.storage()
             .instance()
+            .set(&DATA_KEY.max_supply, &MAX_TOTAL_SUPPLY);
+        env.storage()
+            .instance()
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Mint ACBU from USDC deposit (unchanged reserve/oracle flow).
     pub fn mint_from_usdc(env: Env, user: Address, usdc_amount: i128, recipient: Address) -> i128 {
+        // Re-entrancy guard
+        reentrancy_guard::acquire_guard(&env);
+
         Self::check_paused(&env);
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
@@ -220,6 +231,7 @@ impl MintingContract {
         let projected_supply = total_supply
             .checked_add(acbu_amount)
             .expect("Overflow in projected supply calculation");
+        Self::check_supply_cap(&env, projected_supply);
         let reserve_ok: bool = env.invoke_contract(
             &reserve_tracker_addr,
             &Symbol::new(&env, RESERVE_IS_SUFFICIENT),
@@ -259,6 +271,9 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
+        // Release re-entrancy guard
+        reentrancy_guard::release_guard(&env);
+
         acbu_amount
     }
 
@@ -271,6 +286,9 @@ impl MintingContract {
         acbu_amount: i128,
         proof_id: SorobanString,
     ) -> i128 {
+        // Re-entrancy guard
+        reentrancy_guard::acquire_guard(&env);
+
         Self::check_paused(&env);
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
@@ -326,6 +344,7 @@ impl MintingContract {
         let projected_supply = total_supply
             .checked_add(acbu_amount)
             .expect("Overflow in projected supply calculation");
+        Self::check_supply_cap(&env, projected_supply);
 
         let reserve_ok: bool = env.invoke_contract(
             &reserve_tracker_addr,
@@ -346,6 +365,12 @@ impl MintingContract {
             .checked_mul(acbu_rate)
             .and_then(|v| v.checked_div(DECIMALS))
             .expect("Overflow in usd total calculation");
+
+        // CEI: Update state before external calls
+        total_supply += acbu_amount;
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         for currency in currencies.iter() {
             let weight: i128 = env.invoke_contract(
@@ -391,11 +416,6 @@ impl MintingContract {
             }
         }
 
-        total_supply += acbu_amount;
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.total_supply, &total_supply);
-
         // C-038: `StellarAssetClient::mint` requires this contract to be the
         // issuer or an authorized minter on the ACBU Stellar Asset Contract.
         // The Soroban auth tree for this call is: admin/issuer → minting_contract.
@@ -419,6 +439,9 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
+        // Release re-entrancy guard
+        reentrancy_guard::release_guard(&env);
+
         acbu_amount
     }
 
@@ -432,6 +455,9 @@ impl MintingContract {
         currency: CurrencyCode,
         s_token_amount: i128,
     ) -> i128 {
+        // Re-entrancy guard
+        reentrancy_guard::acquire_guard(&env);
+
         Self::check_paused(&env);
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
@@ -506,6 +532,7 @@ impl MintingContract {
         let projected_supply = total_supply
             .checked_add(acbu_amount)
             .expect("Overflow in projected supply calculation");
+        Self::check_supply_cap(&env, projected_supply);
         let reserve_ok: bool = env.invoke_contract(
             &reserve_tracker_addr,
             &Symbol::new(&env, RESERVE_IS_SUFFICIENT),
@@ -515,13 +542,14 @@ impl MintingContract {
             env.panic_with_error(MintingError::InsufficientReserves);
         }
 
-        let token = soroban_sdk::token::Client::new(&env, &expected_stoken);
-        token.transfer(&user, &vault, &s_token_amount);
-
+        // CEI: Update state before external calls
         total_supply += acbu_amount;
         env.storage()
             .instance()
             .set(&DATA_KEY.total_supply, &total_supply);
+
+        let token = soroban_sdk::token::Client::new(&env, &expected_stoken);
+        token.transfer(&user, &vault, &s_token_amount);
 
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &acbu_amount);
@@ -540,6 +568,9 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
+        // Release re-entrancy guard
+        reentrancy_guard::release_guard(&env);
+
         acbu_amount
     }
 
@@ -554,6 +585,9 @@ impl MintingContract {
         fiat_amount: i128,
         proof_id: SorobanString,
     ) -> i128 {
+        // Re-entrancy guard
+        reentrancy_guard::acquire_guard(&env);
+
         Self::check_paused(&env);
         let expected_operator: Address = Self::get_operator(env.clone());
         if operator != expected_operator {
@@ -632,6 +666,7 @@ impl MintingContract {
         let projected_supply = total_supply
             .checked_add(acbu_amount)
             .expect("Overflow in projected supply calculation");
+        Self::check_supply_cap(&env, projected_supply);
         let reserve_ok: bool = env.invoke_contract(
             &reserve_tracker_addr,
             &Symbol::new(&env, RESERVE_IS_SUFFICIENT),
@@ -641,21 +676,23 @@ impl MintingContract {
             env.panic_with_error(MintingError::InsufficientReserves);
         }
 
-        let custody = env.current_contract_address();
-        let token = soroban_sdk::token::Client::new(&env, &expected_stoken);
-        token.transfer(&custody, &vault, &fiat_amount);
-
+        // CEI: Update state before external calls
         total_supply += acbu_amount;
         env.storage()
             .instance()
             .set(&DATA_KEY.total_supply, &total_supply);
 
+        let custody = env.current_contract_address();
+        let token = soroban_sdk::token::Client::new(&env, &expected_stoken);
+        token.transfer(&custody, &vault, &fiat_amount);
+
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &acbu_amount);
 
         let fee = calculate_fee(usd_gross, fee_single);
+        let tx_id = generate_unique_tx_id(&env, &recipient, acbu_amount, "mint_demo");
         let mint_event = MintEvent {
-            transaction_id: SorobanString::from_str(&env, "mint_demo_fiat"),
+            transaction_id: tx_id,
             user: recipient.clone(),
             usdc_amount: usd_gross,
             acbu_amount,
@@ -668,6 +705,9 @@ impl MintingContract {
 
         // Seal the proof so it cannot be replayed (fixes the check_proof_unused guard above).
         mark_proof_used(&env, &proof_id);
+
+        // Release re-entrancy guard
+        reentrancy_guard::release_guard(&env);
 
         acbu_amount
     }
@@ -683,6 +723,9 @@ impl MintingContract {
         fiat_amount: i128,
         fintech_tx_id: SorobanString,
     ) -> i128 {
+        // Re-entrancy guard
+        reentrancy_guard::acquire_guard(&env);
+
         Self::check_paused(&env);
         let expected_operator: Address = Self::get_operator(env.clone());
 
@@ -815,6 +858,9 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
+        // Release re-entrancy guard
+        reentrancy_guard::release_guard(&env);
+
         acbu_amount
     }
 
@@ -888,6 +934,7 @@ impl MintingContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         Self::check_paused(&env);
+        Self::check_supply_cap(&env, new_supply);
         env.storage()
             .instance()
             .set(&DATA_KEY.total_supply, &new_supply);
@@ -898,6 +945,33 @@ impl MintingContract {
             .instance()
             .get(&DATA_KEY.total_supply)
             .unwrap_or(0)
+    }
+
+    pub fn get_max_supply(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.max_supply)
+            .unwrap_or(MAX_TOTAL_SUPPLY)
+    }
+
+    pub fn set_max_supply(env: Env, new_max_supply: i128) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+        Self::check_paused(&env);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.max_supply, &new_max_supply);
+    }
+
+    fn check_supply_cap(env: &Env, projected_supply: i128) {
+        let max_supply: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.max_supply)
+            .unwrap_or(MAX_TOTAL_SUPPLY);
+        if projected_supply > max_supply {
+            env.panic_with_error(MintingError::MaxSupplyExceeded);
+        }
     }
 
     pub fn pause(env: Env) {
@@ -1147,21 +1221,53 @@ fn check_oracle_freshness(env: &Env, oracle_timestamp: u64, max_staleness_second
     }
 }
 
-fn generate_unique_tx_id(env: &Env, _user: &Address, amount: i128, _prefix: &str) -> SorobanString {
-    let timestamp = env.ledger().timestamp();
-    let seq = env.ledger().sequence() as u64;
-    let hash = (amount as u64)
-        .wrapping_mul(0x9e3779b97f4a7c15)
-        .wrapping_add(timestamp.wrapping_mul(0x6c62272e07bb0142))
-        .wrapping_add(seq);
+fn generate_unique_tx_id(env: &Env, user: &Address, amount: i128, prefix: &str) -> SorobanString {
+    let nonce = next_tx_nonce(env);
+    let mut preimage = Bytes::new(env);
+
+    preimage.append(&SorobanString::from_str(env, prefix).to_xdr(env));
+    preimage.append(&env.current_contract_address().to_xdr(env));
+    preimage.append(&user.to_xdr(env));
+    preimage.append(&amount.to_xdr(env));
+    preimage.append(&env.ledger().timestamp().to_xdr(env));
+    preimage.append(&env.ledger().sequence().to_xdr(env));
+    preimage.append(&nonce.to_xdr(env));
+
+    let digest = env.crypto().sha256(&preimage).to_array();
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut buf = [0u8; 16];
-    let mut h = hash;
-    for i in (0..16).rev() {
-        buf[i] = HEX[(h & 0xF) as usize];
-        h >>= 4;
+    let prefix_bytes = prefix.as_bytes();
+    let mut buf = [0u8; 80];
+    let mut offset = 0usize;
+
+    for &b in prefix_bytes.iter() {
+        buf[offset] = b;
+        offset += 1;
     }
-    SorobanString::from_str(env, core::str::from_utf8(&buf).unwrap_or("0000000000000000"))
+    buf[offset] = b'_';
+    offset += 1;
+
+    for byte in digest.iter() {
+        buf[offset] = HEX[(byte >> 4) as usize];
+        buf[offset + 1] = HEX[(byte & 0x0f) as usize];
+        offset += 2;
+    }
+
+    SorobanString::from_str(
+        env,
+        core::str::from_utf8(&buf[..offset]).unwrap_or("mint_invalid_tx_id"),
+    )
+}
+
+fn next_tx_nonce(env: &Env) -> u64 {
+    let nonce = env
+        .storage()
+        .instance()
+        .get(&TX_NONCE_KEY)
+        .unwrap_or(0u64)
+        .checked_add(1)
+        .expect("transaction nonce overflow");
+    env.storage().instance().set(&TX_NONCE_KEY, &nonce);
+    nonce
 }
 
 // ---------------------------------------------------------------------------

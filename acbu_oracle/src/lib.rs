@@ -34,6 +34,8 @@ pub enum OracleError {
     UpgradeTimelockNotElapsed = 7018,
     NoPendingValidatorChange = 7019,
     ValidatorTimelockNotElapsed = 7020,
+    MaxValidatorsReached = 7021,
+    Unknown = 7999,
 }
 
 // ─── Admin rotation timelock (seconds) ───────────────────────────────────────
@@ -169,7 +171,7 @@ impl OracleContract {
             env.panic_with_error(OracleError::MinSignaturesZero);
         }
         if validators.len() > MAX_VALIDATORS {
-            panic!("Too many validators: maximum allowed is {}", MAX_VALIDATORS);
+            env.panic_with_error(OracleError::MaxValidatorsReached);
         }
 
         env.storage().instance().set(&DATA_KEY.admin, &admin);
@@ -691,10 +693,7 @@ impl OracleContract {
                 }
             }
             if validators.len() >= MAX_VALIDATORS {
-                panic!(
-                    "Cannot add validator: maximum number of validators ({}) reached",
-                    MAX_VALIDATORS
-                );
+                env.panic_with_error(OracleError::MaxValidatorsReached);
             }
             let mut new_validators = validators.clone();
             new_validators.push_back(validator);

@@ -18,22 +18,22 @@ Soroban (Stellar) smart contracts for the ACBU (African Currency Basket Unit) st
 ## Building
 
 ```bash
-# Build all contracts
+# Build all contracts in the workspace
 cargo build --target wasm32-unknown-unknown --release
 
 # Build specific contract
-cd minting
+cd acbu_minting
 cargo build --target wasm32-unknown-unknown --release
 ```
 
 ## Testing
 
 ```bash
-# Run all tests
+# Run all tests in the workspace
 cargo test
 
 # Run tests for specific contract
-cd minting
+cd acbu_minting
 cargo test
 ```
 
@@ -67,14 +67,19 @@ After deployment, contract addresses are saved to `.soroban/deployment_{network}
 ### Project Structure
 
 ```
-contracts/
-├── Cargo.toml              # Workspace configuration
+.
+├── acbu_minting/           # Minting contract
+├── acbu_burning/           # Burning contract
+├── acbu_oracle/            # Oracle contract
+├── acbu_reserve_tracker/   # Reserve tracker contract
+├── acbu_savings_vault/     # Savings vault contract
+├── acbu_lending_pool/      # Lending pool contract
+├── acbu_escrow/            # Escrow contract
+├── acbu_multisig/          # Multisig shared contract
 ├── shared/                 # Shared types and utilities
-├── minting/                # Minting contract
-├── burning/                # Burning contract
-├── oracle/                 # Oracle contract
-├── reserve_tracker/        # Reserve tracker contract
-└── scripts/                # Deployment scripts
+├── scripts/                # Deployment scripts
+├── docs/                   # Documentation
+└── tests/                  # Integration tests
 ```
 
 ### Adding a New Contract

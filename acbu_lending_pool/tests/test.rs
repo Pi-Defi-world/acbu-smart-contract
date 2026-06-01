@@ -221,6 +221,50 @@ fn test_borrow_basic() {
     );
 }
 
+#[test]
+fn test_fee_rate_accrues_into_repayment_due() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1_000_000);
+
+    let admin = Address::generate(&env);
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    let contract_id = env.register_contract(None, LendingPool);
+    let client = LendingPoolClient::new(&env, &contract_id);
+    let fee_rate_bps = 1_000i128;
+    client.initialize(&admin, &acbu_token, &fee_rate_bps);
+
+    let token_admin = StellarAssetClient::new(&env, &acbu_token);
+
+    let lender = Address::generate(&env);
+    let pool_liquidity = 1_000_000i128;
+    token_admin.mint(&lender, &pool_liquidity);
+    client.deposit(&lender, &pool_liquidity);
+
+    let borrower = Address::generate(&env);
+    let borrow_amount = 100_000i128;
+    let collateral = borrow_amount;
+    token_admin.mint(&borrower, &(collateral + borrow_amount));
+
+    let loan_id = 226u64;
+    client.borrow(&borrower, &borrow_amount, &collateral, &loan_id);
+
+    let elapsed = 365u64 * 24 * 60 * 60 / 2;
+    env.ledger().with_mut(|l| l.timestamp += elapsed);
+
+    let loan = client
+        .get_loan(&borrower, &loan_id)
+        .expect("loan must exist");
+    let expected_fee =
+        borrow_amount * fee_rate_bps * i128::from(elapsed) / (BASIS_POINTS * 31_536_000);
+
+    assert_eq!(loan.accrued_interest, expected_fee);
+    assert_eq!(loan.total_repayment_due, borrow_amount + expected_fee);
+}
+
 /// 2. Basic repay: borrower repays the full loan.
 ///    Asserts loan is cleared, pool liquidity restored, borrower balance zeroed.
 #[test]

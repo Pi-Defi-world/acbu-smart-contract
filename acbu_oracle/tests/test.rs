@@ -109,7 +109,7 @@ fn test_update_rate() {
     client.update_rate(&validator, &ngn, &rate, &sources, &env.ledger().timestamp());
 
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1235000);
+    assert_eq!(stored_rate, 1235000); // median of sources, not rate parameter (1234567)
 
     let events = env.events().all();
     let mut found = false;
