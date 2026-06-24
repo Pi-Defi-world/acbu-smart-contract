@@ -6,22 +6,50 @@
 // in source (inside each contractimport! macro and in this script).
 // Run  ./scripts/fetch_token_wasm.sh  to download the artifact before
 // your first build.
+//
+// Post-build WASM optimisation (wasm-opt / wasm-strip)
+// ─────────────────────────────────────────────────────
+// Enabled by setting the environment variable WASM_POST_OPT=1:
+//
+//   WASM_POST_OPT=1 cargo build --release --target wasm32-unknown-unknown
+//
+// When WASM_POST_OPT is not set (the default) the steps are skipped
+// silently so that plain `cargo build / cargo test` are never affected.
+//
+// When WASM_POST_OPT=1 but a required tool is missing, the build prints
+// an actionable install hint and *fails* — the developer explicitly asked
+// for optimisation, so a silent skip would be misleading.
+//
+// Required tools:
+//   wasm-opt  — from the Binaryen project:
+//               https://github.com/WebAssembly/binaryen/releases
+//               macOS : brew install binaryen
+//               Debian: apt install binaryen
+//
+//   wasm-strip — from the WABT project:
+//               https://github.com/WebAssembly/wabt/releases
+//               macOS : brew install wabt
+//               Debian: apt install wabt
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
+use std::process::Command;
 
 /// Expected SHA-256 of soroban_token_contract.wasm.
 /// Must match the sha256 field in every contractimport! that references
 /// this artifact (acbu_minting, acbu_burning, acbu_reserve_tracker).
-const EXPECTED_HASH: &str =
-    "8759e8ea16c858a6d3b743dd0be8b580e363d0097538fb77b375965619288d95";
+const EXPECTED_HASH: &str = "8759e8ea16c858a6d3b743dd0be8b580e363d0097538fb77b375965619288d95";
 
 const WASM_PATH: &str = "soroban_token_contract.wasm";
 
+/// Release WASM output directory (relative to workspace root).
+const RELEASE_WASM_DIR: &str = "target/wasm32-unknown-unknown/release";
+
 fn main() {
-    // Re-run this script only when the WASM file itself changes.
+    // Re-run this script whenever the WASM file changes or the opt toggle flips.
     println!("cargo:rerun-if-changed={}", WASM_PATH);
+    println!("cargo:rerun-if-env-changed=WASM_POST_OPT");
 
     if !Path::new(WASM_PATH).exists() {
         eprintln!("error[build]: {} not found.", WASM_PATH);
@@ -56,7 +84,16 @@ fn main() {
     );
 
     verify_source_hashes();
+
+    // Optional post-build size optimisation — enabled by WASM_POST_OPT=1.
+    if std::env::var("WASM_POST_OPT").as_deref() == Ok("1") {
+        post_opt_wasm();
+    }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Source hash verification
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Verify that every contractimport! in source still references the expected hash.
 fn verify_source_hashes() {
@@ -84,19 +121,174 @@ fn verify_source_hashes() {
                 }
             }
             Err(e) => {
-                eprintln!("cargo:warning=Could not read {} for hash check: {}", path, e);
+                eprintln!(
+                    "cargo:warning=Could not read {} for hash check: {}",
+                    path, e
+                );
             }
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Optional WASM post-optimisation (wasm-opt + wasm-strip)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Run `wasm-opt` and `wasm-strip` over every contract WASM in the release dir.
+///
+/// Probes for each tool before use.  If a tool is absent **and** the caller
+/// explicitly set `WASM_POST_OPT=1`, the build fails with install instructions.
+fn post_opt_wasm() {
+    let wasm_dir = Path::new(RELEASE_WASM_DIR);
+
+    if !wasm_dir.exists() {
+        // The release dir doesn't exist yet — nothing to optimise.
+        // This happens when build.rs runs before `cargo build --release` has
+        // produced output (e.g., during `cargo check`).
+        println!(
+            "cargo:warning=WASM_POST_OPT=1 set but {} does not exist yet; \
+             post-optimisation skipped for this build.",
+            RELEASE_WASM_DIR
+        );
+        return;
+    }
+
+    let wasm_files: Vec<PathBuf> = match fs::read_dir(wasm_dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("wasm"))
+            // Skip the dependency/ sub-dir that cargo sometimes emits.
+            .filter(|p| {
+                p.parent()
+                    .and_then(|d| d.file_name())
+                    .and_then(|n| n.to_str())
+                    != Some("deps")
+            })
+            .collect(),
+        Err(e) => {
+            eprintln!(
+                "cargo:warning=Could not read {}: {} — post-optimisation skipped.",
+                RELEASE_WASM_DIR, e
+            );
+            return;
+        }
+    };
+
+    if wasm_files.is_empty() {
+        println!(
+            "cargo:warning=WASM_POST_OPT=1 set but no .wasm files found in {}.",
+            RELEASE_WASM_DIR
+        );
+        return;
+    }
+
+    // Probe tools once before iterating over files.
+    require_tool(
+        "wasm-opt",
+        &["--version"],
+        "Install binaryen:\n  \
+         macOS : brew install binaryen\n  \
+         Debian: apt install binaryen\n  \
+         GitHub: https://github.com/WebAssembly/binaryen/releases",
+    );
+    require_tool(
+        "wasm-strip",
+        &["--version"],
+        "Install wabt:\n  \
+         macOS : brew install wabt\n  \
+         Debian: apt install wabt\n  \
+         GitHub: https://github.com/WebAssembly/wabt/releases",
+    );
+
+    for wasm in &wasm_files {
+        let display = wasm.display();
+
+        // wasm-opt -Oz --strip-debug -o <file> <file>
+        run_tool(
+            "wasm-opt",
+            &[
+                "-Oz",
+                "--strip-debug",
+                "-o",
+                wasm.to_str().expect("non-UTF-8 WASM path"),
+                wasm.to_str().expect("non-UTF-8 WASM path"),
+            ],
+        );
+        println!("cargo:warning=wasm-opt applied to {}", display);
+
+        // wasm-strip <file>
+        run_tool("wasm-strip", &[wasm.to_str().expect("non-UTF-8 WASM path")]);
+        println!("cargo:warning=wasm-strip applied to {}", display);
+    }
+}
+
+/// Probe whether `tool` is available on PATH.
+///
+/// * If the tool is **not found** (OS error 2 / "not found on PATH") and
+///   `WASM_POST_OPT=1` is set, the build **fails** with `install_hint`.
+/// * Any other OS error is treated as a hard failure (permissions, etc.).
+/// * A non-zero exit from the probe command itself is **ignored** — some
+///   versions of these tools return non-zero for `--version`.
+fn require_tool(tool: &str, probe_args: &[&str], install_hint: &str) {
+    let result = Command::new(tool).args(probe_args).output();
+
+    match result {
+        Ok(_) => {} // binary exists; actual exit code doesn't matter for a version probe
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!();
+            eprintln!(
+                "error[build]: `{}` not found on PATH but WASM_POST_OPT=1 is set.",
+                tool
+            );
+            eprintln!();
+            eprintln!("  {}", install_hint.replace('\n', "\n  "));
+            eprintln!();
+            eprintln!("  To skip post-optimisation, unset WASM_POST_OPT or set it to 0.");
+            eprintln!();
+            process::exit(1);
+        }
+        Err(e) => {
+            eprintln!(
+                "error[build]: Failed to probe `{}`: {} — \
+                 check PATH and file permissions.",
+                tool, e
+            );
+            process::exit(1);
+        }
+    }
+}
+
+/// Run `tool` with `args`, failing the build on non-zero exit.
+///
+/// Assumes `require_tool` was already called for this binary.
+fn run_tool(tool: &str, args: &[&str]) {
+    let status = Command::new(tool).args(args).status().unwrap_or_else(|e| {
+        eprintln!("error[build]: Could not spawn `{}`: {}", tool, e);
+        process::exit(1);
+    });
+
+    if !status.success() {
+        eprintln!(
+            "error[build]: `{}` exited with status {} — optimisation failed.",
+            tool,
+            status.code().unwrap_or(-1)
+        );
+        process::exit(1);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHA-256 (pure-Rust, no external crates)
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Compute a lowercase hex SHA-256 digest without any external crate.
 fn sha256_hex(data: &[u8]) -> String {
     // Initial hash values (first 32 bits of fractional parts of square roots
     // of the first 8 primes).
     let mut h: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
     ];
 
     // Round constants (first 32 bits of the fractional parts of the cube
@@ -159,9 +351,13 @@ fn sha256_hex(data: &[u8]) -> String {
             let maj = (a & b) ^ (a & c) ^ (b & c);
             let temp2 = s0.wrapping_add(maj);
 
-            hh = g; g = f; f = e;
+            hh = g;
+            g = f;
+            f = e;
             e = d.wrapping_add(temp1);
-            d = c; c = b; b = a;
+            d = c;
+            c = b;
+            b = a;
             a = temp1.wrapping_add(temp2);
         }
 
@@ -175,7 +371,5 @@ fn sha256_hex(data: &[u8]) -> String {
         h[7] = h[7].wrapping_add(hh);
     }
 
-    h.iter()
-        .map(|v| format!("{:08x}", v))
-        .collect::<String>()
+    h.iter().map(|v| format!("{:08x}", v)).collect::<String>()
 }
