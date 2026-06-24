@@ -97,6 +97,7 @@ pub struct DepositEvent {
     pub net_amount: i128,
     pub term_seconds: u64,
     pub timestamp: u64,
+    pub maturity_timestamp: u64,
 }
 
 #[contracttype]
@@ -205,9 +206,9 @@ impl SavingsVault {
         // the current ledger timestamp. All term comparisons stay in u64 space
         // to avoid unintended sign behavior from u64→i128 casts.
         let now = env.ledger().timestamp();
-        if term_seconds > u64::MAX - now {
-            env.panic_with_error(Error::InvalidTerm);
-        }
+        let maturity_timestamp = now
+            .checked_add(term_seconds)
+            .unwrap_or_else(|| env.panic_with_error(Error::InvalidTerm));
 
         let fee_rate = Self::load_fee_rate(&env).unwrap_or_else(|e| env.panic_with_error(e));
         let fee_amount = calculate_fee(amount, fee_rate);
@@ -247,7 +248,7 @@ impl SavingsVault {
 
         lots.push_back(DepositLot {
             amount: net_amount,
-            timestamp: env.ledger().timestamp(),
+            timestamp: now,
             term_seconds,
         });
 
@@ -262,7 +263,8 @@ impl SavingsVault {
                 fee_amount,
                 net_amount,
                 term_seconds,
-                timestamp: env.ledger().timestamp(),
+                timestamp: now,
+                maturity_timestamp,
             },
         );
 
