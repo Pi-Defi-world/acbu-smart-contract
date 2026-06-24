@@ -15,6 +15,22 @@ resolver = "2"
 # Build script for WASM integrity verification
 build = "build.rs"
 
+# ---------------------------------------------------------------------------
+# Workspace-wide dependency versions
+#
+# Use `=` (exact) requirements for Soroban SDK crates, not caret (`^`) or
+# bare version strings.  A Soroban minor release can change WASM encoding,
+# host-function signatures, gas cost tables, or XDR event shapes — all of
+# which break on-chain compatibility without any change to contract source.
+#
+# To upgrade: bump *both* fields below (and run `cargo update` to regenerate
+# Cargo.lock), then rebuild + re-test every contract before deploying.
+# ---------------------------------------------------------------------------
+[workspace.dependencies]
+# Exact pin — caret (`^`) is intentionally *not* used here.
+# (Note: 21.0.0 was yanked from crates.io, using latest 21.x version)
+soroban-sdk = "=21.7.7"
+
 [profile.release]
 opt-level = "z"      # Optimize for size
 lto = true           # Enable link-time optimization
