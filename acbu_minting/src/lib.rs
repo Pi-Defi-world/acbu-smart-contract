@@ -895,7 +895,7 @@ impl MintingContract {
         address == &admin
     }
 
-    /// Testnet / ops: transfer demo basket S-token from custodial balance on this contract to
+    /// Transfer a basket S-token from this contract's custodial balance to
     /// `recipient` (e.g. user faucet). Admin only; caps per call to limit abuse.
     ///
     /// FIX(#330): Accepts an explicit `recipient` address so the admin can seed
@@ -905,8 +905,8 @@ impl MintingContract {
     /// FIX(#327): This is an admin-only entry point, fully isolated from
     /// `mint_from_fiat`. It requires admin auth (not operator auth), enforces
     /// the reentrancy guard and paused check, and does NOT mint ACBU — it only
-    /// moves pre-funded demo S-tokens from custody to a recipient.
-    pub fn admin_drip_demo_fiat(
+    /// moves pre-funded S-tokens from custody to a recipient.
+    pub fn admin_drip_fiat(
         env: Env,
         recipient: Address,
         currency: CurrencyCode,

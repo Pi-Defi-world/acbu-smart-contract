@@ -379,6 +379,10 @@ fn test_deposit_event_has_fee_fields() {
     assert_eq!(deposit_event.gross_amount, DECIMALS);
     assert_eq!(deposit_event.fee_amount, 300_000);
     assert_eq!(deposit_event.net_amount, 9_700_000);
+    assert_eq!(
+        deposit_event.maturity_timestamp,
+        deposit_event.timestamp + 3600
+    );
 }
 
 #[test]
