@@ -113,6 +113,68 @@ fn test_replace_pending_nomination() {
 // ─── sad paths ───────────────────────────────────────────────────────────────
 
 #[test]
+#[should_panic(expected = "#7009")]
+fn test_update_rate_below_min_signatures_panics() {
+    // min_signatures = 3, so sources.len() must be >= 3
+    let env = make_env();
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let validator = Address::generate(&env);
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let (currencies, weights) = dummy_currencies(&env);
+    env.mock_all_auths();
+    // min_signatures = 3, validator set size = 1 (allowed by initialize only when min=1;
+    // use min=1 here but rely on MIN_ORACLE_SOURCE_FEEDS=3 floor)
+    client.initialize(&admin, &validators, &1u32, &currencies, &weights);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut two_sources = Vec::new(&env);
+    two_sources.push_back(100_000_000i128);
+    two_sources.push_back(100_000_000i128);
+    // Only 2 sources but min required is max(min_sigs=1, MIN_ORACLE_SOURCE_FEEDS=3) = 3
+    client.update_rate(&validator, &ngn, &100_000_000i128, &two_sources, &0u64);
+}
+
+#[test]
+fn test_update_rate_meets_quorum_succeeds() {
+    let env = make_env();
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let validator = Address::generate(&env);
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let (currencies, weights) = dummy_currencies(&env);
+    env.mock_all_auths();
+    client.initialize(&admin, &validators, &1u32, &currencies, &weights);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut three_sources = Vec::new(&env);
+    three_sources.push_back(100_000_000i128);
+    three_sources.push_back(100_000_000i128);
+    three_sources.push_back(100_000_000i128);
+
+    env.ledger().set(LedgerInfo {
+        timestamp: 1,
+        protocol_version: 20,
+        sequence_number: 1,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 10,
+        min_persistent_entry_ttl: 10,
+        max_entry_ttl: 3_110_400,
+    });
+    client.update_rate(&validator, &ngn, &100_000_000i128, &three_sources, &0u64);
+    assert_eq!(client.get_rate(&ngn), 100_000_000i128);
+}
+
+#[test]
 #[should_panic(expected = "#7005")]
 fn test_accept_before_timelock_panics() {
     let (env, _admin, client) = setup();

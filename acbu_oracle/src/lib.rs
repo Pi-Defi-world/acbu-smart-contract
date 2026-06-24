@@ -360,7 +360,13 @@ impl OracleContract {
             }
         }
 
-        if sources.len() > 0 && sources.len() < MIN_ORACLE_SOURCE_FEEDS {
+        let min_sigs: u32 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.min_signatures)
+            .unwrap();
+        let required = min_sigs.max(MIN_ORACLE_SOURCE_FEEDS);
+        if sources.len() < required {
             env.panic_with_error(OracleError::InsufficientOracleSources);
         }
 
