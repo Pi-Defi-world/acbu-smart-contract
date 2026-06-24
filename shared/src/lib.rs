@@ -224,6 +224,9 @@ pub enum ContractError {
     InvalidRecipient = 11,
     /// WASM upgrade rejected: `new_version` must be greater than the stored version.
     InvalidVersion = 12,
+    NoPendingAdmin = 13,
+    AdminTimelockNotElapsed = 14,
+    NoPendingAdminToCancel = 15,
     Unknown = 9999,
 }
 
