@@ -49,7 +49,7 @@ mod mocks {
     }
 }
 
-fn setup_fuzz_test(env: &Env) -> (Address, Address, MintingContractClient, Address, soroban_sdk::token::StellarAssetClient<'_, '_>, soroban_sdk::token::Client<'_, '_>) {
+fn setup_fuzz_test(env: &Env) -> (Address, Address, MintingContractClient, Address, soroban_sdk::token::StellarAssetClient<'_>, soroban_sdk::token::Client<'_>) {
     let admin = Address::generate(env);
     let oracle = env.register_contract(None, mocks::MockOracle);
     let reserve_tracker = env.register_contract(None, mocks::MockReserveTracker);
@@ -86,9 +86,7 @@ proptest! {
         
         let max_mint = 1_000_000_000_000;
         
-        let res = std::panic::catch_unwind(|| {
-            client.mint_from_usdc(&user, &amount, &user);
-        });
+        let res = client.try_mint_from_usdc(&user, &amount, &user);
         
         if amount > max_mint {
             assert!(res.is_err());

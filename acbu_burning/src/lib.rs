@@ -11,9 +11,6 @@ use shared::{
     ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT,
     TOKEN_GET_TOTAL_SUPPLY, UPDATE_INTERVAL_SECONDS,
 };
-
-const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
-
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataKey {
@@ -47,6 +44,11 @@ const DATA_KEY: DataKey = DataKey {
 };
 
 contractmeta!(key = "version", val = "1");
+
+/// Admin rotation timelock: the pending admin must wait this long before
+/// claiming ownership, giving the current admin a window to cancel a mistaken
+/// or malicious transfer.
+const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 
 #[contract]
 pub struct BurningContract;
@@ -233,6 +235,10 @@ impl BurningContract {
 
         // C-057: Enforce all recipient addresses are distinct.
         let rlen = recipients.len();
+        if rlen > 10 {
+            env.panic_with_error(ContractError::InvalidRecipient);
+        }
+
         for i in 0..rlen {
             for j in (i + 1)..rlen {
                 if recipients.get(i).unwrap() == recipients.get(j).unwrap() {
@@ -273,22 +279,6 @@ impl BurningContract {
             env.panic_with_error(ContractError::InvalidRate);
         }
 
-        let total_fee = calculate_fee(acbu_amount, fee_rate);
-        let net_acbu = acbu_amount
-            .checked_sub(total_fee)
-            .expect("Underflow in net acbu calculation");
-
-        // usd_total = (net_acbu * acbu_rate) / DECIMALS
-        let usd_total = net_acbu
-            .checked_mul(acbu_rate)
-            .and_then(|v| v.checked_div(DECIMALS))
-            .expect("Overflow in usd total calculation");
-
-        Self::check_reserves(&env, &acbu_token, &reserve_tracker_addr);
-
-        let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token);
-        acbu_client.burn(&user, &acbu_amount);
-
         let currencies: Vec<CurrencyCode> = env.invoke_contract(
             &oracle_addr,
             &Symbol::new(&env, ORACLE_GET_CURRENCIES),
@@ -301,20 +291,80 @@ impl BurningContract {
             env.panic_with_error(ContractError::InvalidRecipient);
         }
 
-        let mut amounts_out = Vec::new(&env);
+        let mut weights = Vec::new(&env);
+        let mut total_weight = 0i128;
+        let mut last_positive_weight_index = None;
         for i in 0..currencies.len() {
             let currency = currencies.get(i).unwrap();
-            let recipient = recipients.get(i).unwrap();
-
             let weight: i128 = env.invoke_contract(
                 &oracle_addr,
                 &Symbol::new(&env, ORACLE_GET_BASKET_WEIGHT),
-                vec![&env, currency.clone().into_val(&env)],
+                vec![&env, currency.into_val(&env)],
             );
+            if weight < 0 {
+                env.panic_with_error(ContractError::InvalidAmount);
+            }
+            if weight > 0 {
+                total_weight = total_weight
+                    .checked_add(weight)
+                    .expect("Overflow in total basket weight");
+                last_positive_weight_index = Some(i);
+            }
+            weights.push_back(weight);
+        }
+        if total_weight <= 0 {
+            env.panic_with_error(ContractError::InvalidCurrency);
+        }
+
+        let total_fee = calculate_fee(acbu_amount, fee_rate);
+        let net_acbu = acbu_amount
+            .checked_sub(total_fee)
+            .expect("Underflow in net acbu calculation");
+
+        Self::check_reserves(&env, &acbu_token, &reserve_tracker_addr);
+
+        let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token);
+        acbu_client.burn(&user, &acbu_amount);
+
+        let mut amounts_out = Vec::new(&env);
+        let mut allocated_gross = 0i128;
+        let mut allocated_fee = 0i128;
+        let last_positive_weight_index = last_positive_weight_index.unwrap();
+
+        for i in 0..currencies.len() {
+            let currency = currencies.get(i).unwrap();
+            let recipient = recipients.get(i).unwrap();
+            let weight = weights.get(i).unwrap();
+
             if weight == 0 {
                 amounts_out.push_back(0);
                 continue;
             }
+
+            let (acbu_gross_i, fee_i) = if i == last_positive_weight_index {
+                (
+                    acbu_amount
+                        .checked_sub(allocated_gross)
+                        .expect("Underflow in remaining gross allocation"),
+                    total_fee
+                        .checked_sub(allocated_fee)
+                        .expect("Underflow in remaining fee allocation"),
+                )
+            } else {
+                (
+                    Self::weighted_floor(acbu_amount, weight, total_weight),
+                    Self::weighted_floor(total_fee, weight, total_weight),
+                )
+            };
+            let net_acbu_i = acbu_gross_i
+                .checked_sub(fee_i)
+                .expect("Underflow in net basket allocation");
+            allocated_gross = allocated_gross
+                .checked_add(acbu_gross_i)
+                .expect("Overflow in gross allocation");
+            allocated_fee = allocated_fee
+                .checked_add(fee_i)
+                .expect("Overflow in fee allocation");
 
             let (rate, rate_timestamp): (i128, u64) = env.invoke_contract(
                 &oracle_addr,
@@ -334,15 +384,8 @@ impl BurningContract {
                 vec![&env, currency.clone().into_val(&env)],
             );
 
-            // Per-currency gross ACBU slice and fee slice.
-            let acbu_gross_i = (weight * acbu_amount) / BASIS_POINTS;
-            let fee_i = (weight * total_fee) / BASIS_POINTS;
-            let net_acbu_i = acbu_gross_i - fee_i;
-
-            let usd_i = (weight * usd_total) / BASIS_POINTS;
-            // native_i = (usd_i * DECIMALS) / rate
-            let native_i = usd_i
-                .checked_mul(DECIMALS)
+            let native_i = net_acbu_i
+                .checked_mul(acbu_rate)
                 .and_then(|v| v.checked_div(rate))
                 .expect("Overflow in native basket calculation");
 
@@ -351,7 +394,6 @@ impl BurningContract {
                 let spender = env.current_contract_address();
                 token.transfer_from(&spender, &vault, &recipient, &native_i);
             }
-
             amounts_out.push_back(native_i);
 
             let burn_event = BurnEvent {
@@ -369,13 +411,55 @@ impl BurningContract {
                 .publish((symbol_short!("burn"), user.clone()), burn_event);
         }
 
+        if allocated_gross != acbu_amount || allocated_fee != total_fee {
+            env.panic_with_error(ContractError::InvalidAmount);
+        }
+        if allocated_gross
+            .checked_sub(allocated_fee)
+            .expect("Underflow in allocated net validation")
+            != net_acbu
+        {
+            env.panic_with_error(ContractError::InvalidAmount);
+        }
+
         reentrancy_guard::release_guard(&env);
         amounts_out
     }
 
-    // -----------------------------------------------------------------------
-    // Fee management
-    // -----------------------------------------------------------------------
+    /// Pause the contract (admin only)
+    pub fn pause(env: Env) {
+        Self::check_admin(&env);
+        env.storage().instance().set(&DATA_KEY.paused, &true);
+    }
+
+    /// Unpause the contract (admin only)
+    pub fn unpause(env: Env) {
+        Self::check_admin(&env);
+        env.storage().instance().set(&DATA_KEY.paused, &false);
+    }
+
+    /// Set basket redemption fee (admin only)
+    pub fn set_fee_rate(env: Env, fee_rate_bps: i128) {
+        Self::check_admin(&env);
+        Self::check_paused(&env);
+        if !(0..=BASIS_POINTS).contains(&fee_rate_bps) {
+            env.panic_with_error(ContractError::InvalidRate);
+        }
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.fee_rate, &fee_rate_bps);
+    }
+
+    pub fn set_fee_single_redeem(env: Env, fee_bps: i128) {
+        Self::check_admin(&env);
+        Self::check_paused(&env);
+        if !(0..=BASIS_POINTS).contains(&fee_bps) {
+            env.panic_with_error(ContractError::InvalidRate);
+        }
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.fee_single_redeem, &fee_bps);
+    }
 
     pub fn get_fee_rate(env: Env) -> i128 {
         env.storage().instance().get(&DATA_KEY.fee_rate).unwrap()
@@ -388,46 +472,39 @@ impl BurningContract {
             .unwrap()
     }
 
-    pub fn set_fee_rate(env: Env, fee_rate_bps: i128) {
-        Self::check_admin(&env);
-        if !(0..=BASIS_POINTS).contains(&fee_rate_bps) {
-            env.panic_with_error(ContractError::InvalidRate);
-        }
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.fee_rate, &fee_rate_bps);
-    }
-
-    pub fn set_fee_single_redeem(env: Env, fee_bps: i128) {
-        Self::check_admin(&env);
-        if !(0..=BASIS_POINTS).contains(&fee_bps) {
-            env.panic_with_error(ContractError::InvalidRate);
-        }
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.fee_single_redeem, &fee_bps);
-    }
-
-    // -----------------------------------------------------------------------
-    // Pause / unpause
-    // -----------------------------------------------------------------------
-
-    pub fn pause(env: Env) {
-        Self::check_admin(&env);
-        env.storage().instance().set(&DATA_KEY.paused, &true);
-    }
-
-    pub fn unpause(env: Env) {
-        Self::check_admin(&env);
-        env.storage().instance().set(&DATA_KEY.paused, &false);
-    }
-
     pub fn is_paused(env: Env) -> bool {
         env.storage()
             .instance()
             .get(&DATA_KEY.paused)
             .unwrap_or(false)
     }
+
+    // ── Dependency address updaters (admin only) ──────────────────────────
+
+    pub fn update_oracle(env: Env, new_oracle: Address) {
+        Self::check_admin(&env);
+        env.storage().instance().set(&DATA_KEY.oracle, &new_oracle);
+    }
+
+    pub fn update_reserve_tracker(env: Env, new_reserve_tracker: Address) {
+        Self::check_admin(&env);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.reserve_tracker, &new_reserve_tracker);
+    }
+
+    pub fn update_acbu_token(env: Env, new_acbu_token: Address) {
+        Self::check_admin(&env);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.acbu_token, &new_acbu_token);
+    }
+
+    pub fn update_vault(env: Env, new_vault: Address) {
+        Self::check_admin(&env);
+        env.storage().instance().set(&DATA_KEY.vault, &new_vault);
+    }
+
 
     // -----------------------------------------------------------------------
     // Two-step admin rotation
@@ -543,9 +620,12 @@ impl BurningContract {
             .set(&SharedDataKey::Version, &new_version);
     }
 
-    // -----------------------------------------------------------------------
-    // Private helpers
-    // -----------------------------------------------------------------------
+    fn weighted_floor(total: i128, weight: i128, total_weight: i128) -> i128 {
+        total
+            .checked_mul(weight)
+            .and_then(|v| v.checked_div(total_weight))
+            .expect("Overflow in weighted allocation")
+    }
 
     fn check_reserves(env: &Env, acbu_token: &Address, reserve_tracker_addr: &Address) {
         let current_supply: i128 = env.invoke_contract(

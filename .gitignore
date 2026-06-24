@@ -1,6 +1,10 @@
 # Build artifacts
 /target/
 
+# Contract crates intentionally do not commit a lockfile. The Rust toolchain
+# and direct Soroban SDK dependency are pinned in source instead.
+Cargo.lock
+
 # WASM artifacts — binary blobs must not be committed to source control.
 # The sha256 hash is already pinned in contractimport! macros; obtain the
 # file locally by running:  ./scripts/fetch_token_wasm.sh

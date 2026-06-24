@@ -23,8 +23,6 @@ mod oracle_mock {
             DECIMALS
         }
 
-        pub fn get_acbu_usd_rate_with_timestamp(_env: Env) -> (i128, u64) {
-            (DECIMALS, 0)
         pub fn get_acbu_usd_rate_with_timestamp(env: Env) -> (i128, u64) {
             (DECIMALS, env.ledger().timestamp())
         }
@@ -43,8 +41,6 @@ mod oracle_mock {
             DECIMALS
         }
 
-        pub fn get_rate_with_timestamp(_env: Env, _c: CurrencyCode) -> (i128, u64) {
-            (DECIMALS, 0)
         pub fn get_rate_with_timestamp(env: Env, _c: CurrencyCode) -> (i128, u64) {
             (DECIMALS, env.ledger().timestamp())
         }

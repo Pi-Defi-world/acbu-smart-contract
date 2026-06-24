@@ -11,7 +11,7 @@ Soroban (Stellar) smart contracts for the ACBU (African Currency Basket Unit) st
 
 ## Prerequisites
 
-- Rust 1.70 or higher
+- Rust 1.87.0 (pinned in `rust-toolchain.toml`)
 - Soroban CLI (`cargo install --locked soroban-cli`)
 - Stellar account with XLM for deployment fees
 

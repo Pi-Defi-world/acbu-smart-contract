@@ -6,6 +6,10 @@ use soroban_sdk::{
 
 use shared::{calculate_fee, DataKey as SharedDataKey, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION};
 
+mod shared {
+    pub use shared::*;
+}
+
 // ---------------------------------------------------------------------------
 // Error codes
 // ---------------------------------------------------------------------------
@@ -31,6 +35,9 @@ pub enum Error {
     InvalidVersion = 1016,
     TimelockNotElapsed = 1017,
     NoPendingUpgrade = 1018,
+    NoPendingAdmin = 1019,
+    AdminTimelockNotElapsed = 1020,
+    NoPendingAdminToCancel = 1021,
     Unknown = 1999,
 }
 
@@ -90,6 +97,7 @@ pub struct DepositEvent {
     pub net_amount: i128,
     pub term_seconds: u64,
     pub timestamp: u64,
+    pub maturity_timestamp: u64,
 }
 
 #[contracttype]
@@ -198,9 +206,9 @@ impl SavingsVault {
         // the current ledger timestamp. All term comparisons stay in u64 space
         // to avoid unintended sign behavior from u64→i128 casts.
         let now = env.ledger().timestamp();
-        if term_seconds > u64::MAX - now {
-            env.panic_with_error(Error::InvalidTerm);
-        }
+        let maturity_timestamp = now
+            .checked_add(term_seconds)
+            .unwrap_or_else(|| env.panic_with_error(Error::InvalidTerm));
 
         let fee_rate = Self::load_fee_rate(&env).unwrap_or_else(|e| env.panic_with_error(e));
         let fee_amount = calculate_fee(amount, fee_rate);
@@ -217,27 +225,35 @@ impl SavingsVault {
         let token = soroban_sdk::token::Client::new(&env, &acbu);
         let vault_addr = env.current_contract_address();
 
-        // CEI: record the deposit lot before the external token transfers so any
-        // token-level callback sees the new deposit as already committed.
+        // Transfer the net amount to the vault first, verifying success.
+        match token.try_transfer(&user, &vault_addr, &net_amount) {
+            Ok(Ok(())) => {}
+            _ => env.panic_with_error(Error::AccountingError),
+        }
+        // Transfer the fee to the admin if applicable, verifying success.
+        if fee_amount > 0 {
+            match token.try_transfer(&user, &admin, &fee_amount) {
+                Ok(Ok(())) => {}
+                _ => env.panic_with_error(Error::AccountingError),
+            }
+        }
+
+        // Record the deposit lot in storage after the transfers succeed
         let key = (DEPOSIT_KEY, user.clone(), term_seconds);
         let mut lots: Vec<DepositLot> = env
             .storage()
             .temporary()
             .get(&key)
-            .unwrap_or(Vec::new(&env));
+            .unwrap_or_else(|| Vec::new(&env));
 
         lots.push_back(DepositLot {
             amount: net_amount,
-            timestamp: env.ledger().timestamp(),
+            timestamp: now,
             term_seconds,
         });
 
         env.storage().temporary().set(&key, &lots);
 
-        token.transfer(&user, &vault_addr, &net_amount);
-        if fee_amount > 0 {
-            token.transfer(&user, &admin, &fee_amount);
-        }
 
         env.events().publish(
             (symbol_short!("Deposit"), user.clone()),
@@ -247,7 +263,8 @@ impl SavingsVault {
                 fee_amount,
                 net_amount,
                 term_seconds,
-                timestamp: env.ledger().timestamp(),
+                timestamp: now,
+                maturity_timestamp,
             },
         );
 
@@ -379,7 +396,7 @@ impl SavingsVault {
             .storage()
             .temporary()
             .get(&key)
-            .unwrap_or(Vec::new(&env));
+            .unwrap_or_else(|| Vec::new(&env));
         Self::sum_lots(&lots)
     }
 
@@ -491,11 +508,7 @@ impl SavingsVault {
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
-        let current_version: u32 = env
-            .storage()
-            .instance()
-            .get(&SharedDataKey::Version)
-            .unwrap_or(0);
+        let current_version = Self::version(env.clone());
         if new_version <= current_version {
             env.panic_with_error(Error::InvalidVersion);
         }
@@ -537,11 +550,7 @@ impl SavingsVault {
         if env.ledger().timestamp() < eligible_at {
             env.panic_with_error(Error::TimelockNotElapsed);
         }
-        let current_version: u32 = env
-            .storage()
-            .instance()
-            .get(&SharedDataKey::Version)
-            .unwrap_or(0);
+        let current_version = Self::version(env.clone());
         env.storage()
             .instance()
             .remove(&DATA_KEY.pending_upgrade_wasm);
@@ -654,6 +663,13 @@ impl SavingsVault {
         env.storage().instance().get(&DATA_KEY.pending_admin)
     }
 
+    pub fn version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&SharedDataKey::Version)
+            .unwrap_or(0)
+    }
+
     pub fn get_pending_admin_eligible_at(env: Env) -> Option<u64> {
         env.storage()
             .instance()
@@ -696,7 +712,6 @@ impl SavingsVault {
             .ok_or(Error::Overflow)?;
         numerator.checked_div(divisor).ok_or(Error::Overflow)
     }
-
     fn migrate_v0_to_v1(_env: Env) {
         // No storage schema changes between v0 and v1.
     }

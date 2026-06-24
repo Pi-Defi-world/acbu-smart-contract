@@ -379,6 +379,10 @@ fn test_deposit_event_has_fee_fields() {
     assert_eq!(deposit_event.gross_amount, DECIMALS);
     assert_eq!(deposit_event.fee_amount, 300_000);
     assert_eq!(deposit_event.net_amount, 9_700_000);
+    assert_eq!(
+        deposit_event.maturity_timestamp,
+        deposit_event.timestamp + 3600
+    );
 }
 
 #[test]
@@ -452,4 +456,33 @@ fn test_withdraw_event_yield_amount_nonzero_issue_225() {
     );
     assert_eq!(ev.yield_amount, expected_yield);
     assert_eq!(ev.fee_amount, 0);
+}
+
+#[test]
+fn test_deposit_fails_and_does_not_write_to_storage_when_balance_insufficient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1_000_000);
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    let contract_id = env.register_contract(None, SavingsVault);
+    let client = SavingsVaultClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &acbu_token, &300, &1000);
+
+    let deposit_amount = DECIMALS;
+    let term_seconds = 3600;
+
+    // Do NOT mint any tokens to user, so user has 0 balance.
+    // Calling deposit should fail (panic on transfer).
+    let result = client.try_deposit(&user, &deposit_amount, &term_seconds);
+    assert!(result.is_err());
+
+    // Verify that NO deposit lot was recorded in storage for the user.
+    assert_eq!(client.get_balance(&user, &term_seconds), 0);
 }
