@@ -15,9 +15,9 @@ proptest! {
         let contract_id = env.register_contract(None, LendingPool);
         let client = LendingPoolClient::new(&env, &contract_id);
         
-        let res = std::panic::catch_unwind(|| {
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.initialize(&admin, &acbu_token, &fee_rate);
-        });
+        }));
         
         // BASIS_POINTS is 10000. So valid fee is 0..=10000
         if fee_rate < 0 || fee_rate > 10000 {
@@ -47,9 +47,9 @@ proptest! {
             acbu_sac.mint(&lender, &amount);
         }
         
-        let res = std::panic::catch_unwind(|| {
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             client.deposit(&lender, &amount);
-        });
+        }));
         
         if amount <= 0 {
             assert!(res.is_err());

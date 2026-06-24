@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use acbu_escrow::{Escrow, EscrowClient, EscrowError};
+use acbu_escrow::{Escrow, EscrowClient};
 use soroban_sdk::{
     testutils::{Address as _, MockAuth, MockAuthInvoke},
     Address, Env, IntoVal,
@@ -13,7 +13,7 @@ fn test_happy_path_create_fund_release() {
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
     let escrow_id = 1u64;
-    let amount = 5_000_000i128;
+    let amount = 25_000_000i128;
 
     let acbu_token = env
         .register_stellar_asset_contract_v2(admin.clone())
@@ -27,6 +27,7 @@ fn test_happy_path_create_fund_release() {
 
     client.initialize(&admin, &acbu_token);
     client.create(&payer, &payee, &amount, &escrow_id);
+
 
     // payer authorizes release
     env.mock_auths(&[MockAuth {
@@ -55,7 +56,7 @@ fn test_admin_refund_on_dispute() {
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
     let escrow_id = 7u64;
-    let amount = 2_500_000i128;
+    let amount = 25_000_000i128;
 
     let acbu_token = env
         .register_stellar_asset_contract_v2(admin.clone())
@@ -69,6 +70,7 @@ fn test_admin_refund_on_dispute() {
 
     client.initialize(&admin, &acbu_token);
     client.create(&payer, &payee, &amount, &escrow_id);
+
 
     // admin authorizes refund (dispute resolution)
     env.mock_auths(&[MockAuth {
@@ -98,7 +100,7 @@ fn test_adversarial_release_by_non_payer_fails() {
     let payee = Address::generate(&env);
     let attacker = Address::generate(&env);
     let escrow_id = 42u64;
-    let amount = 1_000_000i128;
+    let amount = 10_000_000i128;
 
     let acbu_token = env
         .register_stellar_asset_contract_v2(admin.clone())
@@ -112,6 +114,7 @@ fn test_adversarial_release_by_non_payer_fails() {
 
     client.initialize(&admin, &acbu_token);
     client.create(&payer, &payee, &amount, &escrow_id);
+
 
     // attacker tries to call release without payer auth
     env.mock_auths(&[MockAuth {

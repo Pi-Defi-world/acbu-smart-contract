@@ -318,6 +318,8 @@ fn test_deposit_event_correct_values() {
     assert_eq!(event.fee_amount, fee);
     assert_eq!(event.net_amount, net);
     assert_eq!(event.term_seconds, term);
+    assert_eq!(event.timestamp, h.now());
+    assert_eq!(event.maturity_timestamp, h.now() + term);
 }
 
 #[test]

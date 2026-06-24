@@ -2,14 +2,12 @@
 
 use acbu_lending_pool::{BorrowEvent, LendingPool, LendingPoolClient, RepayEvent};
 use soroban_sdk::{
-    symbol_short, testutils::Address as _, testutils::Events, Address, Env, TryIntoVal,
+    symbol_short,
+    testutils::{Address as _, Events, Ledger},
+    token::{Client as TokenClient, StellarAssetClient},
+    Address, Env, TryIntoVal,
 };
-// Add these imports for the lifecycle test
-use soroban_sdk::token::StellarAssetClient;
-use acbu_lending_pool::{BorrowEvent, RepayEvent, LendingPool, LendingPoolClient};
-use soroban_sdk::{symbol_short, testutils::{Address as _, Events}, Address, Env, TryIntoVal};
-use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
-use shared::DECIMALS;
+use shared::{BASIS_POINTS, DECIMALS};
 
 #[test]
 fn test_deposit_and_withdraw() {
@@ -194,7 +192,7 @@ fn test_borrow_basic() {
     // Borrower borrows half the pool
     let borrower = Address::generate(&env);
     let borrow_amount: i128 = 400_000;
-    let collateral: i128 = 200_000;
+    let collateral: i128 = 400_000;
     let loan_id: u64 = 1;
 
     // Mint collateral tokens to borrower
@@ -291,8 +289,10 @@ fn test_repay_basic() {
 
     let borrower = Address::generate(&env);
     let borrow_amount: i128 = 300_000;
+    let collateral: i128 = 300_000;
     let loan_id: u64 = 7;
-    client.borrow(&borrower, &lender, &borrow_amount, &0, &loan_id);
+    token_admin.mint(&borrower, &collateral);
+    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
 
     // Borrower now holds borrow_amount tokens; repay the full amount
     client.repay(&borrower, &borrow_amount, &loan_id);
@@ -307,7 +307,7 @@ fn test_repay_basic() {
     assert_eq!(token_client.balance(&contract_id), pool_liquidity);
 
     // Borrower's token balance is back to zero (no fee in this test; fee_rate = 0)
-    assert_eq!(token_client.balance(&borrower), 0);
+    assert_eq!(token_client.balance(&borrower), collateral);
 }
 
 /// 3. Borrow exceeds available liquidity — must return an error.
@@ -336,7 +336,9 @@ fn test_borrow_exceeds_liquidity_fails() {
     // Attempt to borrow more than what is in the pool
     let borrower = Address::generate(&env);
     let over_amount: i128 = small_liquidity + 1;
-    let result = client.try_borrow(&borrower, &lender, &over_amount, &0, &1u64);
+    let collateral: i128 = over_amount;
+    token_admin.mint(&borrower, &collateral);
+    let result = client.try_borrow(&borrower, &lender, &over_amount, &collateral, &1u64);
 
     assert!(
         result.is_err(),
@@ -368,8 +370,10 @@ fn test_repay_wrong_loan_id_fails() {
 
     let borrower = Address::generate(&env);
     let borrow_amount: i128 = 100_000;
+    let collateral: i128 = 100_000;
     let real_loan_id: u64 = 42;
-    client.borrow(&borrower, &lender, &borrow_amount, &0, &real_loan_id);
+    token_admin.mint(&borrower, &collateral);
+    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &real_loan_id);
 
     // Attempt to repay using a different loan_id
     let wrong_loan_id: u64 = 99;
@@ -412,8 +416,10 @@ fn test_loan_default_scenario() {
 
     let borrower = Address::generate(&env);
     let borrow_amount: i128 = 200_000;
+    let collateral: i128 = 200_000;
     let loan_id: u64 = 55;
-    client.borrow(&borrower, &lender, &borrow_amount, &0, &loan_id);
+    token_admin.mint(&borrower, &collateral);
+    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
 
     // Borrower never repays — loan remains open.
     // No liquidation function exists yet; assert the loan is still present and overdue.
@@ -461,13 +467,15 @@ fn test_borrow_repay_full_lifecycle() {
     // ── Step 2: borrower borrows ──────────────────────────────────────────────
     let borrower = Address::generate(&env);
     let borrow_amount: i128 = 600_000;
+    let collateral: i128 = 600_000;
     let loan_id: u64 = 100;
-    client.borrow(&borrower, &lender, &borrow_amount, &0, &loan_id);
+    token_admin.mint(&borrower, &collateral);
+    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
 
     assert_eq!(token_client.balance(&borrower), borrow_amount);
     assert_eq!(
         token_client.balance(&contract_id),
-        pool_liquidity - borrow_amount
+        pool_liquidity - borrow_amount + collateral
     );
     let loan = client
         .get_loan(&borrower, &loan_id)
@@ -477,7 +485,7 @@ fn test_borrow_repay_full_lifecycle() {
     // ── Step 3: borrower repays in full ───────────────────────────────────────
     client.repay(&borrower, &borrow_amount, &loan_id);
 
-    assert_eq!(token_client.balance(&borrower), 0);
+    assert_eq!(token_client.balance(&borrower), collateral);
     assert_eq!(token_client.balance(&contract_id), pool_liquidity);
     assert!(
         client.get_loan(&borrower, &loan_id).is_none(),

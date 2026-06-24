@@ -66,7 +66,9 @@ fn test_add_validator() {
     let (env, client, _contract_id, _admin, _validators) = setup();
 
     let new_validator = Address::generate(&env);
-    client.add_validator(&new_validator);
+    client.schedule_validator_change(&new_validator, &true);
+    env.ledger().with_mut(|l| l.timestamp += 86_401);
+    client.execute_validator_change();
 
     let validators = client.get_validators();
     assert_eq!(validators.len(), 4);
@@ -78,7 +80,9 @@ fn test_add_duplicate_validator_fails() {
     let (env, client, _contract_id, _admin, validators) = setup();
 
     let existing_validator = validators.get(0).unwrap();
-    let result = client.try_add_validator(&existing_validator);
+    client.schedule_validator_change(&existing_validator, &true);
+    env.ledger().with_mut(|l| l.timestamp += 86_401);
+    let result = client.try_execute_validator_change();
 
     assert!(result.is_err());
 }
@@ -88,7 +92,9 @@ fn test_remove_validator() {
     let (env, client, _contract_id, _admin, validators) = setup();
 
     let validator_to_remove = validators.get(2).unwrap();
-    client.remove_validator(&validator_to_remove);
+    client.schedule_validator_change(&validator_to_remove, &false);
+    env.ledger().with_mut(|l| l.timestamp += 86_401);
+    client.execute_validator_change();
 
     let remaining_validators = client.get_validators();
     assert_eq!(remaining_validators.len(), 2);
@@ -101,10 +107,14 @@ fn test_remove_validator_below_min_signatures_fails() {
 
     // min_signatures is 2, we have 3 validators
     // Remove one (now 2 validators)
-    client.remove_validator(&validators.get(2).unwrap());
+    client.schedule_validator_change(&validators.get(2).unwrap(), &false);
+    env.ledger().with_mut(|l| l.timestamp += 86_401);
+    client.execute_validator_change();
 
     // Try to remove another (would leave 1 validator, below min_signatures of 2)
-    let result = client.try_remove_validator(&validators.get(1).unwrap());
+    client.schedule_validator_change(&validators.get(1).unwrap(), &false);
+    env.ledger().with_mut(|l| l.timestamp += 86_401);
+    let result = client.try_execute_validator_change();
     assert!(result.is_err());
 }
 

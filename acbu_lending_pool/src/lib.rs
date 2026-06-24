@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
-    BytesN, Env, Symbol,
+    BytesN, Env,
 };
 
 use shared::{DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, reentrancy_guard};

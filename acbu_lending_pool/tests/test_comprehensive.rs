@@ -4,7 +4,7 @@ use acbu_lending_pool::{BorrowEvent, LendingPool, LendingPoolClient, RepayEvent}
 use shared::DECIMALS;
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Events},
+    testutils::{Address as _, Events, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
     Address, Env, Symbol, TryIntoVal,
 };
@@ -34,7 +34,7 @@ fn setup() -> (Env, LendingPoolClient<'static>, Address, Address, Address) {
 
 #[test]
 fn test_deposit_increases_balance() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let amount = 1_000 * DECIMALS;
@@ -49,7 +49,7 @@ fn test_deposit_increases_balance() {
 
 #[test]
 fn test_deposit_zero_amount_fails() {
-    let (env, client, _contract_id, _admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, _acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let result = client.try_deposit(&lender, &0);
@@ -59,7 +59,7 @@ fn test_deposit_zero_amount_fails() {
 
 #[test]
 fn test_deposit_negative_amount_fails() {
-    let (env, client, _contract_id, _admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, _acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let result = client.try_deposit(&lender, &-100);
@@ -69,7 +69,7 @@ fn test_deposit_negative_amount_fails() {
 
 #[test]
 fn test_multiple_deposits_accumulate() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let amount1 = 500 * DECIMALS;
@@ -90,7 +90,7 @@ fn test_multiple_deposits_accumulate() {
 
 #[test]
 fn test_withdraw_decreases_balance() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let deposit_amount = 1_000 * DECIMALS;
@@ -107,7 +107,7 @@ fn test_withdraw_decreases_balance() {
 
 #[test]
 fn test_withdraw_all_balance() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let amount = 1_000 * DECIMALS;
@@ -123,7 +123,7 @@ fn test_withdraw_all_balance() {
 
 #[test]
 fn test_withdraw_more_than_balance_fails() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let amount = 100 * DECIMALS;
@@ -208,7 +208,7 @@ fn test_withdraw_zero_amount_fails() {
 
 #[test]
 fn test_borrow_creates_loan() {
-    let (env, client, contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -232,7 +232,7 @@ fn test_borrow_creates_loan() {
 
 #[test]
 fn test_borrow_transfers_tokens_to_borrower() {
-    let (env, client, contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -253,7 +253,7 @@ fn test_borrow_transfers_tokens_to_borrower() {
 
 #[test]
 fn test_borrow_exceeds_pool_liquidity_fails() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -282,7 +282,7 @@ fn test_borrow_zero_amount_fails() {
 
 #[test]
 fn test_borrow_duplicate_loan_id_fails() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -304,7 +304,7 @@ fn test_borrow_duplicate_loan_id_fails() {
 
 #[test]
 fn test_borrow_emits_event() {
-    let (env, client, contract_id, admin, acbu_token) = setup();
+    let (env, client, contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -350,7 +350,7 @@ fn test_borrow_emits_event() {
 
 #[test]
 fn test_repay_partial_reduces_loan_amount() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -374,7 +374,7 @@ fn test_repay_partial_reduces_loan_amount() {
 
 #[test]
 fn test_repay_full_removes_loan() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -396,7 +396,7 @@ fn test_repay_full_removes_loan() {
 
 #[test]
 fn test_repay_full_returns_collateral() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -412,7 +412,7 @@ fn test_repay_full_returns_collateral() {
 
     client.deposit(&lender, &pool_liquidity);
     
-    let borrower_balance_before = token_client.balance(&borrower);
+    let _borrower_balance_before = token_client.balance(&borrower);
     client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
     
     // After borrow: borrower has borrow_amount (collateral was transferred to contract)
@@ -426,7 +426,7 @@ fn test_repay_full_returns_collateral() {
 
 #[test]
 fn test_repay_more_than_loan_amount_fails() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -458,7 +458,7 @@ fn test_repay_nonexistent_loan_fails() {
 
 #[test]
 fn test_repay_zero_amount_fails() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -480,7 +480,7 @@ fn test_repay_zero_amount_fails() {
 
 #[test]
 fn test_repay_emits_event() {
-    let (env, client, contract_id, admin, acbu_token) = setup();
+    let (env, client, contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -528,7 +528,7 @@ fn test_repay_emits_event() {
 
 #[test]
 fn test_deposit_when_paused_fails() {
-    let (env, client, _contract_id, _admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, _acbu_token) = setup();
 
     client.pause();
 
@@ -540,7 +540,7 @@ fn test_deposit_when_paused_fails() {
 
 #[test]
 fn test_withdraw_when_paused_fails() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let amount = 1_000 * DECIMALS;
@@ -570,7 +570,7 @@ fn test_borrow_when_paused_fails() {
 
 #[test]
 fn test_repay_when_paused_fails() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -594,7 +594,7 @@ fn test_repay_when_paused_fails() {
 
 #[test]
 fn test_unpause_allows_operations() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     client.pause();
     client.unpause();
@@ -615,7 +615,7 @@ fn test_unpause_allows_operations() {
 
 #[test]
 fn test_borrow_insufficient_collateral_fails() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -636,7 +636,7 @@ fn test_borrow_insufficient_collateral_fails() {
 
 #[test]
 fn test_multiple_borrowers_same_lender() {
-    let (env, client, contract_id, admin, acbu_token) = setup();
+    let (env, client, contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower1 = Address::generate(&env);
@@ -673,7 +673,7 @@ fn test_multiple_borrowers_same_lender() {
 
 #[test]
 fn test_deposit_withdraw_multiple_lenders() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender1 = Address::generate(&env);
     let lender2 = Address::generate(&env);
@@ -691,8 +691,8 @@ fn test_deposit_withdraw_multiple_lenders() {
     assert_eq!(client.get_balance(&lender2), amount2);
 
     // Withdraw partial amounts
-    client.withdraw(&lender1, &500 * DECIMALS);
-    client.withdraw(&lender2, &1_000 * DECIMALS);
+    client.withdraw(&lender1, &(500 * DECIMALS));
+    client.withdraw(&lender2, &(1_000 * DECIMALS));
 
     assert_eq!(client.get_balance(&lender1), 500 * DECIMALS);
     assert_eq!(client.get_balance(&lender2), 1_000 * DECIMALS);
@@ -700,7 +700,7 @@ fn test_deposit_withdraw_multiple_lenders() {
 
 #[test]
 fn test_repay_interest_accrual() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
@@ -717,7 +717,8 @@ fn test_repay_interest_accrual() {
     client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
 
     // Advance time to accrue interest
-    env.ledger().set_timestamp(env.ledger().timestamp() + 30 * 24 * 60 * 60);
+    let current_time = env.ledger().timestamp();
+    env.ledger().with_mut(|l| l.timestamp = current_time + 30 * 24 * 60 * 60);
 
     // Get loan to see accrued interest
     let loan = client.get_loan(&borrower, &loan_id).expect("loan should exist");
@@ -728,7 +729,7 @@ fn test_repay_interest_accrual() {
 
 #[test]
 fn test_borrow_negative_collateral_fails() {
-    let (env, client, _contract_id, admin, acbu_token) = setup();
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);

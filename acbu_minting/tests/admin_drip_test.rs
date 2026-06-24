@@ -105,7 +105,7 @@ fn setup_drip_test(env: &Env) -> (Address, Address, MintingContractClient, Addre
 }
 
 #[test]
-fn test_admin_drip_demo_fiat_success() {
+fn test_admin_drip_fiat_success() {
     let env = Env::default();
     let (_admin, stoken_id, client, _contract_id) = setup_drip_test(&env);
     let recipient = Address::generate(&env);
@@ -118,7 +118,7 @@ fn test_admin_drip_demo_fiat_success() {
     assert_eq!(stoken_client.balance(&recipient), 0);
 
     let currency = CurrencyCode::new(&env, "NGN");
-    client.admin_drip_demo_fiat(&recipient, &currency, &amount);
+    client.admin_drip_fiat(&recipient, &currency, &amount);
 
     assert_eq!(stoken_client.balance(&recipient), amount);
     assert_eq!(stoken_client.balance(&client.address), 0);
@@ -126,7 +126,7 @@ fn test_admin_drip_demo_fiat_success() {
 
 #[test]
 #[should_panic(expected = "#5009")]
-fn test_admin_drip_demo_fiat_zero_amount() {
+fn test_admin_drip_fiat_zero_amount() {
     let env = Env::default();
     let (_admin, stoken_id, client, _contract_id) = setup_drip_test(&env);
     let recipient = Address::generate(&env);
@@ -135,12 +135,12 @@ fn test_admin_drip_demo_fiat_zero_amount() {
     stoken_sac.mint(&client.address, &1_000_000_000);
 
     let currency = CurrencyCode::new(&env, "NGN");
-    client.admin_drip_demo_fiat(&recipient, &currency, &0);
+    client.admin_drip_fiat(&recipient, &currency, &0);
 }
 
 #[test]
 #[should_panic(expected = "#5009")]
-fn test_admin_drip_demo_fiat_negative_amount() {
+fn test_admin_drip_fiat_negative_amount() {
     let env = Env::default();
     let (_admin, stoken_id, client, _contract_id) = setup_drip_test(&env);
     let recipient = Address::generate(&env);
@@ -149,12 +149,12 @@ fn test_admin_drip_demo_fiat_negative_amount() {
     stoken_sac.mint(&client.address, &1_000_000_000);
 
     let currency = CurrencyCode::new(&env, "NGN");
-    client.admin_drip_demo_fiat(&recipient, &currency, &(-100));
+    client.admin_drip_fiat(&recipient, &currency, &(-100));
 }
 
 #[test]
 #[should_panic(expected = "#5010")]
-fn test_admin_drip_demo_fiat_exceeds_cap() {
+fn test_admin_drip_fiat_exceeds_cap() {
     let env = Env::default();
     let (_admin, stoken_id, client, _contract_id) = setup_drip_test(&env);
     let recipient = Address::generate(&env);
@@ -164,17 +164,17 @@ fn test_admin_drip_demo_fiat_exceeds_cap() {
 
     let currency = CurrencyCode::new(&env, "NGN");
     let huge_amount = 100_000_000_000_001i128;
-    client.admin_drip_demo_fiat(&recipient, &currency, &huge_amount);
+    client.admin_drip_fiat(&recipient, &currency, &huge_amount);
 }
 
 #[test]
 #[should_panic(expected = "#5011")]
-fn test_admin_drip_demo_fiat_insufficient_custody() {
+fn test_admin_drip_fiat_insufficient_custody() {
     let env = Env::default();
     let (_admin, stoken_id, client, _contract_id) = setup_drip_test(&env);
     let recipient = Address::generate(&env);
 
     let amount = 500_000_000;
     let currency = CurrencyCode::new(&env, "NGN");
-    client.admin_drip_demo_fiat(&recipient, &currency, &amount);
+    client.admin_drip_fiat(&recipient, &currency, &amount);
 }

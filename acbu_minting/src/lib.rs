@@ -17,7 +17,7 @@ use shared::{
 pub mod token_contract {
     soroban_sdk::contractimport!(
         file = "../soroban_token_contract.wasm",
-        sha256 = "8759e8ea16c858a6d3b743dd0be8b580e363d0097538fb77b375965619288d95"
+        sha256 = "fff46d90821401584414ee6afc5ef36d99e95ef7e37d8652ad3e6c4a4e099dc0"
     );
 }
 
@@ -119,6 +119,7 @@ pub enum MintingError {
     NoPendingAdmin = 5020,
     AdminTimelockNotElapsed = 5021,
     NoPendingAdminToCancel = 5022,
+    InvalidRecipient = 5023,
     Unknown = 5999,
 }
 
@@ -376,6 +377,9 @@ impl MintingContract {
             &Symbol::new(&env, ORACLE_GET_CURRENCIES),
             vec![&env],
         );
+        if currencies.len() > 10 {
+            env.panic_with_error(MintingError::InvalidRecipient);
+        }
 
         let usd_total: i128 = acbu_amount
             .checked_mul(acbu_rate)
@@ -895,7 +899,7 @@ impl MintingContract {
         address == &admin
     }
 
-    /// Testnet / ops: transfer demo basket S-token from custodial balance on this contract to
+    /// Transfer a basket S-token from this contract's custodial balance to
     /// `recipient` (e.g. user faucet). Admin only; caps per call to limit abuse.
     ///
     /// FIX(#330): Accepts an explicit `recipient` address so the admin can seed
@@ -905,8 +909,8 @@ impl MintingContract {
     /// FIX(#327): This is an admin-only entry point, fully isolated from
     /// `mint_from_fiat`. It requires admin auth (not operator auth), enforces
     /// the reentrancy guard and paused check, and does NOT mint ACBU — it only
-    /// moves pre-funded demo S-tokens from custody to a recipient.
-    pub fn admin_drip_demo_fiat(
+    /// moves pre-funded S-tokens from custody to a recipient.
+    pub fn admin_drip_fiat(
         env: Env,
         recipient: Address,
         currency: CurrencyCode,

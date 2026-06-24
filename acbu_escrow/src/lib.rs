@@ -24,6 +24,7 @@ pub enum EscrowError {
     NoPendingAdmin = 3012,
     NoPendingAdminToCancel = 3013,
     AdminTimelockNotElapsed = 3014,
+    Expired = 3015,
     Unknown = 3999,
 }
 
@@ -54,6 +55,9 @@ const UPGRADE_TIMELOCK_SECONDS: u64 = 86_400;
 /// claiming ownership, giving the current admin a window to cancel a mistaken
 /// or malicious transfer.
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
+
+const MIN_ESCROW_AMOUNT: i128 = 10_000_000; // 10 ACBU (7 decimals)
+const MAX_ESCROW_LIFETIME: u64 = 30 * 86_400; // 30 days
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -167,7 +171,7 @@ impl Escrow {
         if paused {
             return Err(EscrowError::Paused);
         }
-        if amount <= 0 {
+        if amount < MIN_ESCROW_AMOUNT {
             return Err(EscrowError::InvalidAmount);
         }
         payer.require_auth();
@@ -180,11 +184,17 @@ impl Escrow {
         let acbu = Self::get_acbu_token(&env)?;
         let client = soroban_sdk::token::Client::new(&env, &acbu);
 
+        let expiry = env.ledger().timestamp() + MAX_ESCROW_LIFETIME;
+
         // CEI: write state before the external token transfer so any token-level
         // callback observes the escrow as already recorded.
         env.storage()
             .temporary()
-            .set(&key, &(payer.clone(), payee.clone(), amount));
+            .set(&key, &(payer.clone(), payee.clone(), amount, expiry));
+
+        // Extend entry TTL to match the maximum lifetime: 30 days.
+        // At 5 seconds per ledger, 30 days ≈ 518,400 ledgers.
+        env.storage().temporary().extend_ttl(&key, 17280, 518400);
 
         client.transfer(&payer, &env.current_contract_address(), &amount);
 
@@ -221,20 +231,23 @@ impl Escrow {
         if paused {
             return Err(EscrowError::Paused);
         }
-        let admin = Self::get_admin(&env)?;
+        let admin = Self::load_admin(&env)?;
         if payer == admin {
             admin.require_auth();
         } else {
             payer.require_auth();
         }
         let key = EscrowId(payer.clone(), escrow_id);
-        let (stored_payer, payee, amount): (Address, Address, i128) = env
+        let (stored_payer, payee, amount, expiry): (Address, Address, i128, u64) = env
             .storage()
             .temporary()
             .get(&key)
             .ok_or(EscrowError::EscrowNotFound)?;
         if stored_payer != payer {
             return Err(EscrowError::PayerMismatch);
+        }
+        if env.ledger().timestamp() > expiry {
+            return Err(EscrowError::Expired);
         }
         let acbu = Self::get_acbu_token(&env)?;
         let client = soroban_sdk::token::Client::new(&env, &acbu);
@@ -255,17 +268,14 @@ impl Escrow {
 
         Ok(())
     }
-    /// Refund escrow: payer gets ACBU back (admin or dispute resolution)
+    /// Refund escrow: payer gets ACBU back (admin or dispute resolution, or payer after expiry)
     /// key is same as release since it identifies which escrow to refund
     pub fn refund(env: Env, escrow_id: u64, payer: Address) -> Result<(), EscrowError> {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
-        let admin = Self::get_admin(&env)?;
-        admin.require_auth();
-
         let key = EscrowId(payer.clone(), escrow_id);
-        let (stored_payer, _payee, amount): (Address, Address, i128) = env
+        let (stored_payer, _payee, amount, expiry): (Address, Address, i128, u64) = env
             .storage()
             .temporary()
             .get(&key)
@@ -273,6 +283,13 @@ impl Escrow {
 
         if stored_payer != payer {
             return Err(EscrowError::PayerMismatch);
+        }
+
+        let admin = Self::load_admin(&env)?;
+        if env.ledger().timestamp() > expiry {
+            payer.require_auth();
+        } else {
+            admin.require_auth();
         }
 
         let acbu = Self::get_acbu_token(&env)?;
