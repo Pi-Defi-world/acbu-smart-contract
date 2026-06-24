@@ -158,3 +158,42 @@ fn test_transfer_admin_requires_current_admin_auth() {
     }]);
     client.transfer_admin(&victim);
 }
+
+// Single vs multiple submission optimization
+#[test]
+fn test_update_rate_single_submission() {
+    let (env, _admin, client) = setup();
+    let validators = client.get_validators();
+    let validator = validators.get(0).unwrap();
+    let currency = client.get_currencies().get(0).unwrap();
+
+    env.mock_all_auths();
+
+    let mut sources = Vec::new(&env);
+    sources.push_back(125_000i128);
+
+    client.update_rate(&validator, &currency, &125_000i128, &sources, &0u64);
+
+    let (rate, _ts) = client.get_rate_with_timestamp(&currency);
+    assert_eq!(rate, 125_000i128);
+}
+
+#[test]
+fn test_update_rate_multiple_submissions() {
+    let (env, _admin, client) = setup();
+    let validators = client.get_validators();
+    let validator = validators.get(0).unwrap();
+    let currency = client.get_currencies().get(0).unwrap();
+
+    env.mock_all_auths();
+
+    let mut sources = Vec::new(&env);
+    sources.push_back(100_000i128);
+    sources.push_back(110_000i128);
+    sources.push_back(120_000i128);
+
+    client.update_rate(&validator, &currency, &110_000i128, &sources, &0u64);
+
+    let (rate, _ts) = client.get_rate_with_timestamp(&currency);
+    assert_eq!(rate, 110_000i128);
+}

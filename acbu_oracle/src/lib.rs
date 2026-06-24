@@ -315,25 +315,20 @@ impl OracleContract {
     ) {
         validator.require_auth();
 
-        let validator_set: Map<Address, bool> = match env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.validator_set)
-        {
-            Some(set) => set,
-            None => {
-                let validators: Vec<Address> =
-                    env.storage().instance().get(&DATA_KEY.validators).unwrap();
-                let mut set: Map<Address, bool> = Map::new(&env);
-                for v in validators.iter() {
-                    set.set(v, true);
+        let validator_set: Map<Address, bool> =
+            match env.storage().instance().get(&DATA_KEY.validator_set) {
+                Some(set) => set,
+                None => {
+                    let validators: Vec<Address> =
+                        env.storage().instance().get(&DATA_KEY.validators).unwrap();
+                    let mut set: Map<Address, bool> = Map::new(&env);
+                    for v in validators.iter() {
+                        set.set(v, true);
+                    }
+                    env.storage().instance().set(&DATA_KEY.validator_set, &set);
+                    set
                 }
-                env.storage()
-                    .instance()
-                    .set(&DATA_KEY.validator_set, &set);
-                set
-            }
-        };
+            };
         if !validator_set.contains_key(validator.clone()) {
             env.panic_with_error(OracleError::UnauthorizedValidator);
         }
@@ -364,32 +359,41 @@ impl OracleContract {
             env.panic_with_error(OracleError::InsufficientOracleSources);
         }
 
-        let raw_median = median(sources.clone()).unwrap_or(rate);
-
-        let mut clean_sources: Vec<i128> = Vec::new(&env);
-        for i in 0..sources.len() {
-            let source_rate = sources.get(i).unwrap();
-            let deviation_bps = calculate_deviation(source_rate, raw_median);
-
-            if deviation_bps > OUTLIER_THRESHOLD_BPS {
-                let outlier_event = OutlierDetectionEvent {
-                    currency: currency.clone(),
-                    median_rate: raw_median,
-                    outlier_rate: source_rate,
-                    deviation_bps,
-                    timestamp: current_time,
-                };
-                env.events()
-                    .publish((symbol_short!("outlier"),), outlier_event);
-            } else {
-                clean_sources.push_back(source_rate);
-            }
-        }
-
-        let median_rate = if clean_sources.is_empty() {
-            raw_median
+        // Bypass median and outlier calculation workflows if 0 or 1 submissions exist
+        let median_rate = if sources.is_empty() {
+            rate
+        } else if sources.len() == 1 {
+            sources.get(0).unwrap()
         } else {
-            median(clean_sources).unwrap_or(raw_median)
+            let raw_median = median(sources.clone()).unwrap_or(rate);
+
+            let mut clean_sources: Vec<i128> = Vec::new(&env);
+            for i in 0..sources.len() {
+                let source_rate = sources.get(i).unwrap();
+                let deviation_bps = calculate_deviation(source_rate, raw_median);
+
+                if deviation_bps > OUTLIER_THRESHOLD_BPS {
+                    let outlier_event = OutlierDetectionEvent {
+                        currency: currency.clone(),
+                        median_rate: raw_median,
+                        outlier_rate: source_rate,
+                        deviation_bps,
+                        timestamp: current_time,
+                    };
+                    env.events()
+                        .publish((symbol_short!("outlier"),), outlier_event);
+                } else {
+                    clean_sources.push_back(source_rate);
+                }
+            }
+
+            if clean_sources.is_empty() {
+                raw_median
+            } else if clean_sources.len() == 1 {
+                clean_sources.get(0).unwrap()
+            } else {
+                median(clean_sources).unwrap_or(raw_median)
+            }
         };
 
         let rate_data = RateData {
@@ -629,11 +633,7 @@ impl OracleContract {
 
     pub fn execute_validator_change(env: Env) {
         Self::check_admin(&env);
-        let validator: Address = match env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.pending_validator)
-        {
+        let validator: Address = match env.storage().instance().get(&DATA_KEY.pending_validator) {
             Some(v) => v,
             None => env.panic_with_error(OracleError::NoPendingValidatorChange),
         };
@@ -658,8 +658,7 @@ impl OracleContract {
             .instance()
             .remove(&DATA_KEY.pending_validator_eligible_at);
 
-        let validators: Vec<Address> =
-            env.storage().instance().get(&DATA_KEY.validators).unwrap();
+        let validators: Vec<Address> = env.storage().instance().get(&DATA_KEY.validators).unwrap();
         if is_add {
             for v in validators.iter() {
                 if v == validator {
@@ -813,14 +812,11 @@ impl OracleContract {
 
     pub fn execute_upgrade(env: Env) {
         Self::check_admin(&env);
-        let wasm_hash: BytesN<32> = match env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.pending_upgrade_wasm)
-        {
-            Some(h) => h,
-            None => env.panic_with_error(OracleError::NoPendingUpgrade),
-        };
+        let wasm_hash: BytesN<32> =
+            match env.storage().instance().get(&DATA_KEY.pending_upgrade_wasm) {
+                Some(h) => h,
+                None => env.panic_with_error(OracleError::NoPendingUpgrade),
+            };
         let new_version: u32 = env
             .storage()
             .instance()
