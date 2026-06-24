@@ -23,7 +23,7 @@ fs.writeFileSync(path.join(rootDir, 'validators.json'), JSON.stringify([ADMIN]))
 fs.writeFileSync(path.join(rootDir, 'currencies.json'), JSON.stringify(currencies));
 fs.writeFileSync(path.join(rootDir, 'weights.json'), JSON.stringify(weights));
 
-execFileSync(process.execPath, [path.join(rootDir, 'scripts', 'validate_config.py')], {
+execFileSync('python3', [path.join(rootDir, 'scripts', 'validate_config.py')], {
   cwd: rootDir,
   stdio: 'inherit',
 });
