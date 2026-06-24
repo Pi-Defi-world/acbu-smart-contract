@@ -371,7 +371,9 @@ impl MultisigContract {
         if signers.len() > MAX_SIGNERS {
             env.panic_with_error(Error::TooManySigners);
         }
-        if threshold == 0 || threshold > signers.len() {
+        // Threshold must be at least 1 and at most the number of signers.
+        // A threshold of 0 would allow proposals to execute with zero approvals.
+        if threshold < 1 || threshold > signers.len() {
             env.panic_with_error(Error::InvalidThreshold);
         }
         // Reject duplicate signers.
