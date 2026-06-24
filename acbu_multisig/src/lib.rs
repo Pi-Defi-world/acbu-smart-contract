@@ -29,6 +29,7 @@
 
 #![no_std]
 
+use core::fmt::{self, Display};
 use soroban_sdk::{
     contract, contractimpl, contractmeta, contracttype, symbol_short, Address, BytesN, Env,
     String as SorobanString, Vec,
@@ -89,6 +90,27 @@ pub enum Error {
     EmptySigners = 11,
     DuplicateSigner = 12,
     Unknown = 999,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::AlreadyInitialized => "multisig already initialized",
+            Self::NotInitialized => "multisig not initialized",
+            Self::Unauthorized => "unauthorized",
+            Self::ProposalNotFound => "proposal not found",
+            Self::AlreadyApproved => "proposal already approved",
+            Self::AlreadyExecuted => "proposal already executed",
+            Self::Expired => "proposal expired",
+            Self::ThresholdNotMet => "approval threshold not met",
+            Self::InvalidThreshold => "invalid threshold",
+            Self::TooManySigners => "too many signers",
+            Self::EmptySigners => "signers list cannot be empty",
+            Self::DuplicateSigner => "duplicate signer",
+            Self::Unknown => "unknown multisig error",
+        };
+        f.write_str(message)
+    }
 }
 
 // ---------------------------------------------------------------------------
