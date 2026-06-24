@@ -120,6 +120,7 @@ pub enum MintingError {
     AdminTimelockNotElapsed = 5021,
     NoPendingAdminToCancel = 5022,
     InvalidRecipient = 5023,
+    InvalidRoleSeparation = 5024,
     Unknown = 5999,
 }
 
@@ -144,9 +145,14 @@ impl MintingContract {
         treasury: Address,
         fee_rate_bps: i128,
         fee_single_bps: i128,
+        operator: Address,
     ) {
         if env.storage().instance().has(&DATA_KEY.admin) {
             env.panic_with_error(MintingError::AlreadyInitialized);
+        }
+
+        if admin == operator {
+            env.panic_with_error(MintingError::InvalidRoleSeparation);
         }
 
         if !(0..=BASIS_POINTS).contains(&fee_rate_bps)
@@ -174,6 +180,7 @@ impl MintingContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.fee_single, &fee_single_bps);
+        env.storage().instance().set(&DATA_KEY.operator, &operator);
         env.storage().instance().set(&DATA_KEY.paused, &false);
         env.storage()
             .instance()
@@ -758,6 +765,7 @@ impl MintingContract {
         // C-039: Strict input validation — enforce length bounds and charset
         // before touching any storage, so garbage IDs are rejected cheaply.
         validate_fintech_tx_id(&env, &fintech_tx_id);
+        let normalized_tx_id = normalize_fintech_tx_id(&env, &fintech_tx_id);
 
         // Check if fintech_tx_id has already been processed
         let mut processed_ids: soroban_sdk::Map<SorobanString, bool> = env
@@ -766,7 +774,7 @@ impl MintingContract {
             .get(&DATA_KEY.processed_fintech_tx_ids)
             .unwrap_or_else(|| soroban_sdk::map![&env]);
 
-        if processed_ids.contains_key(fintech_tx_id.clone()) {
+        if processed_ids.contains_key(normalized_tx_id.clone()) {
             env.panic_with_error(MintingError::DuplicateFintechTxId);
         }
 
@@ -862,13 +870,13 @@ impl MintingContract {
         }
 
         // Mark fintech_tx_id as processed to prevent duplicate minting
-        processed_ids.set(fintech_tx_id.clone(), true);
+        processed_ids.set(normalized_tx_id.clone(), true);
         env.storage()
             .instance()
             .set(&DATA_KEY.processed_fintech_tx_ids, &processed_ids);
 
         let mint_event = MintEvent {
-            transaction_id: fintech_tx_id,
+            transaction_id: normalized_tx_id,
             user: recipient.clone(),
             usdc_amount: usd_gross,
             acbu_amount,
@@ -966,9 +974,11 @@ impl MintingContract {
     }
 
     pub fn set_operator(env: Env, new_operator: Address) {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        admin.require_auth();
-        Self::check_paused(&env);
+        Self::check_admin(&env);
+        let admin = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        if admin == new_operator {
+            env.panic_with_error(MintingError::InvalidRoleSeparation);
+        }
         env.storage()
             .instance()
             .set(&DATA_KEY.operator, &new_operator);
@@ -1401,4 +1411,19 @@ fn validate_fintech_tx_id(env: &Env, id: &SorobanString) {
         }
     }
     let _ = env; // env kept in signature for future on-chain logging
+}
+
+fn normalize_fintech_tx_id(env: &Env, id: &SorobanString) -> SorobanString {
+    let len = id.len();
+    let mut buf = [0u8; 64];
+    let slice = &mut buf[..len as usize];
+    id.copy_into_slice(slice);
+
+    for b in slice.iter_mut() {
+        if *b >= b'A' && *b <= b'Z' {
+            *b += 32; // Convert to lowercase
+        }
+    }
+
+    SorobanString::from_slice(env, slice)
 }
