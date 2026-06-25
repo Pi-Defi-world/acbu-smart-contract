@@ -104,13 +104,14 @@ fn test_redeem_basket_requires_vault_allowance() {
 }
 
 #[test]
-fn test_redeem_basket_rejects_empty_recipients() {
+fn test_redeem_basket_allows_empty_recipients_as_noop() {
     let env = Env::default();
     let ctx = setup_test(&env);
 
     let empty: Vec<Address> = Vec::new(&env);
     let result = ctx.burning.try_redeem_basket(&ctx.user, &empty, &(100 * DECIMALS));
-    assert!(result.is_err());
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().unwrap().len(), 0);
 }
 
 #[test]

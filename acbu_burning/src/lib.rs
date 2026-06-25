@@ -5,8 +5,8 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_fee, BurnEvent, ContractError, CurrencyCode, DataKey as SharedDataKey,
-    reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MIN_BURN_AMOUNT,
+    calculate_fee, reentrancy_guard, BurnEvent, ContractError, CurrencyCode,
+    DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MIN_BURN_AMOUNT,
     ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_CURRENCIES,
     ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT,
     TOKEN_GET_TOTAL_SUPPLY, UPDATE_INTERVAL_SECONDS,
@@ -230,7 +230,8 @@ impl BurningContract {
         user.require_auth();
 
         if recipients.is_empty() {
-            env.panic_with_error(ContractError::InvalidRecipient);
+            reentrancy_guard::release_guard(&env);
+            return Vec::new(&env);
         }
 
         // C-057: Enforce all recipient addresses are distinct.
@@ -504,7 +505,6 @@ impl BurningContract {
         Self::check_admin(&env);
         env.storage().instance().set(&DATA_KEY.vault, &new_vault);
     }
-
 
     // -----------------------------------------------------------------------
     // Two-step admin rotation
