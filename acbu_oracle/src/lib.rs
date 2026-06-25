@@ -37,6 +37,7 @@ pub enum OracleError {
     ValidatorTimelockNotElapsed = 7020,
     MaxValidatorsReached = 7021,
     TimestampRollback = 7022,
+    RateNotInitialized = 7023,
     Unknown = 7999,
 }
 
@@ -64,6 +65,8 @@ impl Display for OracleError {
             Self::NoPendingValidatorChange => "no pending validator change",
             Self::ValidatorTimelockNotElapsed => "validator timelock has not elapsed",
             Self::MaxValidatorsReached => "maximum validators reached",
+            Self::TimestampRollback => "timestamp rollback",
+            Self::RateNotInitialized => "rate not initialized - no submissions yet",
             Self::Unknown => "unknown oracle error",
         };
         f.write_str(message)
@@ -508,7 +511,7 @@ impl OracleContract {
             Self::assert_rate_fresh(&env, &rate_data, &currency);
             rate_data.rate_usd
         } else {
-            env.panic_with_error(OracleError::RateNotFound);
+            env.panic_with_error(OracleError::RateNotInitialized);
         }
     }
 
@@ -518,7 +521,7 @@ impl OracleContract {
             Self::assert_rate_fresh(&env, &rate_data, &currency);
             (rate_data.rate_usd, rate_data.timestamp)
         } else {
-            env.panic_with_error(OracleError::RateNotFound);
+            env.panic_with_error(OracleError::RateNotInitialized);
         }
     }
 
@@ -534,7 +537,7 @@ impl OracleContract {
             .get(&DATA_KEY.currencies)
             .unwrap_or(Vec::new(&env));
         if currencies.is_empty() {
-            return (DECIMALS, 0);
+            env.panic_with_error(OracleError::RateNotInitialized);
         }
 
         let mut weighted_sum = 0i128;
@@ -555,11 +558,11 @@ impl OracleContract {
             }
         }
 
-        let rate = if total_weight > 0 {
-            weighted_sum / total_weight
-        } else {
-            DECIMALS
-        };
+        if total_weight == 0 {
+            env.panic_with_error(OracleError::RateNotInitialized);
+        }
+
+        let rate = weighted_sum / total_weight;
 
         (
             rate,
@@ -583,7 +586,7 @@ impl OracleContract {
             .get(&DATA_KEY.currencies)
             .unwrap_or(Vec::new(&env));
         if currencies.is_empty() {
-            return DECIMALS;
+            env.panic_with_error(OracleError::RateNotInitialized);
         }
 
         let mut weighted_sum = 0i128;
@@ -601,7 +604,7 @@ impl OracleContract {
         }
 
         if total_weight == 0 {
-            return DECIMALS;
+            env.panic_with_error(OracleError::RateNotInitialized);
         }
 
         (weighted_sum * 10_000) / total_weight
