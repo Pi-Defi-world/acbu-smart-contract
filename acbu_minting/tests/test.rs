@@ -97,17 +97,19 @@ fn init_mint_client(
     fee_rate: i128,
     fee_single: i128,
 ) {
-    client.initialize(
-        admin,
-        oracle,
-        reserve_tracker,
-        acbu_token,
-        usdc_token,
-        vault,
-        treasury,
-        &fee_rate,
-        &fee_single,
-    );
+    let config = acbu_minting::MintingConfig {
+        admin: admin.clone(),
+        oracle: oracle.clone(),
+        reserve_tracker: reserve_tracker.clone(),
+        acbu_token: acbu_token.clone(),
+        usdc_token: usdc_token.clone(),
+        vault: vault.clone(),
+        treasury: treasury.clone(),
+        fee_rate_bps: fee_rate,
+        fee_single_bps: fee_single,
+        operator: admin.clone(),
+    };
+    client.initialize(&config);
 }
 
 // --- Setup ---

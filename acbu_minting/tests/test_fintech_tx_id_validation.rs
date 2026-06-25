@@ -108,17 +108,19 @@ impl Harness {
             &contract_id,
         );
 
-        client.initialize(
-            &admin,
-            &oracle,
-            &reserve_tracker,
-            &acbu_token,
-            &usdc_token,
-            &admin, // vault
-            &admin, // treasury
-            &50i128,
-            &100i128,
-        );
+        let config = acbu_minting::MintingConfig {
+            admin: admin.clone(),
+            oracle: oracle.clone(),
+            reserve_tracker: reserve_tracker.clone(),
+            acbu_token: acbu_token.clone(),
+            usdc_token: usdc_token.clone(),
+            vault: admin.clone(),
+            treasury: admin.clone(),
+            fee_rate_bps: 50,
+            fee_single_bps: 100,
+            operator: admin.clone(),
+        };
+        client.initialize(&config);
 
         client.set_operator(&operator);
 
