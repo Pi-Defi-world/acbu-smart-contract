@@ -11,8 +11,10 @@ use soroban_sdk::{
 // --- Mocks ---
 
 mod oracle_mock {
-    use super::*;
     use shared::CurrencyCode;
+    use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
+
+    use super::DECIMALS;
 
     #[contract]
     pub struct MockOracle;
@@ -59,7 +61,8 @@ mod oracle_mock {
 }
 
 mod reserve_mock {
-    use super::*;
+    use soroban_sdk::{contract, contractimpl, Env};
+
     #[contract]
     pub struct MockReserveTracker;
 
@@ -72,7 +75,8 @@ mod reserve_mock {
 }
 
 mod failing_reserve_mock {
-    use super::*;
+    use soroban_sdk::{contract, contractimpl, Env};
+
     #[contract]
     pub struct MockFailingReserveTracker;
 
