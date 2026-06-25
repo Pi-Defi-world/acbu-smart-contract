@@ -172,6 +172,14 @@ pub struct MintingConfig {
     pub operator: Address,
 }
 
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeRateUpdatedEvent {
+    pub old_fee_rate_bps: i128,
+    pub new_fee_rate_bps: i128,
+    pub timestamp: u64,
+}
+
 #[contract]
 pub struct MintingContract;
 
@@ -1080,9 +1088,21 @@ impl MintingContract {
         if !(0..=BASIS_POINTS).contains(&fee_rate_bps) {
             env.panic_with_error(MintingError::InvalidFeeRate);
         }
+        let old_fee_rate: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.fee_rate)
+            .unwrap_or(0);
         env.storage()
             .instance()
             .set(&DATA_KEY.fee_rate, &fee_rate_bps);
+        let event = FeeRateUpdatedEvent {
+            old_fee_rate_bps: old_fee_rate,
+            new_fee_rate_bps: fee_rate_bps,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events()
+            .publish((symbol_short!("fee_upd"),), event);
     }
 
     pub fn set_fee_single(env: Env, fee_single_bps: i128) {
@@ -1092,9 +1112,21 @@ impl MintingContract {
         if !(0..=BASIS_POINTS).contains(&fee_single_bps) {
             env.panic_with_error(MintingError::InvalidFeeRate);
         }
+        let old_fee_single: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.fee_single)
+            .unwrap_or(0);
         env.storage()
             .instance()
             .set(&DATA_KEY.fee_single, &fee_single_bps);
+        let event = FeeRateUpdatedEvent {
+            old_fee_rate_bps: old_fee_single,
+            new_fee_rate_bps: fee_single_bps,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events()
+            .publish((symbol_short!("fee_sgl"),), event);
     }
 
     pub fn get_fee_rate(env: Env) -> i128 {
