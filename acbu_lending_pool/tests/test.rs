@@ -1,6 +1,8 @@
 #![cfg(test)]
 
-use acbu_lending_pool::{BorrowEvent, LendingPool, LendingPoolClient, RepayEvent};
+use acbu_lending_pool::{
+    BorrowEvent, LendingPool, LendingPoolClient, LoanStatus, RepayEvent, RepaymentEvent,
+};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger},
@@ -297,11 +299,11 @@ fn test_repay_basic() {
     // Borrower now holds borrow_amount tokens; repay the full amount
     client.repay(&borrower, &borrow_amount, &loan_id);
 
-    // Loan must be removed after full repayment
-    assert!(
-        client.get_loan(&borrower, &loan_id).is_none(),
-        "loan must be cleared after full repayment"
-    );
+    let loan = client
+        .get_loan(&borrower, &loan_id)
+        .expect("repaid loan state must remain available");
+    assert_eq!(loan.amount, 0);
+    assert!(matches!(loan.status, LoanStatus::Repaid));
 
     // Pool token balance is restored to original liquidity
     assert_eq!(token_client.balance(&contract_id), pool_liquidity);
@@ -487,10 +489,11 @@ fn test_borrow_repay_full_lifecycle() {
 
     assert_eq!(token_client.balance(&borrower), collateral);
     assert_eq!(token_client.balance(&contract_id), pool_liquidity);
-    assert!(
-        client.get_loan(&borrower, &loan_id).is_none(),
-        "loan must be gone after full repayment"
-    );
+    let repaid_loan = client
+        .get_loan(&borrower, &loan_id)
+        .expect("repaid loan state must remain available");
+    assert_eq!(repaid_loan.amount, 0);
+    assert!(matches!(repaid_loan.status, LoanStatus::Repaid));
 
     // ── Step 4: lender withdraws ──────────────────────────────────────────────
     client.withdraw(&lender, &pool_liquidity);
@@ -516,7 +519,6 @@ fn test_loan_lifecycle_emits_events() {
     let token_id = env
         .register_stellar_asset_contract_v2(token_admin.clone())
         .address();
-    let _token_client = TokenClient::new(&env, &token_id);
     let token_admin_client = StellarAssetClient::new(&env, &token_id);
 
     let contract_id = env.register_contract(None, LendingPool);
@@ -596,9 +598,32 @@ fn test_loan_lifecycle_emits_events() {
     assert_eq!(repay_event_data.token, token_id);
     assert_eq!(repay_event_data.loan_id, loan_id);
 
-    // 3. Repay full - loan removed
+    // 3. Repay full - loan state retained as repaid
     client.repay(&borrower, &(borrow_amount - repay_amount), &loan_id);
 
-    // Assert loan deleted after full repayment
-    assert!(client.get_loan(&borrower, &loan_id).is_none());
+    let repaid_loan = client
+        .get_loan(&borrower, &loan_id)
+        .expect("repaid loan state must remain available");
+    assert_eq!(repaid_loan.amount, 0);
+    assert!(matches!(repaid_loan.status, LoanStatus::Repaid));
+
+    let events = env.events().all();
+    let repayment_event = events
+        .iter()
+        .rev()
+        .find(|e| {
+            e.1.first().map_or(false, |t| {
+                if let Ok(symbol_val) =
+                    TryIntoVal::<_, soroban_sdk::Symbol>::try_into_val(&t, &env)
+                {
+                    symbol_val == symbol_short!("repaymt")
+                } else {
+                    false
+                }
+            })
+        })
+        .expect("repayment event not found");
+    let repayment_event_data: RepaymentEvent = repayment_event.2.try_into_val(&env).unwrap();
+    assert_eq!(repayment_event_data.borrower, borrower);
+    assert_eq!(repayment_event_data.amount, borrow_amount - repay_amount);
 }

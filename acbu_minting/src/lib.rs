@@ -1443,7 +1443,6 @@ fn validate_fintech_tx_id(env: &Env, id: &SorobanString) {
             env.panic_with_error(MintingError::FintechTxIdInvalidChar);
         }
     }
-    let _ = env; // env kept in signature for future on-chain logging
 }
 
 fn normalize_fintech_tx_id(env: &Env, id: &SorobanString) -> SorobanString {
