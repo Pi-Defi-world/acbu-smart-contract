@@ -175,6 +175,7 @@ impl Escrow {
             return Err(EscrowError::InvalidAmount);
         }
         payer.require_auth();
+        payee.require_auth();
         let key = EscrowId(payer.clone(), escrow_id);
 
         if env.storage().temporary().has(&key) {
