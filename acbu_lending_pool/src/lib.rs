@@ -628,7 +628,6 @@ impl LendingPool {
             .instance()
             .remove(&DataKey::PendingUpgradeEligibleAt);
         env.deployer().update_current_contract_wasm(wasm_hash);
-        #[allow(clippy::single_match)]
         for v in current_version..new_version {
             match v {
                 0 => migrate_v0_to_v1(env.clone()),

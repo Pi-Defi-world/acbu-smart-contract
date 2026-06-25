@@ -157,6 +157,21 @@ impl Display for MintingError {
     }
 }
 
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MintingConfig {
+    pub admin: Address,
+    pub oracle: Address,
+    pub reserve_tracker: Address,
+    pub acbu_token: Address,
+    pub usdc_token: Address,
+    pub vault: Address,
+    pub treasury: Address,
+    pub fee_rate_bps: i128,
+    pub fee_single_bps: i128,
+    pub operator: Address,
+}
+
 #[contract]
 pub struct MintingContract;
 
@@ -164,56 +179,41 @@ pub struct MintingContract;
 impl MintingContract {
     /// Initialize the minting contract.
     /// `fee_rate_bps` applies to basket and USDC paths; `fee_single_bps` to single S-token deposits (typically higher).
-    // Soroban initialize functions are idiomatic with many parameters; a config-struct
-    // refactor is a separate concern.
-    #[allow(clippy::too_many_arguments)]
-    pub fn initialize(
-        env: Env,
-        admin: Address,
-        oracle: Address,
-        reserve_tracker: Address,
-        acbu_token: Address,
-        usdc_token: Address,
-        vault: Address,
-        treasury: Address,
-        fee_rate_bps: i128,
-        fee_single_bps: i128,
-        operator: Address,
-    ) {
+    pub fn initialize(env: Env, config: MintingConfig) {
         if env.storage().instance().has(&DATA_KEY.admin) {
             env.panic_with_error(MintingError::AlreadyInitialized);
         }
 
-        if admin == operator {
+        if config.admin == config.operator {
             env.panic_with_error(MintingError::InvalidRoleSeparation);
         }
 
-        if !(0..=BASIS_POINTS).contains(&fee_rate_bps)
-            || !(0..=BASIS_POINTS).contains(&fee_single_bps)
+        if !(0..=BASIS_POINTS).contains(&config.fee_rate_bps)
+            || !(0..=BASIS_POINTS).contains(&config.fee_single_bps)
         {
             env.panic_with_error(MintingError::InvalidFeeRate);
         }
 
-        env.storage().instance().set(&DATA_KEY.admin, &admin);
-        env.storage().instance().set(&DATA_KEY.oracle, &oracle);
+        env.storage().instance().set(&DATA_KEY.admin, &config.admin);
+        env.storage().instance().set(&DATA_KEY.oracle, &config.oracle);
         env.storage()
             .instance()
-            .set(&DATA_KEY.reserve_tracker, &reserve_tracker);
+            .set(&DATA_KEY.reserve_tracker, &config.reserve_tracker);
         env.storage()
             .instance()
-            .set(&DATA_KEY.acbu_token, &acbu_token);
+            .set(&DATA_KEY.acbu_token, &config.acbu_token);
         env.storage()
             .instance()
-            .set(&DATA_KEY.usdc_token, &usdc_token);
-        env.storage().instance().set(&DATA_KEY.vault, &vault);
-        env.storage().instance().set(&DATA_KEY.treasury, &treasury);
+            .set(&DATA_KEY.usdc_token, &config.usdc_token);
+        env.storage().instance().set(&DATA_KEY.vault, &config.vault);
+        env.storage().instance().set(&DATA_KEY.treasury, &config.treasury);
         env.storage()
             .instance()
-            .set(&DATA_KEY.fee_rate, &fee_rate_bps);
+            .set(&DATA_KEY.fee_rate, &config.fee_rate_bps);
         env.storage()
             .instance()
-            .set(&DATA_KEY.fee_single, &fee_single_bps);
-        env.storage().instance().set(&DATA_KEY.operator, &operator);
+            .set(&DATA_KEY.fee_single, &config.fee_single_bps);
+        env.storage().instance().set(&DATA_KEY.operator, &config.operator);
         env.storage().instance().set(&DATA_KEY.paused, &false);
         env.storage()
             .instance()
@@ -239,7 +239,7 @@ impl MintingContract {
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        Self::assert_recipient_is_account(&recipient);
+        assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -350,7 +350,7 @@ impl MintingContract {
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        Self::assert_recipient_is_account(&recipient);
+        assert_recipient_is_account(&recipient);
 
         if !check_proof_unused(&env, &proof_id) {
             env.panic_with_error(MintingError::ProofAlreadyUsed);
@@ -522,7 +522,7 @@ impl MintingContract {
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        Self::assert_recipient_is_account(&recipient);
+        assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -1282,7 +1282,6 @@ impl MintingContract {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
 
         // Run migrations — the match will gain new arms as versions are added.
-        #[allow(clippy::single_match)]
         for v in current_version..new_version {
             match v {
                 0 => migrate_v0_to_v1(env.clone()),
@@ -1368,12 +1367,9 @@ fn next_tx_nonce(env: &Env) -> u64 {
 // Stellar's native authorization model.  This stub preserves the call sites so
 // the intent is visible and can be filled in when the SDK gains the API.
 // ---------------------------------------------------------------------------
-impl MintingContract {
-    #[allow(clippy::unused_self)]
-    fn assert_recipient_is_account(_address: &Address) {
-        // On-chain account-vs-contract check is not available in soroban-sdk 21.
-        // Enforcement is the responsibility of the calling client.
-    }
+fn assert_recipient_is_account(_address: &Address) {
+    // On-chain account-vs-contract check is not available in soroban-sdk 21.
+    // Enforcement is the responsibility of the calling client.
 }
 
 // ---------------------------------------------------------------------------
