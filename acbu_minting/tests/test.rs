@@ -23,8 +23,6 @@ mod oracle_mock {
             DECIMALS
         }
 
-        pub fn get_acbu_usd_rate_with_timestamp(_env: Env) -> (i128, u64) {
-            (DECIMALS, 0)
         pub fn get_acbu_usd_rate_with_timestamp(env: Env) -> (i128, u64) {
             (DECIMALS, env.ledger().timestamp())
         }
@@ -43,8 +41,6 @@ mod oracle_mock {
             DECIMALS
         }
 
-        pub fn get_rate_with_timestamp(_env: Env, _c: CurrencyCode) -> (i128, u64) {
-            (DECIMALS, 0)
         pub fn get_rate_with_timestamp(env: Env, _c: CurrencyCode) -> (i128, u64) {
             (DECIMALS, env.ledger().timestamp())
         }
@@ -312,7 +308,6 @@ fn test_mint_from_basket() {
 
     let acbu_amt = 100 * DECIMALS;
     let proof = SorobanString::from_str(&env, "basket_proof_001");
-    let net = client.mint_from_basket(&user, &user, &acbu_amt, &proof);
     let proof_id = soroban_sdk::String::from_str(&env, "proof_1");
     let net = client.mint_from_basket(&user, &user, &acbu_amt, &proof_id);
     assert!(net > 0);
@@ -401,7 +396,6 @@ fn test_mint_from_demo_fiat() {
         &CurrencyCode::new(&env, "NGN"),
         &fiat_amount,
         &proof,
-        &tx_id,
     );
     assert!(acbu > 0);
     assert_eq!(acbu_client.balance(&recipient), acbu);
@@ -446,7 +440,6 @@ fn test_mint_from_demo_fiat_wrong_operator() {
         &recipient,
         &CurrencyCode::new(&env, "NGN"),
         &(10 * DECIMALS),
-        &proof,
         &tx_id,
     );
 }
@@ -493,7 +486,6 @@ fn test_set_operator_and_mint_demo_fiat() {
         &CurrencyCode::new(&env, "NGN"),
         &(20 * DECIMALS),
         &proof,
-        &tx_id,
     );
     assert!(acbu > 0);
 }
@@ -589,7 +581,7 @@ fn test_version_set_on_initialize() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid version upgrade")]
+#[should_panic(expected = "#5018")]
 fn test_upgrade_rejects_same_version() {
     let env = Env::default();
     env.mock_all_auths();
@@ -602,7 +594,7 @@ fn test_upgrade_rejects_same_version() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid version upgrade")]
+#[should_panic(expected = "#5018")]
 fn test_upgrade_rejects_lower_version() {
     let env = Env::default();
     env.mock_all_auths();
@@ -626,8 +618,6 @@ fn test_storage_state_intact_across_upgrade_boundary() {
     assert_eq!(client.get_fee_single(), 100);
     assert_eq!(client.get_total_supply(), 0);
     assert!(!client.is_paused());
-        &tx_id,
-    );
 }
 
 #[test]

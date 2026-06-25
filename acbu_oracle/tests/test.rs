@@ -133,6 +133,54 @@ fn test_update_rate() {
 }
 
 #[test]
+fn test_admin_set_rate_emits_rate_update_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn.clone(), 10000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
+
+    let admin_rate = 2_000_000i128;
+    client.set_rate_admin(&ngn, &admin_rate);
+
+    let stored_rate = client.get_rate(&ngn);
+    assert_eq!(stored_rate, admin_rate);
+
+    let events = env.events().all();
+    let mut found = false;
+    for event in events.iter() {
+        if event.0 != contract_id {
+            continue;
+        }
+        let topics = event.1;
+        if !topics.is_empty()
+            && Symbol::from_val(&env, &topics.get(0).unwrap()) == symbol_short!("rate_upd")
+        {
+            let event_data: RateUpdateEvent = event.2.into_val(&env);
+            assert_eq!(event_data.currency, ngn.clone());
+            assert_eq!(event_data.rate, admin_rate);
+            assert_eq!(event_data.validator, admin);
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "expected rate_upd event");
+}
+
+#[test]
 fn test_outlier_detection() {
     let env = Env::default();
     env.mock_all_auths();

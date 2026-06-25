@@ -224,6 +224,9 @@ pub enum ContractError {
     InvalidRecipient = 11,
     /// WASM upgrade rejected: `new_version` must be greater than the stored version.
     InvalidVersion = 12,
+    NoPendingAdmin = 13,
+    AdminTimelockNotElapsed = 14,
+    NoPendingAdminToCancel = 15,
     Unknown = 9999,
 }
 
@@ -237,6 +240,7 @@ pub const ORACLE_GET_CURRENCIES: &str = "get_currencies";
 pub const ORACLE_GET_BASKET_WEIGHT: &str = "get_basket_weight";
 pub const ORACLE_GET_S_TOKEN_ADDR: &str = "get_s_token_address";
 pub const RESERVE_IS_SUFFICIENT: &str = "is_reserve_sufficient";
+pub const TOKEN_GET_TOTAL_SUPPLY: &str = "get_total_supply";
 
 /// Constants
 pub const BASIS_POINTS: i128 = 10_000;

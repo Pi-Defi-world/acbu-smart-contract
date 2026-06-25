@@ -1,6 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    BytesN, Env, Symbol,
 };
 
 use shared::{DataKey as SharedDataKey, CONTRACT_VERSION, reentrancy_guard};
@@ -20,6 +21,10 @@ pub enum EscrowError {
     TimelockNotElapsed = 3009,
     NoPendingUpgrade = 3010,
     Unauthorized = 3011,
+    NoPendingAdmin = 3012,
+    AdminTimelockNotElapsed = 3013,
+    NoPendingAdminToCancel = 3014,
+    InsufficientBalance = 3015,
     Unknown = 3999,
 }
 
@@ -50,6 +55,9 @@ const UPGRADE_TIMELOCK_SECONDS: u64 = 86_400;
 /// claiming ownership, giving the current admin a window to cancel a mistaken
 /// or malicious transfer.
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
+
+const MIN_ESCROW_AMOUNT: i128 = 10_000_000; // 10 ACBU (7 decimals)
+const MAX_ESCROW_LIFETIME: u64 = 30 * 86_400; // 30 days
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -82,6 +90,8 @@ pub struct EscrowRefundedEvent {
     pub amount: i128,
     pub timestamp: u64,
 }
+
+contractmeta!(key = "version", val = "1");
 
 #[contract]
 pub struct Escrow;
@@ -122,6 +132,25 @@ impl Escrow {
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
+    /// Return the stored escrow fields in the same order as `create` parameters:
+    /// `(payer, payee, amount)`.
+    ///
+    /// Keeping the return order consistent with the creation parameters prevents
+    /// off-by-field bugs in client code that destructures the response tuple.
+    pub fn get_escrow(
+        env: Env,
+        payer: Address,
+        escrow_id: u64,
+    ) -> Result<(Address, Address, i128), EscrowError> {
+        let key = EscrowId(payer, escrow_id);
+        let (stored_payer, payee, amount): (Address, Address, i128) = env
+            .storage()
+            .temporary()
+            .get(&key)
+            .ok_or(EscrowError::EscrowNotFound)?;
+        Ok((stored_payer, payee, amount))
+    }
+
     /// Create escrow: payer deposits ACBU, payee can claim after release
     /// Escrow ID is unique per payer and provided by caller to prevent collisions
     pub fn create(
@@ -142,7 +171,7 @@ impl Escrow {
         if paused {
             return Err(EscrowError::Paused);
         }
-        if amount <= 0 {
+        if amount < MIN_ESCROW_AMOUNT {
             return Err(EscrowError::InvalidAmount);
         }
         payer.require_auth();
@@ -155,11 +184,17 @@ impl Escrow {
         let acbu = Self::get_acbu_token(&env)?;
         let client = soroban_sdk::token::Client::new(&env, &acbu);
 
+        let expiry = env.ledger().timestamp() + MAX_ESCROW_LIFETIME;
+
         // CEI: write state before the external token transfer so any token-level
         // callback observes the escrow as already recorded.
         env.storage()
             .temporary()
-            .set(&key, &(payer.clone(), payee.clone(), amount));
+            .set(&key, &(payer.clone(), payee.clone(), amount, expiry));
+
+        // Extend entry TTL to match the maximum lifetime: 30 days.
+        // At 5 seconds per ledger, 30 days ≈ 518,400 ledgers.
+        env.storage().temporary().extend_ttl(&key, 17280, 518400);
 
         client.transfer(&payer, &env.current_contract_address(), &amount);
 
@@ -196,20 +231,23 @@ impl Escrow {
         if paused {
             return Err(EscrowError::Paused);
         }
-        let admin = Self::get_admin(&env)?;
+        let admin = Self::load_admin(&env)?;
         if payer == admin {
             admin.require_auth();
         } else {
             payer.require_auth();
         }
         let key = EscrowId(payer.clone(), escrow_id);
-        let (stored_payer, payee, amount): (Address, Address, i128) = env
+        let (stored_payer, payee, amount, expiry): (Address, Address, i128, u64) = env
             .storage()
             .temporary()
             .get(&key)
             .ok_or(EscrowError::EscrowNotFound)?;
         if stored_payer != payer {
             return Err(EscrowError::PayerMismatch);
+        }
+        if env.ledger().timestamp() > expiry {
+            return Err(EscrowError::Expired);
         }
         let acbu = Self::get_acbu_token(&env)?;
         let client = soroban_sdk::token::Client::new(&env, &acbu);
@@ -230,17 +268,17 @@ impl Escrow {
 
         Ok(())
     }
-    /// Refund escrow: payer gets ACBU back (admin or dispute resolution)
+    /// Refund escrow: payer gets ACBU back (admin or dispute resolution, or payer after expiry)
     /// key is same as release since it identifies which escrow to refund
     pub fn refund(env: Env, escrow_id: u64, payer: Address) -> Result<(), EscrowError> {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
-        let admin = Self::get_admin(&env)?;
+        let admin = Self::load_admin(&env)?;
         admin.require_auth();
 
         let key = EscrowId(payer.clone(), escrow_id);
-        let (stored_payer, _payee, amount): (Address, Address, i128) = env
+        let (stored_payer, _payee, amount, expiry): (Address, Address, i128, u64) = env
             .storage()
             .temporary()
             .get(&key)
@@ -250,8 +288,22 @@ impl Escrow {
             return Err(EscrowError::PayerMismatch);
         }
 
+        let admin = Self::load_admin(&env)?;
+        if env.ledger().timestamp() > expiry {
+            payer.require_auth();
+        } else {
+            admin.require_auth();
+        }
+
         let acbu = Self::get_acbu_token(&env)?;
         let client = soroban_sdk::token::Client::new(&env, &acbu);
+
+        // Validate contract balance before mutating storage.
+        // Ensures balance state is sound and prevents premature state update if the transfer would fail.
+        let balance = client.balance(&env.current_contract_address());
+        if balance < amount {
+            return Err(EscrowError::InsufficientBalance);
+        }
 
         // CEI: remove the escrow record before the external transfer so the
         // escrow cannot be refunded twice if the token executes a callback.

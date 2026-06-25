@@ -30,7 +30,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+    contract, contractimpl, contractmeta, contracttype, symbol_short, Address, BytesN, Env,
     String as SorobanString, Vec,
 };
 
@@ -94,6 +94,8 @@ pub enum Error {
 // ---------------------------------------------------------------------------
 // Contract
 // ---------------------------------------------------------------------------
+
+contractmeta!(key = "version", val = "1");
 
 #[contract]
 pub struct MultisigContract;

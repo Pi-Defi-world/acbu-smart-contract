@@ -319,7 +319,7 @@ fn test_redeem_basket_insufficient_reserves() {
 
     ctx.reserve_tracker.set_reserve_ok(&false);
 
-    let recipients = vec![&env, Address::generate(&env)];
+    let recipients = vec![&env, Address::generate(&env), Address::generate(&env)];
     ctx.burning
         .redeem_basket(&ctx.user, &recipients, &burn_amount);
 }

@@ -11,7 +11,7 @@ Soroban (Stellar) smart contracts for the ACBU (African Currency Basket Unit) st
 
 ## Prerequisites
 
-- Rust 1.70 or higher
+- Rust 1.87.0 (pinned in `rust-toolchain.toml`)
 - Soroban CLI (`cargo install --locked soroban-cli`)
 - Stellar account with XLM for deployment fees
 
@@ -63,6 +63,15 @@ export STELLAR_SECRET_KEY="your-secret-key"
 After deployment, contract addresses are saved to `.soroban/deployment_{network}.json`
 
 ## Development
+
+### Git Hooks Setup
+
+After cloning, run:
+```bash
+./scripts/setup-git-hooks.sh
+```
+This configures the pre-commit hook for WASM integrity checks.
+
 
 ### Project Structure
 

@@ -1,17 +1,13 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map,
-    Symbol, Vec,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    BytesN, Env, Map, Symbol, Vec,
 };
 
-use shared::{CurrencyCode, DataKey as SharedDataKey, ReserveData, BASIS_POINTS, CONTRACT_VERSION};
-
-// Single shared-crate re-export. Previously the file contained duplicate
-// `token_contract` module imports and orphaned `initialize` body fragments
-// that were dead code and could shadow real logic on upgrade (issue #197).
-mod shared {
-    pub use shared::*;
-}
+use shared::{
+    CurrencyCode, DataKey as SharedDataKey, ReserveData, BASIS_POINTS, CONTRACT_VERSION,
+    ORACLE_GET_ACBU_RATE, TOKEN_GET_TOTAL_SUPPLY,
+};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -19,6 +15,12 @@ mod shared {
 pub enum ReserveTrackerError {
     AlreadyInitialized = 8001,
     InvalidVersion = 8002,
+    ZeroSupply = 8003,
+    NoPendingAdmin = 8004,
+    AdminTimelockNotElapsed = 8005,
+    NoPendingAdminToCancel = 8006,
+    Unauthorized = 8007,
+    DuplicateCurrency = 8008,
     Unknown = 8999,
 }
 
@@ -33,6 +35,7 @@ pub struct DataKey {
     pub version: Symbol,
     pub pending_admin: Symbol,
     pub pending_admin_eligible_at: Symbol,
+    pub currencies: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -44,12 +47,15 @@ const DATA_KEY: DataKey = DataKey {
     version: symbol_short!("VERSION"),
     pending_admin: symbol_short!("PEND_ADM"),
     pending_admin_eligible_at: symbol_short!("PEND_ETA"),
+    currencies: symbol_short!("CURRNCYS"),
 };
 
 /// Admin rotation timelock: the pending admin must wait this long before
 /// claiming ownership, giving the current admin a window to cancel a mistaken
 /// or malicious transfer.
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
+
+contractmeta!(key = "version", val = "1");
 
 #[contract]
 pub struct ReserveTrackerContract;
@@ -89,7 +95,7 @@ impl ReserveTrackerContract {
         // Use invoke_contract to avoid dependency on a specific token client implementation
         env.invoke_contract(
             &acbu_token_addr,
-            &Symbol::new(env, "get_total_supply"),
+            &Symbol::new(env, TOKEN_GET_TOTAL_SUPPLY),
             Vec::new(env),
         )
     }
@@ -116,13 +122,17 @@ impl ReserveTrackerContract {
     /// Update reserve amount for a currency (admin or authorized address)
     pub fn update_reserve(
         env: Env,
-        _updater: Address,
+        updater: Address,
         currency: CurrencyCode,
         amount: i128,
         value_usd: i128,
     ) {
-        // Authorize admin
-        Self::check_admin(&env);
+        // Authorize updater
+        updater.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if updater != admin {
+            env.panic_with_error(ReserveTrackerError::Unauthorized);
+        }
 
         let current_time = env.ledger().timestamp();
 
@@ -148,8 +158,7 @@ impl ReserveTrackerContract {
 
     /// Get current reserves for all currencies
     pub fn get_all_reserves(env: Env) -> Map<CurrencyCode, ReserveData> {
-        let key = &DATA_KEY.reserves;
-        env.storage().instance().extend_ttl(key, 5184000, 5184000);
+        env.storage().instance().extend_ttl(5184000, 5184000);
         env.storage()
             .instance()
             .get(&DATA_KEY.reserves)
@@ -183,7 +192,7 @@ impl ReserveTrackerContract {
         let oracle_addr: Address = env.storage().instance().get(&DATA_KEY.oracle).unwrap();
         let acbu_usd_rate: i128 = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, "get_acbu_usd_rate"),
+            &Symbol::new(&env, ORACLE_GET_ACBU_RATE),
             Vec::new(&env),
         );
 
@@ -248,6 +257,38 @@ impl ReserveTrackerContract {
     }
 
     // -----------------------------------------------------------------------
+    // Currency list management (admin only)
+    // -----------------------------------------------------------------------
+
+    /// Add a currency to the tracked list. Panics with `DuplicateCurrency` if
+    /// the currency is already present, preventing double-counting of reserves.
+    pub fn add_currency(env: Env, currency: CurrencyCode) {
+        Self::check_admin(&env);
+        let mut currencies: Vec<CurrencyCode> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.currencies)
+            .unwrap_or(Vec::new(&env));
+        for c in currencies.iter() {
+            if c == currency {
+                env.panic_with_error(ReserveTrackerError::DuplicateCurrency);
+            }
+        }
+        currencies.push_back(currency);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.currencies, &currencies);
+    }
+
+    /// Return the list of tracked currencies.
+    pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.currencies)
+            .unwrap_or(Vec::new(&env))
+    }
+
+    // -----------------------------------------------------------------------
     // Dependency address updaters (admin only)
     // -----------------------------------------------------------------------
 
@@ -309,7 +350,9 @@ impl ReserveTrackerContract {
         }
 
         let old_admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        env.storage().instance().set(&DATA_KEY.admin, &pending_admin);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.admin, &pending_admin);
         env.storage().instance().remove(&DATA_KEY.pending_admin);
         env.storage()
             .instance()
