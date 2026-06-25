@@ -7,7 +7,7 @@ Hold ACBU; release or refund by rules or dispute. Merchant/e-commerce settlement
 - `initialize(admin, acbu_token)` — Initialize the escrow contract
 - `create(payer, payee, amount, escrow_id)` — Create escrow (payer deposits ACBU)
 - `release(escrow_id)` — Release to payee
-- `refund(escrow_id, payer)` — Refund to payer (admin only)
+- `refund(escrow_id, payer)` — Refund to payer; admin can authorize before expiry, and the payer can authorize after expiry
 - `pause` / `unpause` — Admin only
 
 ## Events

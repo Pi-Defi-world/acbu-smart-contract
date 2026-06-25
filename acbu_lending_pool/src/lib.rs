@@ -1,4 +1,5 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env,
@@ -125,6 +126,31 @@ pub enum Error {
     AdminTimelockNotElapsed = 2006,
     NoPendingAdminToCancel = 2007,
     Unknown = 2999,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::NotFound => "resource not found",
+            Self::InvalidState => "invalid lending pool state",
+            Self::Unauthorized => "unauthorized",
+            Self::AlreadyInitialized => "lending pool already initialized",
+            Self::InvalidAmount => "invalid amount",
+            Self::InsufficientBalance => "insufficient balance",
+            Self::InsufficientCollateral => "insufficient collateral",
+            Self::InsufficientLiquidity => "insufficient liquidity",
+            Self::DustBalance => "dust balance",
+            Self::Paused => "lending pool is paused",
+            Self::InvalidVersion => "invalid contract version",
+            Self::TimelockNotElapsed => "timelock has not elapsed",
+            Self::NoPendingUpgrade => "no pending upgrade",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::Unknown => "unknown lending pool error",
+        };
+        f.write_str(message)
+    }
 }
 
 contractmeta!(key = "version", val = "1");

@@ -1,4 +1,5 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Map, Symbol, Vec,
@@ -37,6 +38,36 @@ pub enum OracleError {
     MaxValidatorsReached = 7021,
     CurrencyNotRegistered = 7022,
     Unknown = 7999,
+}
+
+impl Display for OracleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::AlreadyInitialized => "oracle already initialized",
+            Self::InvalidMinSignatures => "invalid minimum signatures",
+            Self::MinSignaturesZero => "minimum signatures cannot be zero",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::UnauthorizedValidator => "unauthorized validator",
+            Self::UpdateIntervalNotMet => "update interval not met",
+            Self::InsufficientOracleSources => "insufficient oracle sources",
+            Self::InvalidRate => "invalid rate",
+            Self::RateNotFound => "rate not found",
+            Self::STokenNotConfigured => "s-token not configured",
+            Self::ValidatorAlreadyExists => "validator already exists",
+            Self::CannotRemoveValidator => "cannot remove validator",
+            Self::InvalidVersion => "invalid contract version",
+            Self::RateStaleLedger => "rate is stale",
+            Self::NoPendingUpgrade => "no pending upgrade",
+            Self::UpgradeTimelockNotElapsed => "upgrade timelock has not elapsed",
+            Self::NoPendingValidatorChange => "no pending validator change",
+            Self::ValidatorTimelockNotElapsed => "validator timelock has not elapsed",
+            Self::MaxValidatorsReached => "maximum validators reached",
+            Self::Unknown => "unknown oracle error",
+        };
+        f.write_str(message)
+    }
 }
 
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
