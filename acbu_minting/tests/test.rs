@@ -718,3 +718,61 @@ fn test_update_oracle_requires_admin_minting() {
     // With mock_all_auths this succeeds; the auth check is enforced by Soroban's auth framework
     client2.update_oracle(&new_oracle);
 }
+
+// --- Fee-rate range validation (#317) ---
+
+#[test]
+fn test_set_fee_rate_accepts_in_range() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    let vault = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker, &acbu_token, &usdc_token, &vault, &treasury, 100, 200);
+
+    // The upper bound (BASIS_POINTS == 100%) is accepted.
+    client.set_fee_rate(&10_000);
+    assert_eq!(client.get_fee_rate(), 10_000);
+    client.set_fee_rate(&0);
+    assert_eq!(client.get_fee_rate(), 0);
+}
+
+#[test]
+#[should_panic(expected = "#5002")]
+fn test_set_fee_rate_rejects_above_basis_points() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    let vault = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker, &acbu_token, &usdc_token, &vault, &treasury, 100, 200);
+
+    // A fee above 10,000 bps (>100%) would silence mints / underflow fee math, so it must revert.
+    client.set_fee_rate(&10_001);
+}
+
+#[test]
+#[should_panic(expected = "#5002")]
+fn test_set_fee_rate_rejects_negative() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    let vault = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker, &acbu_token, &usdc_token, &vault, &treasury, 100, 200);
+
+    client.set_fee_rate(&-1);
+}
+
+#[test]
+#[should_panic(expected = "#5002")]
+fn test_set_fee_single_rejects_above_basis_points() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    let vault = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker, &acbu_token, &usdc_token, &vault, &treasury, 100, 200);
+
+    client.set_fee_single(&10_001);
+}
