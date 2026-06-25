@@ -27,6 +27,7 @@ pub enum EscrowError {
     NoPendingAdminToCancel = 3014,
     InsufficientBalance = 3015,
     Expired = 3016,
+    SelfEscrow = 3017,
     Unknown = 3999,
 }
 
@@ -49,6 +50,7 @@ impl Display for EscrowError {
             Self::NoPendingAdminToCancel => "no pending admin to cancel",
             Self::InsufficientBalance => "insufficient contract balance",
             Self::Expired => "escrow has expired",
+            Self::SelfEscrow => "payee cannot be the same as payer",
             Self::Unknown => "unknown escrow error",
         };
         f.write_str(message)
@@ -198,6 +200,9 @@ impl Escrow {
         }
         if amount < MIN_ESCROW_AMOUNT {
             env.panic_with_error(EscrowError::InvalidAmount);
+        }
+        if payer == payee {
+            env.panic_with_error(EscrowError::SelfEscrow);
         }
         payer.require_auth();
         payee.require_auth();

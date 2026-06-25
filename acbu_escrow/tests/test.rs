@@ -169,3 +169,22 @@ fn test_refund_fails_with_insufficient_contract_balance() {
         "refund should fail when the contract balance is insufficient"
     );
 }
+
+#[test]
+fn test_self_escrow_is_rejected() {
+    let env = Env::default();
+    let (client, admin, token) = setup(&env);
+    let payer = Address::generate(&env);
+    let amount = 10_000_000i128;
+    let escrow_id = 1u64;
+
+    mint(&env, &admin, &token, &payer, amount);
+
+    // Creating an escrow with payee == payer should fail with SelfEscrow error.
+    let result = client.try_create(&payer, &payer, &amount, &escrow_id);
+    assert_eq!(
+        result,
+        Err(Ok(EscrowError::SelfEscrow)),
+        "self-escrow (payee == payer) should be rejected"
+    );
+}
