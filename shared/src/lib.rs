@@ -78,6 +78,8 @@ pub struct ProposalExecutedEvent {
     pub executed_by: Address,
 }
 
+/// Increment this constant with every bug fix, feature addition, or breaking change
+/// so that patched deployments can be distinguished from unpatched ones.
 pub const CONTRACT_VERSION: u32 = 1;
 
 /// Currency code type (e.g., "NGN", "KES", "RWF").
