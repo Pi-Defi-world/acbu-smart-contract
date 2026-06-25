@@ -1,7 +1,7 @@
 #![no_std]
 use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Symbol,
 };
 
@@ -90,8 +90,7 @@ const MAX_ESCROW_LIFETIME: u64 = 30 * 86_400; // 30 days
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EscrowId(pub Address, pub u64);
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct EscrowCreatedEvent {
     pub escrow_id: u64,
     pub payer: Address,
@@ -100,8 +99,7 @@ pub struct EscrowCreatedEvent {
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct EscrowReleasedEvent {
     pub escrow_id: u64,
     pub payee: Address,
@@ -109,8 +107,7 @@ pub struct EscrowReleasedEvent {
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct EscrowRefundedEvent {
     pub escrow_id: u64,
     pub payer: Address,
