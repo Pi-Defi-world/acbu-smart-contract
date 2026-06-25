@@ -533,6 +533,9 @@ impl OracleContract {
             .instance()
             .get(&DATA_KEY.currencies)
             .unwrap_or(Vec::new(&env));
+        if currencies.is_empty() {
+            return (DECIMALS, 0);
+        }
 
         let mut weighted_sum = 0i128;
         let mut total_weight = 0i128;
@@ -579,6 +582,9 @@ impl OracleContract {
             .instance()
             .get(&DATA_KEY.currencies)
             .unwrap_or(Vec::new(&env));
+        if currencies.is_empty() {
+            return DECIMALS;
+        }
 
         let mut weighted_sum = 0i128;
         let mut total_weight = 0i128;
@@ -947,6 +953,9 @@ impl OracleContract {
             .instance()
             .get(&DATA_KEY.currencies)
             .unwrap_or(Vec::new(env));
+        if currencies.is_empty() {
+            env.panic_with_error(OracleError::CurrencyNotRegistered);
+        }
         if !currencies.contains(currency.clone()) {
             env.panic_with_error(OracleError::CurrencyNotRegistered);
         }
