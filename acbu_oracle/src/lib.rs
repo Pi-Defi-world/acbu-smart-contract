@@ -36,7 +36,7 @@ pub enum OracleError {
     NoPendingValidatorChange = 7019,
     ValidatorTimelockNotElapsed = 7020,
     MaxValidatorsReached = 7021,
-    CurrencyNotRegistered = 7022,
+    TimestampRollback = 7022,
     Unknown = 7999,
 }
 
@@ -373,6 +373,11 @@ impl OracleContract {
         let current_time = env.ledger().timestamp();
 
         let existing_rate = Self::get_rate_internal(&env, &currency);
+        if let Some(ref existing) = existing_rate {
+            if current_time < existing.timestamp {
+                env.panic_with_error(OracleError::TimestampRollback);
+            }
+        }
         let mut allow_update = false;
         if let Some(existing_rate) = existing_rate.clone() {
             let deviation = calculate_deviation(rate, existing_rate.rate_usd);
@@ -462,6 +467,13 @@ impl OracleContract {
             env.panic_with_error(OracleError::InvalidRate);
         }
         let current_time = env.ledger().timestamp();
+
+        let existing_rate = Self::get_rate_internal(&env, &currency);
+        if let Some(ref existing) = existing_rate {
+            if current_time < existing.timestamp {
+                env.panic_with_error(OracleError::TimestampRollback);
+            }
+        }
         let rate_data = RateData {
             currency: currency.clone(),
             rate_usd: rate,
