@@ -1,4 +1,5 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, vec, Address,
@@ -122,6 +123,38 @@ pub enum MintingError {
     InvalidRecipient = 5023,
     InvalidRoleSeparation = 5024,
     Unknown = 5999,
+}
+
+impl Display for MintingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::AlreadyInitialized => "minting contract already initialized",
+            Self::InvalidFeeRate => "invalid fee rate",
+            Self::InvalidMintAmount => "invalid mint amount",
+            Self::InsufficientReserves => "insufficient reserves",
+            Self::ProofAlreadyUsed => "proof already used",
+            Self::InvalidOracleRate => "invalid oracle rate",
+            Self::UnauthorizedOperator => "unauthorized operator",
+            Self::DuplicateFintechTxId => "duplicate fintech transaction id",
+            Self::InvalidDripAmount => "invalid drip amount",
+            Self::DripExceedsCap => "drip exceeds cap",
+            Self::InsufficientDemoCustody => "insufficient demo custody",
+            Self::Paused => "minting contract is paused",
+            Self::OracleStale => "oracle rate is stale",
+            Self::FintechTxIdEmpty => "fintech transaction id is empty",
+            Self::FintechTxIdTooShort => "fintech transaction id is too short",
+            Self::FintechTxIdTooLong => "fintech transaction id is too long",
+            Self::FintechTxIdInvalidChar => "fintech transaction id contains invalid characters",
+            Self::InvalidVersion => "invalid contract version",
+            Self::MaxSupplyExceeded => "maximum supply exceeded",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::InvalidRecipient => "invalid recipient",
+            Self::Unknown => "unknown minting error",
+        };
+        f.write_str(message)
+    }
 }
 
 #[contract]

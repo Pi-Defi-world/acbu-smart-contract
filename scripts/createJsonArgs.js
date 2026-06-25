@@ -1,4 +1,6 @@
 const fs = require('fs');
+const { execFileSync } = require('child_process');
+const path = require('path');
 
 const ADMIN = "GDHO63RZEUNDRVF6WA7HD4D7PLNLUMSK5H74ONW3MEF3VKF4BZJ6GDML";
 
@@ -16,9 +18,15 @@ const weights = Object.entries(rawWeights).map(([k, v]) => {
   };
 });
 
-fs.writeFileSync('validators.json', JSON.stringify([ADMIN]));
-fs.writeFileSync('currencies.json', JSON.stringify(currencies));
-fs.writeFileSync('weights.json', JSON.stringify(weights));
+const rootDir = path.resolve(__dirname, '..');
+fs.writeFileSync(path.join(rootDir, 'validators.json'), JSON.stringify([ADMIN]));
+fs.writeFileSync(path.join(rootDir, 'currencies.json'), JSON.stringify(currencies));
+fs.writeFileSync(path.join(rootDir, 'weights.json'), JSON.stringify(weights));
+
+execFileSync('python3', [path.join(rootDir, 'scripts', 'validate_config.py')], {
+  cwd: rootDir,
+  stdio: 'inherit',
+});
 
 // log
-console.log("JSON files created.");
+console.log('JSON files created and validated.');

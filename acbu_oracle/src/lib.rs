@@ -1,4 +1,5 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Map, Symbol, Vec,
@@ -35,8 +36,38 @@ pub enum OracleError {
     NoPendingValidatorChange = 7019,
     ValidatorTimelockNotElapsed = 7020,
     MaxValidatorsReached = 7021,
-    CurrencyNotRegistered = 7022,
+    TimestampRollback = 7022,
     Unknown = 7999,
+}
+
+impl Display for OracleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::AlreadyInitialized => "oracle already initialized",
+            Self::InvalidMinSignatures => "invalid minimum signatures",
+            Self::MinSignaturesZero => "minimum signatures cannot be zero",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::UnauthorizedValidator => "unauthorized validator",
+            Self::UpdateIntervalNotMet => "update interval not met",
+            Self::InsufficientOracleSources => "insufficient oracle sources",
+            Self::InvalidRate => "invalid rate",
+            Self::RateNotFound => "rate not found",
+            Self::STokenNotConfigured => "s-token not configured",
+            Self::ValidatorAlreadyExists => "validator already exists",
+            Self::CannotRemoveValidator => "cannot remove validator",
+            Self::InvalidVersion => "invalid contract version",
+            Self::RateStaleLedger => "rate is stale",
+            Self::NoPendingUpgrade => "no pending upgrade",
+            Self::UpgradeTimelockNotElapsed => "upgrade timelock has not elapsed",
+            Self::NoPendingValidatorChange => "no pending validator change",
+            Self::ValidatorTimelockNotElapsed => "validator timelock has not elapsed",
+            Self::MaxValidatorsReached => "maximum validators reached",
+            Self::Unknown => "unknown oracle error",
+        };
+        f.write_str(message)
+    }
 }
 
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
@@ -316,25 +347,20 @@ impl OracleContract {
     ) {
         validator.require_auth();
 
-        let validator_set: Map<Address, bool> = match env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.validator_set)
-        {
-            Some(set) => set,
-            None => {
-                let validators: Vec<Address> =
-                    env.storage().instance().get(&DATA_KEY.validators).unwrap();
-                let mut set: Map<Address, bool> = Map::new(&env);
-                for v in validators.iter() {
-                    set.set(v, true);
+        let validator_set: Map<Address, bool> =
+            match env.storage().instance().get(&DATA_KEY.validator_set) {
+                Some(set) => set,
+                None => {
+                    let validators: Vec<Address> =
+                        env.storage().instance().get(&DATA_KEY.validators).unwrap();
+                    let mut set: Map<Address, bool> = Map::new(&env);
+                    for v in validators.iter() {
+                        set.set(v, true);
+                    }
+                    env.storage().instance().set(&DATA_KEY.validator_set, &set);
+                    set
                 }
-                env.storage()
-                    .instance()
-                    .set(&DATA_KEY.validator_set, &set);
-                set
-            }
-        };
+            };
         if !validator_set.contains_key(validator.clone()) {
             env.panic_with_error(OracleError::UnauthorizedValidator);
         }
@@ -347,6 +373,11 @@ impl OracleContract {
         let current_time = env.ledger().timestamp();
 
         let existing_rate = Self::get_rate_internal(&env, &currency);
+        if let Some(ref existing) = existing_rate {
+            if current_time < existing.timestamp {
+                env.panic_with_error(OracleError::TimestampRollback);
+            }
+        }
         let mut allow_update = false;
         if let Some(existing_rate) = existing_rate.clone() {
             let deviation = calculate_deviation(rate, existing_rate.rate_usd);
@@ -365,32 +396,41 @@ impl OracleContract {
             env.panic_with_error(OracleError::InsufficientOracleSources);
         }
 
-        let raw_median = median(sources.clone()).unwrap_or(rate);
-
-        let mut clean_sources: Vec<i128> = Vec::new(&env);
-        for i in 0..sources.len() {
-            let source_rate = sources.get(i).unwrap();
-            let deviation_bps = calculate_deviation(source_rate, raw_median);
-
-            if deviation_bps > OUTLIER_THRESHOLD_BPS {
-                let outlier_event = OutlierDetectionEvent {
-                    currency: currency.clone(),
-                    median_rate: raw_median,
-                    outlier_rate: source_rate,
-                    deviation_bps,
-                    timestamp: current_time,
-                };
-                env.events()
-                    .publish((symbol_short!("outlier"),), outlier_event);
-            } else {
-                clean_sources.push_back(source_rate);
-            }
-        }
-
-        let median_rate = if clean_sources.is_empty() {
-            raw_median
+        // Bypass median and outlier calculation workflows if 0 or 1 submissions exist
+        let median_rate = if sources.is_empty() {
+            rate
+        } else if sources.len() == 1 {
+            sources.get(0).unwrap()
         } else {
-            median(clean_sources).unwrap_or(raw_median)
+            let raw_median = median(sources.clone()).unwrap_or(rate);
+
+            let mut clean_sources: Vec<i128> = Vec::new(&env);
+            for i in 0..sources.len() {
+                let source_rate = sources.get(i).unwrap();
+                let deviation_bps = calculate_deviation(source_rate, raw_median);
+
+                if deviation_bps > OUTLIER_THRESHOLD_BPS {
+                    let outlier_event = OutlierDetectionEvent {
+                        currency: currency.clone(),
+                        median_rate: raw_median,
+                        outlier_rate: source_rate,
+                        deviation_bps,
+                        timestamp: current_time,
+                    };
+                    env.events()
+                        .publish((symbol_short!("outlier"),), outlier_event);
+                } else {
+                    clean_sources.push_back(source_rate);
+                }
+            }
+
+            if clean_sources.is_empty() {
+                raw_median
+            } else if clean_sources.len() == 1 {
+                clean_sources.get(0).unwrap()
+            } else {
+                median(clean_sources).unwrap_or(raw_median)
+            }
         };
 
         let rate_data = RateData {
@@ -427,6 +467,13 @@ impl OracleContract {
             env.panic_with_error(OracleError::InvalidRate);
         }
         let current_time = env.ledger().timestamp();
+
+        let existing_rate = Self::get_rate_internal(&env, &currency);
+        if let Some(ref existing) = existing_rate {
+            if current_time < existing.timestamp {
+                env.panic_with_error(OracleError::TimestampRollback);
+            }
+        }
         let rate_data = RateData {
             currency: currency.clone(),
             rate_usd: rate,
@@ -632,11 +679,7 @@ impl OracleContract {
 
     pub fn execute_validator_change(env: Env) {
         Self::check_admin(&env);
-        let validator: Address = match env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.pending_validator)
-        {
+        let validator: Address = match env.storage().instance().get(&DATA_KEY.pending_validator) {
             Some(v) => v,
             None => env.panic_with_error(OracleError::NoPendingValidatorChange),
         };
@@ -661,8 +704,7 @@ impl OracleContract {
             .instance()
             .remove(&DATA_KEY.pending_validator_eligible_at);
 
-        let validators: Vec<Address> =
-            env.storage().instance().get(&DATA_KEY.validators).unwrap();
+        let validators: Vec<Address> = env.storage().instance().get(&DATA_KEY.validators).unwrap();
         if is_add {
             for v in validators.iter() {
                 if v == validator {
@@ -816,14 +858,11 @@ impl OracleContract {
 
     pub fn execute_upgrade(env: Env) {
         Self::check_admin(&env);
-        let wasm_hash: BytesN<32> = match env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.pending_upgrade_wasm)
-        {
-            Some(h) => h,
-            None => env.panic_with_error(OracleError::NoPendingUpgrade),
-        };
+        let wasm_hash: BytesN<32> =
+            match env.storage().instance().get(&DATA_KEY.pending_upgrade_wasm) {
+                Some(h) => h,
+                None => env.panic_with_error(OracleError::NoPendingUpgrade),
+            };
         let new_version: u32 = env
             .storage()
             .instance()

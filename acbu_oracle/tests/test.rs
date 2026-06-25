@@ -17,8 +17,7 @@ fn advance_ledger_to(env: &Env, contract_id: &Address, target_seq: u32) {
         let cur = env.ledger().sequence();
         let next = (cur + 200).min(target_seq);
         env.ledger().with_mut(|l| l.sequence_number = next);
-        env
-            .deployer()
+        env.deployer()
             .extend_ttl(contract_id.clone(), TTL_TARGET, TTL_TARGET);
     }
 }
@@ -480,7 +479,13 @@ fn test_stale_rate_rejected_at_read() {
     sources.push_back(1_000_000i128);
     sources.push_back(1_000_001i128);
     sources.push_back(999_999i128);
-    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     // Advance ledger sequence past STALE_RATE_MAX_LEDGERS (4_320).
     advance_ledger_to(&env, &contract_id, 100 + 4_321); // one beyond the limit
@@ -495,9 +500,10 @@ fn test_stale_rate_rejected_at_read() {
     // A stale_rt event must have been emitted.
     let events = env.events().all();
     let stale_event_found = events.iter().any(|e| {
-        if e.0 != contract_id { return false; }
-        !e.1.is_empty()
-            && Symbol::from_val(&env, &e.1.get(0).unwrap()) == symbol_short!("stale_rt")
+        if e.0 != contract_id {
+            return false;
+        }
+        !e.1.is_empty() && Symbol::from_val(&env, &e.1.get(0).unwrap()) == symbol_short!("stale_rt")
     });
     assert!(stale_event_found, "expected stale_rt event to be emitted");
 }
@@ -531,7 +537,13 @@ fn test_rate_at_boundary_is_accepted() {
     sources.push_back(1_000_000i128);
     sources.push_back(1_000_001i128);
     sources.push_back(999_999i128);
-    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     // Advance exactly to the limit — should still pass.
     advance_ledger_to(&env, &contract_id, 100 + 4_320); // exactly at limit
@@ -569,7 +581,13 @@ fn test_admin_override_unblocks_stale_rate() {
     sources.push_back(1_000_000i128);
     sources.push_back(1_000_001i128);
     sources.push_back(999_999i128);
-    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     // Advance past staleness window.
     advance_ledger_to(&env, &contract_id, 100 + 4_321);
@@ -583,7 +601,10 @@ fn test_admin_override_unblocks_stale_rate() {
 
     // Now get_rate must succeed with the admin-set value.
     let rate = client.get_rate(&ngn);
-    assert_eq!(rate, override_rate, "admin override should unblock stale rate");
+    assert_eq!(
+        rate, override_rate,
+        "admin override should unblock stale rate"
+    );
 }
 
 /// Basket rate (get_acbu_usd_rate_with_timestamp) must also be blocked when any
@@ -616,7 +637,13 @@ fn test_stale_basket_component_blocks_acbu_rate() {
     sources.push_back(1_000_000i128);
     sources.push_back(1_000_001i128);
     sources.push_back(999_999i128);
-    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     // Advance past staleness window.
     advance_ledger_to(&env, &contract_id, 100 + 4_321);
@@ -625,33 +652,8 @@ fn test_stale_basket_component_blocks_acbu_rate() {
     });
 
     let result = client.try_get_acbu_usd_rate_with_timestamp();
-    assert!(result.is_err(), "stale basket component must block acbu rate");
+    assert!(
+        result.is_err(),
+        "stale basket component must block acbu rate"
+    );
 }
-
- # [ t e s t ] 
- # [ s h o u l d _ p a n i c ( e x p e c t e d   =   " C u r r e n c y N o t R e g i s t e r e d " ) ] 
- f n   t e s t _ g e t _ r a t e _ u n r e g i s t e r e d _ c u r r e n c y ( )   { 
-         l e t   e n v   =   E n v : : d e f a u l t ( ) ; 
-         e n v . m o c k _ a l l _ a u t h s ( ) ; 
-         l e t   a d m i n   =   A d d r e s s : : g e n e r a t e ( & e n v ) ; 
-         l e t   v a l i d a t o r   =   A d d r e s s : : g e n e r a t e ( & e n v ) ; 
-         l e t   m u t   v a l i d a t o r s   =   V e c : : n e w ( & e n v ) ; 
-         v a l i d a t o r s . p u s h _ b a c k ( v a l i d a t o r . c l o n e ( ) ) ; 
- 
-         l e t   n g n   =   C u r r e n c y C o d e : : n e w ( & e n v ,   " N G N " ) ; 
-         l e t   m u t   c u r r e n c i e s   =   V e c : : n e w ( & e n v ) ; 
-         c u r r e n c i e s . p u s h _ b a c k ( n g n . c l o n e ( ) ) ; 
- 
-         l e t   m u t   b a s k e t _ w e i g h t s   =   M a p : : n e w ( & e n v ) ; 
-         b a s k e t _ w e i g h t s . s e t ( n g n . c l o n e ( ) ,   1 0 0 0 0 i 1 2 8 ) ; 
- 
-         l e t   c o n t r a c t _ i d   =   e n v . r e g i s t e r _ c o n t r a c t ( N o n e ,   O r a c l e C o n t r a c t ) ; 
-         l e t   c l i e n t   =   O r a c l e C o n t r a c t C l i e n t : : n e w ( & e n v ,   & c o n t r a c t _ i d ) ; 
- 
-         c l i e n t . i n i t i a l i z e ( & a d m i n ,   & v a l i d a t o r s ,   & 1 ,   & c u r r e n c i e s ,   & b a s k e t _ w e i g h t s ) ; 
- 
-         l e t   u n r e g i s t e r e d _ c u r r e n c y   =   C u r r e n c y C o d e : : n e w ( & e n v ,   " E U R " ) ; 
-         c l i e n t . g e t _ r a t e ( & u n r e g i s t e r e d _ c u r r e n c y ) ; 
- } 
-  
- 

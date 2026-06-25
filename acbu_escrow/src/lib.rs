@@ -1,4 +1,5 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Symbol,
@@ -27,6 +28,31 @@ pub enum EscrowError {
     InsufficientBalance = 3015,
     Expired = 3016,
     Unknown = 3999,
+}
+
+impl Display for EscrowError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::Paused => "escrow is paused",
+            Self::InvalidAmount => "invalid escrow amount",
+            Self::EscrowNotFound => "escrow not found",
+            Self::PayerMismatch => "payer mismatch",
+            Self::EscrowExists => "escrow already exists",
+            Self::UninitializedAdmin => "escrow admin not initialized",
+            Self::UninitializedAcBuToken => "escrow token not initialized",
+            Self::AlreadyInitialized => "escrow already initialized",
+            Self::TimelockNotElapsed => "timelock has not elapsed",
+            Self::NoPendingUpgrade => "no pending upgrade",
+            Self::Unauthorized => "unauthorized",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::InsufficientBalance => "insufficient contract balance",
+            Self::Expired => "escrow has expired",
+            Self::Unknown => "unknown escrow error",
+        };
+        f.write_str(message)
+    }
 }
 
 #[contracttype]
@@ -497,6 +523,20 @@ impl Escrow {
         env.storage()
             .instance()
             .remove(&DATA_KEY.pending_upgrade_eligible_at);
+    }
+}
+
+#[cfg(test)]
+extern crate alloc;
+
+#[cfg(test)]
+mod tests {
+    use super::EscrowError;
+    use alloc::string::ToString;
+
+    #[test]
+    fn error_display_is_human_readable() {
+        assert_eq!(EscrowError::Paused.to_string(), "escrow is paused");
     }
 }
 
