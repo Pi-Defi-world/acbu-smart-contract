@@ -286,14 +286,14 @@ pub fn median(mut values: soroban_sdk::Vec<i128>) -> Option<i128> {
 
     if n % 2 == 0 {
         // For even count, find two middle elements and average them
-        quickselect_inplace(&mut values, 0, (n - 1) as i32, (mid - 1) as i32);
+        quickselect_inplace(&mut values, 0, i32::try_from(n - 1).unwrap_or(0), i32::try_from(mid - 1).unwrap_or(0));
         let val1 = values.get(mid - 1)?;
-        quickselect_inplace(&mut values, 0, (n - 1) as i32, mid as i32);
+        quickselect_inplace(&mut values, 0, i32::try_from(n - 1).unwrap_or(0), i32::try_from(mid).unwrap_or(0));
         let val2 = values.get(mid)?;
         Some((val1 + val2) / 2)
     } else {
         // For odd count, find the middle element
-        quickselect_inplace(&mut values, 0, (n - 1) as i32, mid as i32);
+        quickselect_inplace(&mut values, 0, i32::try_from(n - 1).unwrap_or(0), i32::try_from(mid).unwrap_or(0));
         Some(values.get(mid)?)
     }
 }
@@ -315,23 +315,23 @@ fn quickselect_inplace(values: &mut soroban_sdk::Vec<i128>, mut left: i32, mut r
 
 /// Partition array in-place for quickselect using Lomuto partition scheme
 fn partition_inplace(values: &mut soroban_sdk::Vec<i128>, left: i32, right: i32) -> i32 {
-    let pivot_value = values.get(right as u32).unwrap_or(0);
+    let pivot_value = values.get(u32::try_from(right).unwrap_or(0)).unwrap_or(0);
     let mut i = left - 1;
 
     for j in left..right {
-        let val_j = values.get(j as u32).unwrap_or(0);
+        let val_j = values.get(u32::try_from(j).unwrap_or(0)).unwrap_or(0);
         if val_j < pivot_value {
             i += 1;
-            let idx_i = i as u32;
-            let idx_j = j as u32;
+            let idx_i = u32::try_from(i).unwrap_or(0);
+            let idx_j = u32::try_from(j).unwrap_or(0);
             let val_i = values.get(idx_i).unwrap_or(0);
             values.set(idx_i, val_j);
             values.set(idx_j, val_i);
         }
     }
 
-    let idx_i_plus_1 = (i + 1) as u32;
-    let idx_right = right as u32;
+    let idx_i_plus_1 = u32::try_from(i + 1).unwrap_or(0);
+    let idx_right = u32::try_from(right).unwrap_or(0);
     let val_i_plus_1 = values.get(idx_i_plus_1).unwrap_or(0);
     values.set(idx_i_plus_1, pivot_value);
     values.set(idx_right, val_i_plus_1);

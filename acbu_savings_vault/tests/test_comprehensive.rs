@@ -133,7 +133,7 @@ impl TestEnv {
 
 fn expected_yield(principal: i128, yield_rate_bps: i128, elapsed_seconds: u64) -> i128 {
     let elapsed_i128 = i128::from(elapsed_seconds);
-    principal * yield_rate_bps * elapsed_i128 / (BASIS_POINTS * SECONDS_PER_YEAR as i128)
+    principal * yield_rate_bps * elapsed_i128 / (BASIS_POINTS * i128::from(SECONDS_PER_YEAR))
 }
 
 // ============================================================================

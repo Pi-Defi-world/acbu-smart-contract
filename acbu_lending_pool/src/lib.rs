@@ -357,7 +357,8 @@ impl LendingPool {
             lender: lender.clone(),
             amount,
             collateral_amount,
-            interest_rate_bps: fee_rate_bps as u32,
+            interest_rate_bps: u32::try_from(fee_rate_bps)
+                .unwrap_or_else(|_| env.panic_with_error(Error::InvalidAmount)),
             loan_start_timestamp: start_time,
             repayment_deadline: start_time + (30 * 24 * 60 * 60),
             accrued_interest: 0,
