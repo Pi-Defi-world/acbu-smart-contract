@@ -971,4 +971,6 @@ impl OracleContract {
     }
 }
 mod tests;
-fn migrate_v0_to_v1(_env: Env) {}
+fn migrate_v0_to_v1(_env: Env) {
+    // No storage schema changes between v0 and v1.
+}

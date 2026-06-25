@@ -392,5 +392,5 @@ impl ReserveTrackerContract {
 }
 
 fn migrate_v0_to_v1(_env: Env) {
-    // Migration logic
+    // No storage schema changes between v0 and v1.
 }
