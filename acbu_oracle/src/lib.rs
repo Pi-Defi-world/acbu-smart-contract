@@ -468,6 +468,7 @@ impl OracleContract {
     }
 
     pub fn get_rate(env: Env, currency: CurrencyCode) -> i128 {
+        Self::assert_currency_registered(&env, &currency);
         if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
             Self::assert_rate_fresh(&env, &rate_data, &currency);
             rate_data.rate_usd
@@ -477,6 +478,7 @@ impl OracleContract {
     }
 
     pub fn get_rate_with_timestamp(env: Env, currency: CurrencyCode) -> (i128, u64) {
+        Self::assert_currency_registered(&env, &currency);
         if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
             Self::assert_rate_fresh(&env, &rate_data, &currency);
             (rate_data.rate_usd, rate_data.timestamp)
@@ -909,6 +911,17 @@ impl OracleContract {
                 },
             );
             env.panic_with_error(OracleError::RateStaleLedger);
+        }
+    }
+
+    fn assert_currency_registered(env: &Env, currency: &CurrencyCode) {
+        let currencies: Vec<CurrencyCode> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.currencies)
+            .unwrap_or(Vec::new(env));
+        if !currencies.contains(currency.clone()) {
+            env.panic_with_error(OracleError::CurrencyNotRegistered);
         }
     }
 
