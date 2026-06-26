@@ -149,10 +149,10 @@ fn test_same_payer_different_ids_are_independent() {
     let token = soroban_sdk::token::Client::new(&env, &acbu_token);
 
     client.release(&1u64, &payer);
-    assert_eq!(token.balance(&payee), amount);
+    assert_eq!(token.balance(&payee), amount, "token.balance(&payee) should equal amount");
 
     client.release(&2u64, &payer);
-    assert_eq!(token.balance(&payee), amount * 2);
+    assert_eq!(token.balance(&payee), amount * 2, "token.balance(&payee) should equal amount * 2");
 }
 
 // ── Non-admin refund must fail ────────────────────────────────────────────────
@@ -216,7 +216,7 @@ fn test_unpause_restores_create_and_release() {
     client.release(&escrow_id, &payer);
 
     let token = soroban_sdk::token::Client::new(&env, &acbu_token);
-    assert_eq!(token.balance(&payee), amount);
+    assert_eq!(token.balance(&payee), amount, "token.balance(&payee) should equal amount");
 }
 
 // ── Payer receives full amount after refund ───────────────────────────────────
@@ -306,9 +306,9 @@ fn test_escrow_expiration_and_self_refund() {
 
     // Payer can self-refund after expiry
     let token = soroban_sdk::token::Client::new(&env, &acbu_token);
-    assert_eq!(token.balance(&payer), 0);
+    assert_eq!(token.balance(&payer), 0, "token.balance(&payer) should equal 0");
 
     // Refund can be executed now
     client.refund(&escrow_id, &payer);
-    assert_eq!(token.balance(&payer), amount);
+    assert_eq!(token.balance(&payer), amount, "token.balance(&payer) should equal amount");
 }

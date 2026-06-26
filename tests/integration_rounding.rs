@@ -45,8 +45,8 @@ fn integration_rounding_consistency() {
         let fee = b_client.compute_fee(&amt, &fee_bps);
         let net = a_client.compute_net_after_fee(&amt, &fee_bps);
         // fee + net must equal original amount
-        assert_eq!(fee + net, amt);
+        assert_eq!(fee + net, amt, "fee + net should equal amt");
         // fee must match shared helper directly
-        assert_eq!(fee, calculate_fee(amt, fee_bps));
+        assert_eq!(fee, calculate_fee(amt, fee_bps), "fee should equal calculate_fee(amt, fee_bps)");
     }
 }

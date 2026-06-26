@@ -65,16 +65,16 @@ fn test_transfer_and_accept_after_timelock() {
 
     // Step 1 – initiate
     client.transfer_admin(&new_admin);
-    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()), "client.get_pending_admin() should equal Some(new_admin.clone())");
 
     let eta = client.get_pending_admin_eligible_at().unwrap();
-    assert_eq!(eta, env.ledger().timestamp() + ADMIN_TIMELOCK_SECONDS);
+    assert_eq!(eta, env.ledger().timestamp() + ADMIN_TIMELOCK_SECONDS, "eta should equal env.ledger().timestamp() + ADMIN_TIMELOCK_SECONDS");
 
     // Step 2 – advance past timelock and accept
     advance_time(&env, ADMIN_TIMELOCK_SECONDS + 1);
     client.accept_admin();
 
-    assert_eq!(client.get_admin(), new_admin);
+    assert_eq!(client.get_admin(), new_admin, "client.get_admin() should equal new_admin");
     assert!(client.get_pending_admin().is_none());
     assert!(client.get_pending_admin_eligible_at().is_none());
 }
@@ -103,11 +103,11 @@ fn test_replace_pending_nomination() {
     client.transfer_admin(&wrong_addr);
     // Correct the mistake before timelock expires
     client.transfer_admin(&correct_addr);
-    assert_eq!(client.get_pending_admin(), Some(correct_addr.clone()));
+    assert_eq!(client.get_pending_admin(), Some(correct_addr.clone()), "client.get_pending_admin() should equal Some(correct_addr.clone())");
 
     advance_time(&env, ADMIN_TIMELOCK_SECONDS + 1);
     client.accept_admin();
-    assert_eq!(client.get_admin(), correct_addr);
+    assert_eq!(client.get_admin(), correct_addr, "client.get_admin() should equal correct_addr");
 }
 
 // ─── sad paths ───────────────────────────────────────────────────────────────

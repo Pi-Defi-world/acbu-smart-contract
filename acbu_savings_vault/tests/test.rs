@@ -52,13 +52,13 @@ fn test_withdraw_after_term_has_correct_30day_yield() {
     assert_eq!(
         client.get_pending_yield(&user, &term_seconds),
         expected_yield
-    );
+    , "client.get_pending_yield(&user, &term_seconds) should equal expected_yield");
 
     client.withdraw(&user, &term_seconds, &net_deposit);
 
     let token_client = soroban_sdk::token::Client::new(&env, &acbu_token);
-    assert_eq!(token_client.balance(&user), expected_user_payout);
-    assert_eq!(token_client.balance(&admin), expected_fee);
+    assert_eq!(token_client.balance(&user), expected_user_payout, "token_client.balance(&user) should equal expected_user_payout");
+    assert_eq!(token_client.balance(&admin), expected_fee, "token_client.balance(&admin) should equal expected_fee");
 
     let events = env.events().all();
     let withdraw_event = events
@@ -70,7 +70,7 @@ fn test_withdraw_after_term_has_correct_30day_yield() {
         })
         .unwrap();
     let withdraw_event: WithdrawEvent = withdraw_event.2.into_val(&env);
-    assert_eq!(withdraw_event.yield_amount, expected_yield); // Acceptance check passes
+    assert_eq!(withdraw_event.yield_amount, expected_yield, "withdraw_event.yield_amount should equal expected_yield"); // Acceptance check passes
 }
 
 #[test]
@@ -113,8 +113,8 @@ fn test_withdraw_after_one_year_has_positive_yield_and_event_value() {
     client.withdraw(&user, &term_seconds, &net_deposit);
 
     let token_client = soroban_sdk::token::Client::new(&env, &acbu_token);
-    assert_eq!(token_client.balance(&user), expected_user_payout);
-    assert_eq!(token_client.balance(&admin), expected_fee);
+    assert_eq!(token_client.balance(&user), expected_user_payout, "token_client.balance(&user) should equal expected_user_payout");
+    assert_eq!(token_client.balance(&admin), expected_fee, "token_client.balance(&admin) should equal expected_fee");
 
     let events = env.events().all();
     let mut found_withdraw = false;
@@ -129,7 +129,7 @@ fn test_withdraw_after_one_year_has_positive_yield_and_event_value() {
         {
             let withdraw_event: WithdrawEvent = event.2.into_val(&env);
 
-            assert_eq!(withdraw_event.yield_amount, expected_yield);
+            assert_eq!(withdraw_event.yield_amount, expected_yield, "withdraw_event.yield_amount should equal expected_yield");
             found_withdraw = true;
         }
     }
@@ -184,8 +184,8 @@ fn test_partial_withdraw_and_multiple_deposits_fifo_yield() {
     assert_eq!(
         token_client.balance(&user),
         withdraw_amount + expected_yield
-    );
-    assert_eq!(client.get_balance(&user, &term_seconds), 4_000_000);
+    , "token_client.balance(&user) should equal withdraw_amount + expected_yield");
+    assert_eq!(client.get_balance(&user, &term_seconds), 4_000_000, "client.get_balance(&user, &term_seconds) should equal 4_000_000");
 }
 
 /// Issue #30 regression test: a user who deposits and tries to withdraw before the
@@ -226,7 +226,7 @@ fn test_early_withdrawal_is_rejected() {
     );
     // Balance must still be intact
 
-    assert_eq!(client.get_balance(&user, &term_seconds), net_deposit);
+    assert_eq!(client.get_balance(&user, &term_seconds), net_deposit, "client.get_balance(&user, &term_seconds) should equal net_deposit");
 }
 
 /// Verify that withdrawal succeeds at exactly the term boundary (timestamp + term_seconds).
@@ -263,8 +263,8 @@ fn test_withdraw_at_exact_term_boundary_succeeds() {
     client.withdraw(&user, &term_seconds, &deposit_amount);
 
     let token_client = soroban_sdk::token::Client::new(&env, &acbu_token);
-    assert_eq!(token_client.balance(&user), deposit_amount);
-    assert_eq!(client.get_balance(&user, &term_seconds), 0);
+    assert_eq!(token_client.balance(&user), deposit_amount, "token_client.balance(&user) should equal deposit_amount");
+    assert_eq!(client.get_balance(&user, &term_seconds), 0, "client.get_balance(&user, &term_seconds) should equal 0");
 }
 
 #[test]
@@ -300,12 +300,12 @@ fn test_withdraw_only_uses_lots_that_reached_their_own_term() {
 
     // Short-term withdrawal succeeds.
     client.withdraw(&user, &short_term, &short_amount);
-    assert_eq!(client.get_balance(&user, &short_term), 0);
+    assert_eq!(client.get_balance(&user, &short_term), 0, "client.get_balance(&user, &short_term) should equal 0");
 
     // Long-term withdrawal still fails because its own term has not elapsed.
     let early_long = client.try_withdraw(&user, &long_term, &long_amount);
     assert!(early_long.is_err());
-    assert_eq!(client.get_balance(&user, &long_term), long_amount);
+    assert_eq!(client.get_balance(&user, &long_term), long_amount, "client.get_balance(&user, &long_term) should equal long_amount");
 }
 
 #[test]
@@ -335,13 +335,13 @@ fn test_deposit_fee_reflected_in_balance() {
     token_admin.mint(&user, &gross_deposit);
 
     let returned_balance = client.deposit(&user, &gross_deposit, &term_seconds);
-    assert_eq!(returned_balance, expected_net);
+    assert_eq!(returned_balance, expected_net, "returned_balance should equal expected_net");
 
-    assert_eq!(client.get_balance(&user, &term_seconds), expected_net);
+    assert_eq!(client.get_balance(&user, &term_seconds), expected_net, "client.get_balance(&user, &term_seconds) should equal expected_net");
 
     let token_client = soroban_sdk::token::Client::new(&env, &acbu_token);
 
-    assert_eq!(token_client.balance(&admin), expected_fee);
+    assert_eq!(token_client.balance(&admin), expected_fee, "token_client.balance(&admin) should equal expected_fee");
 }
 
 ///NEW: Update existing test to check DepositEvent fields
@@ -376,13 +376,13 @@ fn test_deposit_event_has_fee_fields() {
         .unwrap();
     let deposit_event: DepositEvent = deposit_event.2.into_val(&env);
 
-    assert_eq!(deposit_event.gross_amount, DECIMALS);
-    assert_eq!(deposit_event.fee_amount, 300_000);
-    assert_eq!(deposit_event.net_amount, 9_700_000);
+    assert_eq!(deposit_event.gross_amount, DECIMALS, "deposit_event.gross_amount should equal DECIMALS");
+    assert_eq!(deposit_event.fee_amount, 300_000, "deposit_event.fee_amount should equal 300_000");
+    assert_eq!(deposit_event.net_amount, 9_700_000, "deposit_event.net_amount should equal 9_700_000");
     assert_eq!(
         deposit_event.maturity_timestamp,
         deposit_event.timestamp + 3600
-    );
+    , "deposit_event.maturity_timestamp should equal deposit_event.timestamp + 3600");
 }
 
 #[test]
@@ -454,8 +454,8 @@ fn test_withdraw_event_yield_amount_nonzero_issue_225() {
         ev.yield_amount > 0,
         "WithdrawEvent.yield_amount must be non-zero when yield_rate > 0 (issue #225 regression)"
     );
-    assert_eq!(ev.yield_amount, expected_yield);
-    assert_eq!(ev.fee_amount, 0);
+    assert_eq!(ev.yield_amount, expected_yield, "ev.yield_amount should equal expected_yield");
+    assert_eq!(ev.fee_amount, 0, "ev.fee_amount should equal 0");
 }
 
 #[test]
@@ -484,5 +484,5 @@ fn test_deposit_fails_and_does_not_write_to_storage_when_balance_insufficient() 
     assert!(result.is_err());
 
     // Verify that NO deposit lot was recorded in storage for the user.
-    assert_eq!(client.get_balance(&user, &term_seconds), 0);
+    assert_eq!(client.get_balance(&user, &term_seconds), 0, "client.get_balance(&user, &term_seconds) should equal 0");
 }
