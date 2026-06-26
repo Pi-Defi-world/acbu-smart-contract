@@ -2,9 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [ main, develop, dev ]
+    branches: [main, develop, dev]
   pull_request:
-    branches: [ main, develop, dev ]
+    branches: [main, develop, dev]
 
 jobs:
   test:
@@ -94,7 +94,7 @@ jobs:
 
       - name: Run changed contract tests
         if: github.event_name == 'pull_request' && steps.changed.outputs.workspace != 'true' && steps.changed.outputs.packages != ''
-        run: cargo test ${{ steps.changed.outputs.packages }}
+        run: cargo test ${{ steps.changed.outputs.packages }} -- --nocapture
 
       - name: Skip tests for docs-only PR
         if: github.event_name == 'pull_request' && steps.changed.outputs.workspace != 'true' && steps.changed.outputs.packages == ''
@@ -102,4 +102,4 @@ jobs:
 
       - name: Run all tests
         if: github.event_name != 'pull_request' || steps.changed.outputs.workspace == 'true'
-        run: cargo test --workspace
+        run: cargo test --workspace -- --nocapture
