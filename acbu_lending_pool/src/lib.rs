@@ -8,7 +8,7 @@ use soroban_sdk::{
 use shared::{DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, reentrancy_guard};
 
 #[contracttype]
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 pub enum DataKey {
     Admin,
     AcbuToken,
