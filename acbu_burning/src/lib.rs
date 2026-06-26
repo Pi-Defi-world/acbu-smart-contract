@@ -43,6 +43,14 @@ const DATA_KEY: DataKey = DataKey {
     pending_admin_eligible_at: symbol_short!("PEND_ETA"),
 };
 
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeRateUpdatedEvent {
+    pub old_fee_rate_bps: i128,
+    pub new_fee_rate_bps: i128,
+    pub timestamp: u64,
+}
+
 contractmeta!(key = "version", val = "1");
 
 /// Admin rotation timelock: the pending admin must wait this long before
@@ -446,9 +454,21 @@ impl BurningContract {
         if !(0..=BASIS_POINTS).contains(&fee_rate_bps) {
             env.panic_with_error(ContractError::InvalidRate);
         }
+        let old_fee_rate: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.fee_rate)
+            .unwrap_or(0);
         env.storage()
             .instance()
             .set(&DATA_KEY.fee_rate, &fee_rate_bps);
+        let event = FeeRateUpdatedEvent {
+            old_fee_rate_bps: old_fee_rate,
+            new_fee_rate_bps: fee_rate_bps,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events()
+            .publish((symbol_short!("fee_upd"),), event);
     }
 
     pub fn set_fee_single_redeem(env: Env, fee_bps: i128) {
@@ -457,9 +477,21 @@ impl BurningContract {
         if !(0..=BASIS_POINTS).contains(&fee_bps) {
             env.panic_with_error(ContractError::InvalidRate);
         }
+        let old_fee_single: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.fee_single_redeem)
+            .unwrap_or(0);
         env.storage()
             .instance()
             .set(&DATA_KEY.fee_single_redeem, &fee_bps);
+        let event = FeeRateUpdatedEvent {
+            old_fee_rate_bps: old_fee_single,
+            new_fee_rate_bps: fee_bps,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events()
+            .publish((symbol_short!("fee_sgl"),), event);
     }
 
     pub fn get_fee_rate(env: Env) -> i128 {
