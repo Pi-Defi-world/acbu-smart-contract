@@ -1,4 +1,5 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Map, Symbol, Vec,
@@ -22,6 +23,22 @@ pub enum ReserveTrackerError {
     Unauthorized = 8007,
     DuplicateCurrency = 8008,
     Unknown = 8999,
+}
+
+impl Display for ReserveTrackerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::AlreadyInitialized => "reserve tracker already initialized",
+            Self::InvalidVersion => "invalid contract version",
+            Self::ZeroSupply => "zero supply",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::Unauthorized => "unauthorized",
+            Self::Unknown => "unknown reserve tracker error",
+        };
+        f.write_str(message)
+    }
 }
 
 #[contracttype]

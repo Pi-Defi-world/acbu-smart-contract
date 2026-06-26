@@ -1,4 +1,5 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env,
@@ -42,6 +43,13 @@ const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 pub struct LoanId(pub Address, pub u64);
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LoanStatus {
+    Active,
+    Repaid,
+}
+
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct LoanData {
     pub borrower: Address,
@@ -53,6 +61,7 @@ pub struct LoanData {
     pub repayment_deadline: u64,
     pub accrued_interest: i128,
     pub total_repayment_due: i128,
+    pub status: LoanStatus,
 }
 
 #[contracttype]
@@ -125,6 +134,31 @@ pub enum Error {
     AdminTimelockNotElapsed = 2006,
     NoPendingAdminToCancel = 2007,
     Unknown = 2999,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::NotFound => "resource not found",
+            Self::InvalidState => "invalid lending pool state",
+            Self::Unauthorized => "unauthorized",
+            Self::AlreadyInitialized => "lending pool already initialized",
+            Self::InvalidAmount => "invalid amount",
+            Self::InsufficientBalance => "insufficient balance",
+            Self::InsufficientCollateral => "insufficient collateral",
+            Self::InsufficientLiquidity => "insufficient liquidity",
+            Self::DustBalance => "dust balance",
+            Self::Paused => "lending pool is paused",
+            Self::InvalidVersion => "invalid contract version",
+            Self::TimelockNotElapsed => "timelock has not elapsed",
+            Self::NoPendingUpgrade => "no pending upgrade",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::Unknown => "unknown lending pool error",
+        };
+        f.write_str(message)
+    }
 }
 
 contractmeta!(key = "version", val = "1");
@@ -317,7 +351,7 @@ impl LendingPool {
 
         let fee_rate_bps: i128 = env.storage().instance().get(&DataKey::FeeRate).unwrap_or(0);
         let start_time = env.ledger().timestamp();
-        
+
         let loan_data = LoanData {
             borrower: borrower.clone(),
             lender: lender.clone(),
@@ -328,8 +362,9 @@ impl LendingPool {
             repayment_deadline: start_time + (30 * 24 * 60 * 60),
             accrued_interest: 0,
             total_repayment_due: amount,
+            status: LoanStatus::Active,
         };
-        
+
         env.storage()
             .persistent()
             .set(&DataKey::Loan(loan_key), &loan_data);
@@ -372,6 +407,10 @@ impl LendingPool {
         let loan_key = LoanId(borrower, loan_id);
         let mut loan_data: LoanData = env.storage().persistent().get(&DataKey::Loan(loan_key))?;
 
+        if let LoanStatus::Repaid = loan_data.status {
+            return Some(loan_data);
+        }
+
         let current_time = env.ledger().timestamp();
         let elapsed = current_time.saturating_sub(loan_data.loan_start_timestamp);
 
@@ -411,6 +450,9 @@ impl LendingPool {
         if amount > loan_data.total_repayment_due {
             env.panic_with_error(Error::InvalidAmount);
         }
+        if let LoanStatus::Repaid = loan_data.status {
+            env.panic_with_error(Error::InvalidState);
+        }
 
         let acbu_token: Address = env.storage().instance().get(&DataKey::AcbuToken).unwrap();
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
@@ -424,8 +466,17 @@ impl LendingPool {
         // CEI: Update state before external calls
         loan_data.amount = loan_data.amount.checked_sub(principal_repaid).unwrap_or(0);
 
-        let active_loans_liquidity: i128 = env.storage().instance().get(&DataKey::ActiveLoansLiquidity).unwrap_or(0);
-        env.storage().instance().set(&DataKey::ActiveLoansLiquidity, &active_loans_liquidity.checked_sub(principal_repaid).unwrap_or(0));
+        let active_loans_liquidity: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ActiveLoansLiquidity)
+            .unwrap_or(0);
+        env.storage().instance().set(
+            &DataKey::ActiveLoansLiquidity,
+            &active_loans_liquidity
+                .checked_sub(principal_repaid)
+                .unwrap_or(0),
+        );
 
         if principal_repaid > 0 {
             let lender = loan_data.lender.clone();
@@ -450,7 +501,15 @@ impl LendingPool {
                     &loan_data.collateral_amount,
                 );
             }
-            env.storage().persistent().remove(&DataKey::Loan(loan_key));
+            loan_data.collateral_amount = 0;
+            loan_data.accrued_interest = 0;
+            loan_data.total_repayment_due = 0;
+            loan_data.loan_start_timestamp = env.ledger().timestamp();
+            loan_data.status = LoanStatus::Repaid;
+
+            env.storage()
+                .persistent()
+                .set(&DataKey::Loan(loan_key), &loan_data);
         } else {
             loan_data.loan_start_timestamp = env.ledger().timestamp();
             let remaining_interest = if amount < loan_data.accrued_interest {

@@ -1,4 +1,5 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Symbol, Vec,
@@ -39,6 +40,36 @@ pub enum Error {
     AdminTimelockNotElapsed = 1020,
     NoPendingAdminToCancel = 1021,
     Unknown = 1999,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::Paused => "savings vault is paused",
+            Self::InvalidAmount => "invalid amount",
+            Self::NoDeposit => "no deposit found",
+            Self::AccountingError => "accounting error",
+            Self::Overflow => "overflow",
+            Self::InsufficientUnlocked => "insufficient unlocked balance",
+            Self::InvalidTerm => "invalid term",
+            Self::NotInitialized => "savings vault not initialized",
+            Self::NoAdmin => "no admin configured",
+            Self::AlreadyInitialized => "savings vault already initialized",
+            Self::InvalidFeeRate => "invalid fee rate",
+            Self::InvalidYieldRate => "invalid yield rate",
+            Self::NoFeeRate => "fee rate not configured",
+            Self::NoYieldRate => "yield rate not configured",
+            Self::ZeroNetDeposit => "net deposit is zero",
+            Self::InvalidVersion => "invalid contract version",
+            Self::TimelockNotElapsed => "timelock has not elapsed",
+            Self::NoPendingUpgrade => "no pending upgrade",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::Unknown => "unknown savings vault error",
+        };
+        f.write_str(message)
+    }
 }
 
 // ---------------------------------------------------------------------------
