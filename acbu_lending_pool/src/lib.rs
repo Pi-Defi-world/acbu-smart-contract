@@ -127,6 +127,30 @@ pub enum Error {
     Unknown = 2999,
 }
 
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Error::NotFound => write!(f, "not found"),
+            Error::InvalidState => write!(f, "invalid state"),
+            Error::Unauthorized => write!(f, "unauthorized"),
+            Error::AlreadyInitialized => write!(f, "already initialized"),
+            Error::InvalidAmount => write!(f, "invalid amount"),
+            Error::InsufficientBalance => write!(f, "insufficient balance"),
+            Error::InsufficientCollateral => write!(f, "insufficient collateral"),
+            Error::InsufficientLiquidity => write!(f, "insufficient liquidity"),
+            Error::DustBalance => write!(f, "dust balance"),
+            Error::Paused => write!(f, "contract is paused"),
+            Error::InvalidVersion => write!(f, "invalid version"),
+            Error::TimelockNotElapsed => write!(f, "timelock not elapsed"),
+            Error::NoPendingUpgrade => write!(f, "no pending upgrade"),
+            Error::NoPendingAdmin => write!(f, "no pending admin"),
+            Error::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
+            Error::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
+            Error::Unknown => write!(f, "unknown error"),
+        }
+    }
+}
+
 contractmeta!(key = "version", val = "1");
 
 #[contract]

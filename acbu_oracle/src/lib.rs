@@ -38,6 +38,35 @@ pub enum OracleError {
     Unknown = 7999,
 }
 
+impl core::fmt::Display for OracleError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            OracleError::AlreadyInitialized => write!(f, "already initialized"),
+            OracleError::InvalidMinSignatures => write!(f, "invalid minimum signatures"),
+            OracleError::MinSignaturesZero => write!(f, "minimum signatures cannot be zero"),
+            OracleError::NoPendingAdmin => write!(f, "no pending admin"),
+            OracleError::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
+            OracleError::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
+            OracleError::UnauthorizedValidator => write!(f, "unauthorized validator"),
+            OracleError::UpdateIntervalNotMet => write!(f, "update interval not met"),
+            OracleError::InsufficientOracleSources => write!(f, "insufficient oracle sources"),
+            OracleError::InvalidRate => write!(f, "invalid rate"),
+            OracleError::RateNotFound => write!(f, "rate not found"),
+            OracleError::STokenNotConfigured => write!(f, "s-token not configured"),
+            OracleError::ValidatorAlreadyExists => write!(f, "validator already exists"),
+            OracleError::CannotRemoveValidator => write!(f, "cannot remove validator"),
+            OracleError::InvalidVersion => write!(f, "invalid version"),
+            OracleError::RateStaleLedger => write!(f, "rate is stale"),
+            OracleError::NoPendingUpgrade => write!(f, "no pending upgrade"),
+            OracleError::UpgradeTimelockNotElapsed => write!(f, "upgrade timelock not elapsed"),
+            OracleError::NoPendingValidatorChange => write!(f, "no pending validator change"),
+            OracleError::ValidatorTimelockNotElapsed => write!(f, "validator timelock not elapsed"),
+            OracleError::MaxValidatorsReached => write!(f, "maximum validators reached"),
+            OracleError::Unknown => write!(f, "unknown error"),
+        }
+    }
+}
+
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 const MIN_ORACLE_SOURCE_FEEDS: u32 = 3;
 

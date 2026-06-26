@@ -91,6 +91,26 @@ pub enum Error {
     Unknown = 999,
 }
 
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Error::AlreadyInitialized => write!(f, "already initialized"),
+            Error::NotInitialized => write!(f, "not initialized"),
+            Error::Unauthorized => write!(f, "unauthorized"),
+            Error::ProposalNotFound => write!(f, "proposal not found"),
+            Error::AlreadyApproved => write!(f, "already approved"),
+            Error::AlreadyExecuted => write!(f, "already executed"),
+            Error::Expired => write!(f, "proposal expired"),
+            Error::ThresholdNotMet => write!(f, "approval threshold not met"),
+            Error::InvalidThreshold => write!(f, "invalid threshold"),
+            Error::TooManySigners => write!(f, "too many signers"),
+            Error::EmptySigners => write!(f, "signers list is empty"),
+            Error::DuplicateSigner => write!(f, "duplicate signer"),
+            Error::Unknown => write!(f, "unknown error"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Contract
 // ---------------------------------------------------------------------------

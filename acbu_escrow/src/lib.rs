@@ -28,6 +28,29 @@ pub enum EscrowError {
     Unknown = 3999,
 }
 
+impl core::fmt::Display for EscrowError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            EscrowError::Paused => write!(f, "contract is paused"),
+            EscrowError::InvalidAmount => write!(f, "invalid amount"),
+            EscrowError::EscrowNotFound => write!(f, "escrow not found"),
+            EscrowError::PayerMismatch => write!(f, "payer mismatch"),
+            EscrowError::EscrowExists => write!(f, "escrow already exists"),
+            EscrowError::UninitializedAdmin => write!(f, "admin not initialized"),
+            EscrowError::UninitializedAcBuToken => write!(f, "AcBu token not initialized"),
+            EscrowError::AlreadyInitialized => write!(f, "already initialized"),
+            EscrowError::TimelockNotElapsed => write!(f, "timelock not elapsed"),
+            EscrowError::NoPendingUpgrade => write!(f, "no pending upgrade"),
+            EscrowError::Unauthorized => write!(f, "unauthorized"),
+            EscrowError::NoPendingAdmin => write!(f, "no pending admin"),
+            EscrowError::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
+            EscrowError::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
+            EscrowError::InsufficientBalance => write!(f, "insufficient balance"),
+            EscrowError::Unknown => write!(f, "unknown error"),
+        }
+    }
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EscrowDataKey {

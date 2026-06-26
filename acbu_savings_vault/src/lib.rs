@@ -41,6 +41,35 @@ pub enum Error {
     Unknown = 1999,
 }
 
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Error::Paused => write!(f, "contract is paused"),
+            Error::InvalidAmount => write!(f, "invalid amount"),
+            Error::NoDeposit => write!(f, "no deposit found"),
+            Error::AccountingError => write!(f, "accounting error"),
+            Error::Overflow => write!(f, "arithmetic overflow"),
+            Error::InsufficientUnlocked => write!(f, "insufficient unlocked balance"),
+            Error::InvalidTerm => write!(f, "invalid lock term"),
+            Error::NotInitialized => write!(f, "contract not initialized"),
+            Error::NoAdmin => write!(f, "no admin set"),
+            Error::AlreadyInitialized => write!(f, "already initialized"),
+            Error::InvalidFeeRate => write!(f, "invalid fee rate"),
+            Error::InvalidYieldRate => write!(f, "invalid yield rate"),
+            Error::NoFeeRate => write!(f, "fee rate not set"),
+            Error::NoYieldRate => write!(f, "yield rate not set"),
+            Error::ZeroNetDeposit => write!(f, "zero net deposit"),
+            Error::InvalidVersion => write!(f, "invalid version"),
+            Error::TimelockNotElapsed => write!(f, "timelock not elapsed"),
+            Error::NoPendingUpgrade => write!(f, "no pending upgrade"),
+            Error::NoPendingAdmin => write!(f, "no pending admin"),
+            Error::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
+            Error::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
+            Error::Unknown => write!(f, "unknown error"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Storage keys — all keys centralised here to prevent accidental collisions
 // ---------------------------------------------------------------------------

@@ -123,6 +123,37 @@ pub enum MintingError {
     Unknown = 5999,
 }
 
+impl core::fmt::Display for MintingError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MintingError::AlreadyInitialized => write!(f, "already initialized"),
+            MintingError::InvalidFeeRate => write!(f, "invalid fee rate"),
+            MintingError::InvalidMintAmount => write!(f, "invalid mint amount"),
+            MintingError::InsufficientReserves => write!(f, "insufficient reserves"),
+            MintingError::ProofAlreadyUsed => write!(f, "proof already used"),
+            MintingError::InvalidOracleRate => write!(f, "invalid oracle rate"),
+            MintingError::UnauthorizedOperator => write!(f, "unauthorized operator"),
+            MintingError::DuplicateFintechTxId => write!(f, "duplicate fintech transaction id"),
+            MintingError::InvalidDripAmount => write!(f, "invalid drip amount"),
+            MintingError::DripExceedsCap => write!(f, "drip exceeds cap"),
+            MintingError::InsufficientDemoCustody => write!(f, "insufficient demo custody"),
+            MintingError::Paused => write!(f, "contract is paused"),
+            MintingError::OracleStale => write!(f, "oracle rate is stale"),
+            MintingError::FintechTxIdEmpty => write!(f, "fintech transaction id is empty"),
+            MintingError::FintechTxIdTooShort => write!(f, "fintech transaction id too short"),
+            MintingError::FintechTxIdTooLong => write!(f, "fintech transaction id too long"),
+            MintingError::FintechTxIdInvalidChar => write!(f, "fintech transaction id contains invalid character"),
+            MintingError::InvalidVersion => write!(f, "invalid version"),
+            MintingError::MaxSupplyExceeded => write!(f, "max supply exceeded"),
+            MintingError::NoPendingAdmin => write!(f, "no pending admin"),
+            MintingError::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
+            MintingError::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
+            MintingError::InvalidRecipient => write!(f, "invalid recipient"),
+            MintingError::Unknown => write!(f, "unknown error"),
+        }
+    }
+}
+
 #[contract]
 pub struct MintingContract;
 

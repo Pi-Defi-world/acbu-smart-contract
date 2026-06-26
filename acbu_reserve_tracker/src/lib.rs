@@ -23,6 +23,21 @@ pub enum ReserveTrackerError {
     Unknown = 8999,
 }
 
+impl core::fmt::Display for ReserveTrackerError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ReserveTrackerError::AlreadyInitialized => write!(f, "already initialized"),
+            ReserveTrackerError::InvalidVersion => write!(f, "invalid version"),
+            ReserveTrackerError::ZeroSupply => write!(f, "zero supply"),
+            ReserveTrackerError::NoPendingAdmin => write!(f, "no pending admin"),
+            ReserveTrackerError::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
+            ReserveTrackerError::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
+            ReserveTrackerError::Unauthorized => write!(f, "unauthorized"),
+            ReserveTrackerError::Unknown => write!(f, "unknown error"),
+        }
+    }
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataKey {
