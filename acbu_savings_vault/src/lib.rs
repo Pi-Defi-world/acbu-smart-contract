@@ -1,7 +1,7 @@
 #![no_std]
 use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Symbol, Vec,
 };
 
@@ -119,8 +119,7 @@ pub struct DepositLot {
     pub term_seconds: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct DepositEvent {
     pub user: Address,
     pub gross_amount: i128,
@@ -131,8 +130,7 @@ pub struct DepositEvent {
     pub maturity_timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct WithdrawEvent {
     pub user: Address,
     pub amount: i128,

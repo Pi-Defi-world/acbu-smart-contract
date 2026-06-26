@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contracterror, contracttype, Address, String as SorobanString, Vec};
+use soroban_sdk::{contracterror, contractevent, contracttype, Address, String as SorobanString, Vec};
 
 pub mod reentrancy_guard;
 
@@ -51,8 +51,7 @@ pub struct MultisigConfig {
 }
 
 /// Event emitted when a new proposal is created.
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct ProposalCreatedEvent {
     pub proposal_id: u64,
     pub proposer: Address,
@@ -61,8 +60,7 @@ pub struct ProposalCreatedEvent {
 }
 
 /// Event emitted when a signer approves a proposal.
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct ProposalApprovedEvent {
     pub proposal_id: u64,
     pub approver: Address,
@@ -70,8 +68,7 @@ pub struct ProposalApprovedEvent {
 }
 
 /// Event emitted when a proposal reaches threshold and is executed.
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct ProposalExecutedEvent {
     pub proposal_id: u64,
     pub action_tag: SorobanString,
@@ -145,8 +142,7 @@ pub struct AccountDetails {
 /// the ACBU/USD rate in the same fixed-point form. `usdc_amount` is USDC in 7 decimals for
 /// `mint_from_usdc`; for Afreum S-token mint paths it carries the USD-equivalent notional
 /// (still 7-decimal fixed point).
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct MintEvent {
     pub transaction_id: SorobanString,
     pub user: Address,
@@ -163,11 +159,10 @@ pub struct MintEvent {
 ///
 /// **Backend / indexer alignment:** Same field order as XDR struct encoding. Amounts (`acbu_amount`,
 /// `local_amount`, `fee`, `rate`) are **7-decimal fixed point** (`DECIMALS`). `currency` is
-/// [`CurrencyCode`] (string code such as `\"NGN\"`). For `burn_for_basket`, one event is emitted per
+/// [`CurrencyCode`] (string code such as `"NGN"`). For `burn_for_basket`, one event is emitted per
 /// recipient slice; `acbu_amount` and `fee` are the portions for that slice, not necessarily the
 /// full transaction totals.
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct BurnEvent {
     pub transaction_id: SorobanString,
     pub user: Address,
@@ -184,8 +179,7 @@ pub struct BurnEvent {
 }
 
 /// Rate update event data
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct RateUpdateEvent {
     pub currency: CurrencyCode,
     pub rate: i128,
@@ -194,8 +188,7 @@ pub struct RateUpdateEvent {
 }
 
 /// Outlier detection event data
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct OutlierDetectionEvent {
     pub currency: CurrencyCode,
     pub median_rate: i128,
