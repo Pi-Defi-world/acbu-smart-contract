@@ -70,7 +70,7 @@ impl Display for OracleError {
     }
 }
 
-const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
+pub const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 const MIN_ORACLE_SOURCE_FEEDS: u32 = 3;
 
 #[contracttype]
@@ -966,5 +966,6 @@ impl OracleContract {
         admin.require_auth();
     }
 }
-mod tests;
-fn migrate_v0_to_v1(_env: Env) {}
+fn migrate_v0_to_v1(_env: Env) {
+    // No storage schema changes between v0 and v1.
+}

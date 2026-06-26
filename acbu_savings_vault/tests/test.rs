@@ -425,9 +425,9 @@ fn test_withdraw_event_yield_amount_nonzero_issue_225() {
     let principal = DECIMALS;
     let term_seconds = 30 * 24 * 3600u64;
 
-    let elapsed = term_seconds as i128;
+    let elapsed = i128::from(term_seconds);
     let expected_yield =
-        principal * yield_rate_bps * elapsed / (10_000 * SECONDS_PER_YEAR as i128);
+        principal * yield_rate_bps * elapsed / (10_000 * i128::from(SECONDS_PER_YEAR));
 
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&user, &principal);

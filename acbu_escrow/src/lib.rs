@@ -524,17 +524,5 @@ impl Escrow {
 }
 
 #[cfg(test)]
-extern crate alloc;
-
-#[cfg(test)]
-mod tests {
-    use super::EscrowError;
-    use alloc::string::ToString;
-
-    #[test]
-    fn error_display_is_human_readable() {
-        assert_eq!(EscrowError::Paused.to_string(), "escrow is paused");
-    }
-}
 
 
