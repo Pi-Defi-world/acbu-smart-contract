@@ -204,22 +204,47 @@ pub struct OutlierDetectionEvent {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum ContractError {
+    /// The caller is not authorized for this action (e.g. not the admin/operator,
+    /// or `require_auth` was not satisfied).
     Unauthorized = 1,
+    /// The contract is paused; state-changing operations are temporarily disabled.
     Paused = 2,
+    /// The supplied amount is invalid (non-positive, or outside the allowed bounds
+    /// such as min/max mint or burn limits).
     InvalidAmount = 3,
+    /// The exchange/conversion rate is invalid (e.g. zero, negative, or rejected
+    /// by outlier/deviation checks).
     InvalidRate = 4,
+    /// Reserves are insufficient to back the requested mint/operation against the
+    /// configured collateralization requirement.
     InsufficientReserves = 5,
+    /// The per-window operation rate limit has been exceeded; retry later.
     RateLimitExceeded = 6,
+    /// The currency code is not recognized or not registered in the oracle/basket.
     InvalidCurrency = 7,
+    /// A cross-contract call to the oracle failed or returned an unusable result
+    /// (e.g. missing or stale rate).
     OracleError = 8,
+    /// A cross-contract call to the reserve tracker failed or returned an
+    /// unusable result.
     ReserveError = 9,
+    /// The account's token balance is too low to complete the transfer/operation.
     InsufficientBalance = 10,
+    /// The recipient address is invalid for this operation (e.g. a contract
+    /// address where a classic account is required).
     InvalidRecipient = 11,
     /// WASM upgrade rejected: `new_version` must be greater than the stored version.
     InvalidVersion = 12,
+    /// No admin transfer is in progress, so `accept_admin` has nothing to claim.
     NoPendingAdmin = 13,
+    /// The two-step admin transfer timelock has not yet elapsed; the pending admin
+    /// must wait before calling `accept_admin`.
     AdminTimelockNotElapsed = 14,
+    /// No admin transfer is in progress, so `cancel_admin_transfer` has nothing to
+    /// cancel.
     NoPendingAdminToCancel = 15,
+    /// Catch-all for an unexpected/unclassified failure. Should not occur in normal
+    /// operation; treat as an internal error.
     Unknown = 9999,
 }
 

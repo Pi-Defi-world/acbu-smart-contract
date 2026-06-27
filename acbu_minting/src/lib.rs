@@ -1002,10 +1002,8 @@ impl MintingContract {
         reentrancy_guard::release_guard(&env);
     }
 
-    /// General fiat mint: User/fintech provides fintech_tx_id; operator/backend signs.
-    /// Validates that the request is not duplicated and that rate/reserve checks pass.
-    /// This replaces the previous hardcoded 1:1 minting path with full oracle + reserve validation.
-
+    /// Return the operator address (the key authorized to sign day-to-day mint
+    /// requests). Falls back to the admin address if no separate operator is set.
     pub fn get_operator(env: Env) -> Address {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         env.storage()
@@ -1014,6 +1012,9 @@ impl MintingContract {
             .unwrap_or(admin)
     }
 
+    /// Set the operator address (admin only). The operator must differ from the
+    /// admin to preserve role separation, otherwise it reverts with
+    /// `InvalidRoleSeparation`.
     pub fn set_operator(env: Env, new_operator: Address) {
         Self::check_admin(&env);
         let admin = env.storage().instance().get(&DATA_KEY.admin).unwrap();
@@ -1025,6 +1026,10 @@ impl MintingContract {
             .set(&DATA_KEY.operator, &new_operator);
     }
 
+    /// Overwrite the tracked total ACBU supply with `new_supply` (admin only).
+    ///
+    /// Used to reconcile the contract's supply counter with the actual on-chain
+    /// token supply. Reverts if paused or if `new_supply` exceeds the max supply.
     pub fn sync_supply(env: Env, new_supply: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -1035,6 +1040,7 @@ impl MintingContract {
             .set(&DATA_KEY.total_supply, &new_supply);
     }
 
+    /// Return the current tracked total ACBU supply (7 decimals).
     pub fn get_total_supply(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -1042,6 +1048,7 @@ impl MintingContract {
             .unwrap_or(0)
     }
 
+    /// Return the maximum ACBU supply cap (defaults to [`MAX_TOTAL_SUPPLY`]).
     pub fn get_max_supply(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -1049,6 +1056,7 @@ impl MintingContract {
             .unwrap_or(MAX_TOTAL_SUPPLY)
     }
 
+    /// Set the maximum ACBU supply cap (admin only). Reverts if paused.
     pub fn set_max_supply(env: Env, new_max_supply: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -1069,18 +1077,24 @@ impl MintingContract {
         }
     }
 
+    /// Pause the contract, disabling all minting operations (admin only).
     pub fn pause(env: Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &true);
     }
 
+    /// Unpause the contract, re-enabling minting operations (admin only).
     pub fn unpause(env: Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &false);
     }
 
+    /// Set the basket/USDC mint fee in basis points (admin only).
+    ///
+    /// Reverts if paused or `fee_rate_bps` is outside `0..=BASIS_POINTS`. Emits a
+    /// `FeeRateUpdatedEvent`.
     pub fn set_fee_rate(env: Env, fee_rate_bps: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -1105,6 +1119,10 @@ impl MintingContract {
             .publish((symbol_short!("fee_upd"),), event);
     }
 
+    /// Set the single-currency mint fee in basis points (admin only).
+    ///
+    /// Reverts if paused or `fee_single_bps` is outside `0..=BASIS_POINTS`. Emits a
+    /// `FeeRateUpdatedEvent`.
     pub fn set_fee_single(env: Env, fee_single_bps: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -1129,14 +1147,17 @@ impl MintingContract {
             .publish((symbol_short!("fee_sgl"),), event);
     }
 
+    /// Return the basket/USDC mint fee in basis points.
     pub fn get_fee_rate(env: Env) -> i128 {
         env.storage().instance().get(&DATA_KEY.fee_rate).unwrap()
     }
 
+    /// Return the single-currency mint fee in basis points.
     pub fn get_fee_single(env: Env) -> i128 {
         env.storage().instance().get(&DATA_KEY.fee_single).unwrap()
     }
 
+    /// Return `true` if the contract is currently paused.
     pub fn is_paused(env: Env) -> bool {
         env.storage()
             .instance()
@@ -1146,12 +1167,14 @@ impl MintingContract {
 
     // ── Dependency address updaters (admin only) ──────────────────────────
 
+    /// Update the oracle contract address (admin only).
     pub fn update_oracle(env: Env, new_oracle: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.oracle, &new_oracle);
     }
 
+    /// Update the reserve tracker contract address (admin only).
     pub fn update_reserve_tracker(env: Env, new_reserve_tracker: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -1160,6 +1183,7 @@ impl MintingContract {
             .set(&DATA_KEY.reserve_tracker, &new_reserve_tracker);
     }
 
+    /// Update the ACBU token contract address (admin only).
     pub fn update_acbu_token(env: Env, new_acbu_token: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -1168,12 +1192,14 @@ impl MintingContract {
             .set(&DATA_KEY.acbu_token, &new_acbu_token);
     }
 
+    /// Update the vault contract address (admin only).
     pub fn update_vault(env: Env, new_vault: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.vault, &new_vault);
     }
 
+    /// Update the treasury address that receives collected fees (admin only).
     pub fn update_treasury(env: Env, new_treasury: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -1182,6 +1208,7 @@ impl MintingContract {
             .set(&DATA_KEY.treasury, &new_treasury);
     }
 
+    /// Update the USDC token contract address (admin only).
     pub fn update_usdc_token(env: Env, new_usdc_token: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -1294,6 +1321,7 @@ impl MintingContract {
         }
     }
 
+    /// Return the stored contract version (0 if never set).
     pub fn get_version(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -1301,6 +1329,11 @@ impl MintingContract {
             .unwrap_or(0)
     }
 
+    /// Upgrade the contract WASM to `new_wasm_hash` and bump the stored version to
+    /// `new_version` (admin only).
+    ///
+    /// `new_version` must be greater than the current version. Reverts if paused.
+    /// Runs any required migrations between the old and new versions.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();

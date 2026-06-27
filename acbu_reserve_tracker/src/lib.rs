@@ -104,6 +104,8 @@ impl ReserveTrackerContract {
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
+    /// Return the circulating ACBU total supply by cross-contract-calling
+    /// `get_total_supply` on the registered ACBU token contract.
     pub fn get_total_supply_from_token(env: &Env) -> i128 {
         let acbu_token_addr: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
         // Use invoke_contract to avoid dependency on a specific token client implementation
@@ -129,6 +131,9 @@ impl ReserveTrackerContract {
         Self::is_reserve_sufficient(env, total_acbu_supply)
     }
 
+    /// Like [`Self::verify_reserves`] but uses the caller-supplied
+    /// `total_acbu_supply` instead of querying the token contract. Returns `true`
+    /// if reserves meet the minimum ratio.
     pub fn verify_reserves_manual(env: Env, total_acbu_supply: i128) -> bool {
         Self::is_reserve_sufficient(env, total_acbu_supply)
     }
@@ -189,6 +194,12 @@ impl ReserveTrackerContract {
         total_usd
     }
 
+    /// Return `true` if total reserve USD value backs `total_acbu_supply` at or
+    /// above the configured minimum reserve ratio (default 100%).
+    ///
+    /// Sums the USD value of all stored reserves and compares it against the ACBU
+    /// supply valued at the oracle's ACBU/USD rate. Trivially returns `true` when
+    /// supply is non-positive or values to zero.
     pub fn is_reserve_sufficient(env: Env, total_acbu_supply: i128) -> bool {
         if total_acbu_supply <= 0 {
             return true;
@@ -225,6 +236,9 @@ impl ReserveTrackerContract {
         current_ratio >= min_reserve_ratio
     }
 
+    /// Upgrade the contract WASM to `new_wasm_hash` and bump the stored version to
+    /// `new_version` (admin only). `new_version` must exceed the current version.
+    /// Runs any required migrations.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         Self::check_admin(&env);
 
@@ -273,11 +287,13 @@ impl ReserveTrackerContract {
     // Dependency address updaters (admin only)
     // -----------------------------------------------------------------------
 
+    /// Update the oracle contract address (admin only).
     pub fn update_oracle(env: Env, new_oracle: Address) {
         Self::check_admin(&env);
         env.storage().instance().set(&DATA_KEY.oracle, &new_oracle);
     }
 
+    /// Update the ACBU token contract address (admin only).
     pub fn update_acbu_token(env: Env, new_acbu_token: Address) {
         Self::check_admin(&env);
         env.storage()

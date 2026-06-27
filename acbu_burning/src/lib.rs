@@ -471,6 +471,10 @@ impl BurningContract {
             .publish((symbol_short!("fee_upd"),), event);
     }
 
+    /// Set the single-currency redemption fee in basis points (admin only).
+    ///
+    /// Reverts if the contract is paused or `fee_bps` is outside `0..=BASIS_POINTS`.
+    /// Emits a `FeeRateUpdatedEvent`.
     pub fn set_fee_single_redeem(env: Env, fee_bps: i128) {
         Self::check_admin(&env);
         Self::check_paused(&env);
@@ -494,10 +498,12 @@ impl BurningContract {
             .publish((symbol_short!("fee_sgl"),), event);
     }
 
+    /// Return the basket redemption fee in basis points.
     pub fn get_fee_rate(env: Env) -> i128 {
         env.storage().instance().get(&DATA_KEY.fee_rate).unwrap()
     }
 
+    /// Return the single-currency redemption fee in basis points.
     pub fn get_fee_single_redeem(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -505,6 +511,7 @@ impl BurningContract {
             .unwrap()
     }
 
+    /// Return `true` if the contract is currently paused.
     pub fn is_paused(env: Env) -> bool {
         env.storage()
             .instance()
@@ -514,11 +521,13 @@ impl BurningContract {
 
     // ── Dependency address updaters (admin only) ──────────────────────────
 
+    /// Update the oracle contract address (admin only).
     pub fn update_oracle(env: Env, new_oracle: Address) {
         Self::check_admin(&env);
         env.storage().instance().set(&DATA_KEY.oracle, &new_oracle);
     }
 
+    /// Update the reserve tracker contract address (admin only).
     pub fn update_reserve_tracker(env: Env, new_reserve_tracker: Address) {
         Self::check_admin(&env);
         env.storage()
@@ -526,6 +535,7 @@ impl BurningContract {
             .set(&DATA_KEY.reserve_tracker, &new_reserve_tracker);
     }
 
+    /// Update the ACBU token contract address (admin only).
     pub fn update_acbu_token(env: Env, new_acbu_token: Address) {
         Self::check_admin(&env);
         env.storage()
@@ -533,6 +543,7 @@ impl BurningContract {
             .set(&DATA_KEY.acbu_token, &new_acbu_token);
     }
 
+    /// Update the vault contract address (admin only).
     pub fn update_vault(env: Env, new_vault: Address) {
         Self::check_admin(&env);
         env.storage().instance().set(&DATA_KEY.vault, &new_vault);
@@ -606,14 +617,18 @@ impl BurningContract {
         );
     }
 
+    /// Return the current admin address.
     pub fn get_admin(env: Env) -> Address {
         env.storage().instance().get(&DATA_KEY.admin).unwrap()
     }
 
+    /// Return the pending admin, if an admin transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&DATA_KEY.pending_admin)
     }
 
+    /// Return the timestamp after which `accept_admin` becomes callable, if a
+    /// transfer is pending.
     pub fn get_pending_admin_eligible_at(env: Env) -> Option<u64> {
         env.storage()
             .instance()
@@ -624,6 +639,7 @@ impl BurningContract {
     // Version / upgrade
     // -----------------------------------------------------------------------
 
+    /// Return the stored contract version (0 if never set).
     pub fn get_version(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -631,10 +647,16 @@ impl BurningContract {
             .unwrap_or(0)
     }
 
+    /// Alias for [`Self::get_version`].
     pub fn version(env: Env) -> u32 {
         Self::get_version(env)
     }
 
+    /// Upgrade the contract WASM to `new_wasm_hash` and bump the stored version to
+    /// `new_version` (admin only).
+    ///
+    /// `new_version` must be greater than the current version. Runs any required
+    /// migrations between the old and new versions.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         Self::check_admin(&env);
         let current_version = Self::get_version(env.clone());

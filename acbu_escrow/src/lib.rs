@@ -347,18 +347,21 @@ impl Escrow {
         reentrancy_guard::release_guard(&env);
     }
 
+    /// Pause the contract, disabling escrow creation/release/refund (admin only).
     pub fn pause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &true);
     }
 
+    /// Unpause the contract, re-enabling state-changing operations (admin only).
     pub fn unpause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &false);
     }
 
+    /// Update the ACBU token contract address (admin only).
     pub fn update_acbu_token(env: Env, new_acbu_token: Address) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -455,6 +458,7 @@ impl Escrow {
             .get(&DATA_KEY.pending_admin_eligible_at)
     }
 
+    /// Return the stored contract version (0 if never set).
     pub fn version(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -462,6 +466,8 @@ impl Escrow {
             .unwrap_or(0)
     }
 
+    /// Bump the stored version to the current [`CONTRACT_VERSION`] after a code
+    /// upgrade (admin only). No-op if already at or above the current version.
     pub fn migrate(env: Env) {
         let admin: Address = env
             .storage()
@@ -483,6 +489,9 @@ impl Escrow {
         }
     }
 
+    /// Stage a WASM upgrade to `new_wasm_hash` and start the upgrade timelock
+    /// (admin only). Apply it later with [`Self::execute_upgrade`] once the
+    /// timelock elapses, or abort with [`Self::cancel_upgrade`].
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -495,6 +504,9 @@ impl Escrow {
             .set(&DATA_KEY.pending_upgrade_eligible_at, &eligible_at);
     }
 
+    /// Execute a previously proposed upgrade once its timelock has elapsed,
+    /// swapping in the staged WASM (admin only). Fails if no upgrade is pending or
+    /// the timelock is still active.
     pub fn execute_upgrade(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -518,6 +530,8 @@ impl Escrow {
         env.deployer().update_current_contract_wasm(wasm_hash);
     }
 
+    /// Cancel a pending upgrade, clearing the staged WASM hash and timelock
+    /// (admin only).
     pub fn cancel_upgrade(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();

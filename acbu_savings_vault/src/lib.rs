@@ -192,6 +192,12 @@ impl SavingsVault {
     // Public logic
     // -----------------------------------------------------------------------
 
+    /// Initialize the vault. Callable once; reverts with `AlreadyInitialized`
+    /// afterwards.
+    ///
+    /// Sets the `admin`, the `acbu_token` accepted for deposits, the deposit
+    /// `fee_rate_bps` and the `yield_rate_bps` paid on locked deposits. Both rates
+    /// must be within `0..=BASIS_POINTS`. The vault starts unpaused.
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -419,6 +425,8 @@ impl SavingsVault {
         payout_amount
     }
 
+    /// Return the total locked principal `user` holds across all deposit lots for
+    /// the given `term_seconds` bucket (0 if none).
     pub fn get_balance(env: Env, user: Address, term_seconds: u64) -> i128 {
         let key = (DEPOSIT_KEY, user, term_seconds);
         let lots: Vec<DepositLot> = env
@@ -429,6 +437,9 @@ impl SavingsVault {
         Self::sum_lots(&lots)
     }
 
+    /// Return the yield accrued so far on `user`'s matured deposit lots for the
+    /// given `term_seconds`. Only lots past their unlock time contribute. Panics
+    /// with `NoDeposit` if the user has no lots in this bucket.
     pub fn get_pending_yield(env: Env, user: Address, term_seconds: u64) -> i128 {
         let key = (DEPOSIT_KEY, user, term_seconds);
         let lots: Vec<DepositLot> = env
@@ -481,18 +492,21 @@ impl SavingsVault {
         ends
     }
 
+    /// Pause the vault, disabling deposits and withdrawals (admin only).
     pub fn pause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &true);
     }
 
+    /// Unpause the vault, re-enabling deposits and withdrawals (admin only).
     pub fn unpause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &false);
     }
 
+    /// Update the ACBU token contract address (admin only).
     pub fn update_acbu_token(env: Env, new_acbu_token: Address) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -501,6 +515,8 @@ impl SavingsVault {
             .set(&DATA_KEY.acbu_token, &new_acbu_token);
     }
 
+    /// Set the deposit fee in basis points (admin only). Must be within
+    /// `0..=BASIS_POINTS`.
     pub fn set_fee_rate(env: Env, fee_rate_bps: i128) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -512,6 +528,8 @@ impl SavingsVault {
             .set(&DATA_KEY.fee_rate, &fee_rate_bps);
     }
 
+    /// Set the yield rate in basis points paid on locked deposits (admin only).
+    /// Must be within `0..=BASIS_POINTS`.
     pub fn set_yield_rate(env: Env, yield_rate_bps: i128) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -523,10 +541,12 @@ impl SavingsVault {
             .set(&DATA_KEY.yield_rate, &yield_rate_bps);
     }
 
+    /// Return the current admin address.
     pub fn get_admin(env: Env) -> Address {
         env.storage().instance().get(&DATA_KEY.admin).unwrap()
     }
 
+    /// Return the stored contract version (0 if never set).
     pub fn get_version(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -534,6 +554,9 @@ impl SavingsVault {
             .unwrap_or(0)
     }
 
+    /// Stage a WASM upgrade to `new_wasm_hash`/`new_version` and start the upgrade
+    /// timelock (admin only). `new_version` must exceed the current version. Apply
+    /// later with [`Self::execute_upgrade`] or abort with [`Self::cancel_upgrade`].
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -558,6 +581,9 @@ impl SavingsVault {
             .set(&DATA_KEY.pending_upgrade_eligible_at, &eligible_at);
     }
 
+    /// Execute a previously proposed upgrade once its timelock has elapsed,
+    /// swapping in the staged WASM, running migrations and bumping the version
+    /// (admin only). Panics if none is pending or the timelock is still active.
     pub fn execute_upgrade(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -601,6 +627,8 @@ impl SavingsVault {
             .set(&SharedDataKey::Version, &new_version);
     }
 
+    /// Cancel a pending upgrade, clearing the staged WASM hash, version and
+    /// timelock (admin only).
     pub fn cancel_upgrade(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -619,6 +647,8 @@ impl SavingsVault {
     // Two-step admin rotation
     // -----------------------------------------------------------------------
 
+    /// Step 1 of admin rotation — current admin nominates `new_admin` and starts
+    /// the timelock (admin only). Emits an `adm_init` event.
     pub fn transfer_admin(env: Env, new_admin: Address) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -640,6 +670,9 @@ impl SavingsVault {
         );
     }
 
+    /// Step 2 of admin rotation — the nominated address claims ownership after the
+    /// timelock elapses. Requires the pending admin's auth. Emits an `adm_done`
+    /// event.
     pub fn accept_admin(env: Env) {
         let pending_admin: Address = env
             .storage()
@@ -670,6 +703,8 @@ impl SavingsVault {
         );
     }
 
+    /// Cancel a pending admin transfer (current admin only). Emits an `adm_cncl`
+    /// event.
     pub fn cancel_admin_transfer(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -688,10 +723,12 @@ impl SavingsVault {
         );
     }
 
+    /// Return the pending admin, if a transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&DATA_KEY.pending_admin)
     }
 
+    /// Return the stored contract version (0 if never set).
     pub fn version(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -699,6 +736,8 @@ impl SavingsVault {
             .unwrap_or(0)
     }
 
+    /// Return the timestamp after which `accept_admin` becomes callable, if a
+    /// transfer is pending.
     pub fn get_pending_admin_eligible_at(env: Env) -> Option<u64> {
         env.storage()
             .instance()

@@ -325,10 +325,13 @@ impl MultisigContract {
     // Read-only helpers
     // -----------------------------------------------------------------------
 
+    /// Return the current multisig configuration (signer list and threshold).
     pub fn get_config(env: Env) -> MultisigConfig {
         Self::load_config(&env)
     }
 
+    /// Return the proposal identified by `proposal_id`, panicking with
+    /// `ProposalNotFound` if it does not exist.
     pub fn get_proposal(env: Env, proposal_id: u64) -> AdminProposal {
         env.storage()
             .instance()
@@ -336,10 +339,12 @@ impl MultisigContract {
             .unwrap_or_else(|| env.panic_with_error(Error::ProposalNotFound))
     }
 
+    /// Return the id that will be assigned to the next created proposal.
     pub fn get_next_id(env: Env) -> u64 {
         env.storage().instance().get(&DataKey::NextId).unwrap_or(0)
     }
 
+    /// Return `true` if `address` is one of the configured signers.
     pub fn is_signer(env: Env, address: Address) -> bool {
         let config = Self::load_config(&env);
         for s in config.signers.iter() {
@@ -350,6 +355,8 @@ impl MultisigContract {
         false
     }
 
+    /// Return the number of approvals recorded for `proposal_id`, panicking with
+    /// `ProposalNotFound` if it does not exist.
     pub fn approval_count(env: Env, proposal_id: u64) -> u32 {
         let proposal: AdminProposal = env
             .storage()
@@ -359,6 +366,7 @@ impl MultisigContract {
         proposal.approvals.len()
     }
 
+    /// Return the stored contract version (0 if never set).
     pub fn version(env: Env) -> u32 {
         env.storage()
             .instance()

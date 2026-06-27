@@ -64,6 +64,18 @@ pub struct LoanData {
     pub status: LoanStatus,
 }
 
+/// Emitted when a lender deposits liquidity into the pool.
+///
+/// The `lender` address is carried in the event **payload** (not only the
+/// topic) so off-chain indexers can attribute a deposit to a specific user
+/// without having to parse the originating transaction envelope. See #369.
+#[contractevent]
+pub struct DepositEvent {
+    pub lender: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+}
+
 #[contractevent]
 pub struct BorrowEvent {
     pub creator: Address,
@@ -188,6 +200,11 @@ impl LendingPool {
             .set(&SharedDataKey::Version, &VERSION);
     }
 
+    /// Deposit `amount` of ACBU into the pool as the caller's lendable liquidity.
+    ///
+    /// Requires `lender`'s authorization and that the pool is not paused. The
+    /// tokens are pulled from `lender` into the contract and credited to their
+    /// pool balance. `amount` must be positive. Emits a [`DepositEvent`].
     pub fn deposit(env: Env, lender: Address, amount: i128) {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
@@ -217,13 +234,25 @@ impl LendingPool {
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
         token.transfer(&lender, &env.current_contract_address(), &amount);
 
-        env.events()
-            .publish((symbol_short!("deposit"), lender), amount);
+        env.events().publish(
+            (symbol_short!("deposit"), lender.clone()),
+            DepositEvent {
+                lender,
+                amount,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         // Release re-entrancy guard
         reentrancy_guard::release_guard(&env);
     }
 
+    /// Withdraw `amount` of ACBU from the caller's pool balance.
+    ///
+    /// Requires `lender`'s authorization and that the pool is not paused. Only the
+    /// portion of the balance not currently lent out (balance minus borrowed) may
+    /// be withdrawn. A withdrawal must either drain the balance to zero or leave at
+    /// least [`MIN_POOL_BALANCE`]; otherwise it fails with [`Error::DustBalance`].
     pub fn withdraw(env: Env, lender: Address, amount: i128) {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
@@ -278,6 +307,14 @@ impl LendingPool {
         reentrancy_guard::release_guard(&env);
     }
 
+    /// Borrow `amount` of ACBU against `collateral_amount` from a specific
+    /// `lender`'s liquidity, creating a new loan keyed by `(borrower, loan_id)`.
+    ///
+    /// Requires `borrower`'s authorization and that the pool is not paused. The
+    /// loan must be at least 100% collateralized (`collateral_amount >= amount`)
+    /// and the lender must have enough unborrowed balance. The collateral is
+    /// pulled in before the principal is paid out. `loan_id` must be unique for
+    /// the borrower. Emits [`BorrowEvent`] and [`LoanCreatedEvent`].
     pub fn borrow(
         env: Env,
         borrower: Address,
@@ -399,6 +436,13 @@ impl LendingPool {
         reentrancy_guard::release_guard(&env);
     }
 
+    /// Return the loan identified by `(borrower, loan_id)`, or `None` if it does
+    /// not exist.
+    ///
+    /// For active loans the returned [`LoanData`] is updated in-memory with the
+    /// fee accrued up to the current ledger timestamp (`accrued_interest` and
+    /// `total_repayment_due` are recomputed); the stored loan is not modified.
+    /// Repaid loans are returned as-is.
     pub fn get_loan(env: Env, borrower: Address, loan_id: u64) -> Option<LoanData> {
         let loan_key = LoanId(borrower, loan_id);
         let mut loan_data: LoanData = env.storage().persistent().get(&DataKey::Loan(loan_key))?;
@@ -428,6 +472,13 @@ impl LendingPool {
         Some(loan_data)
     }
 
+    /// Repay `amount` toward the loan `(borrower, loan_id)`.
+    ///
+    /// Requires `borrower`'s authorization and that the pool is not paused.
+    /// `amount` is applied to accrued interest first, then principal, and may not
+    /// exceed the total amount due. When the principal reaches zero the loan is
+    /// marked [`LoanStatus::Repaid`] and the collateral is returned to the
+    /// borrower. Emits [`RepayEvent`], [`RepaymentEvent`] and [`LoanRepaidEvent`].
     pub fn repay(env: Env, borrower: Address, amount: i128, loan_id: u64) {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
@@ -557,16 +608,22 @@ impl LendingPool {
         reentrancy_guard::release_guard(&env);
     }
 
+    /// Pause the pool, disabling deposit/withdraw/borrow/repay. Admin only.
     pub fn pause(env: Env) {
         Self::check_admin(&env);
         env.storage().instance().set(&DataKey::Paused, &true);
     }
 
+    /// Unpause the pool, re-enabling state-changing operations. Admin only.
     pub fn unpause(env: Env) {
         Self::check_admin(&env);
         env.storage().instance().set(&DataKey::Paused, &false);
     }
 
+    /// Stage a WASM upgrade to `new_wasm_hash`/`new_version` and start the upgrade
+    /// timelock. Admin only. `new_version` must exceed the current version. The
+    /// upgrade is applied later via [`Self::execute_upgrade`] once the timelock
+    /// elapses, and can be aborted with [`Self::cancel_upgrade`].
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         Self::check_admin(&env);
         let current_version: u32 = env
@@ -589,6 +646,10 @@ impl LendingPool {
             .set(&DataKey::PendingUpgradeEligibleAt, &eligible_at);
     }
 
+    /// Execute a previously proposed upgrade once its timelock has elapsed,
+    /// swapping in the new WASM, running any migrations and bumping the stored
+    /// version. Admin only. Fails if no upgrade is pending or the timelock is
+    /// still active.
     pub fn execute_upgrade(env: Env) {
         Self::check_admin(&env);
         let wasm_hash: BytesN<32> = env
@@ -635,6 +696,8 @@ impl LendingPool {
             .set(&SharedDataKey::Version, &new_version);
     }
 
+    /// Cancel a pending upgrade, clearing the staged WASM hash, version and
+    /// timelock. Admin only.
     pub fn cancel_upgrade(env: Env) {
         Self::check_admin(&env);
         env.storage()
@@ -648,6 +711,8 @@ impl LendingPool {
             .remove(&DataKey::PendingUpgradeEligibleAt);
     }
 
+    /// Return the lender's total pool balance (including any amount currently lent
+    /// out), or `0` if they have never deposited.
     pub fn get_balance(env: Env, lender: Address) -> i128 {
         env.storage()
             .persistent()
