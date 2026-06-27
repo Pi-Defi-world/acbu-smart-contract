@@ -8,6 +8,9 @@ use soroban_sdk::{
     Address, BytesN, Env, FromVal, IntoVal, String as SorobanString, Symbol, Vec,
 };
 
+// Include snapshot validation module
+mod snapshot_validation;
+
 // --- Mocks ---
 
 mod oracle_mock {
