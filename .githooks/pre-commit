@@ -65,4 +65,36 @@ for contract in acbu_minting acbu_burning acbu_reserve_tracker; do
 done
 
 echo -e "${GREEN}[PASS]${NC} WASM integrity checks passed"
+
+# Check snapshot validity if snapshot-related files are being modified
+echo -e "${YELLOW}[Pre-commit Hook]${NC} Checking test snapshots..."
+
+SNAPSHOT_RELATED_FILES=$(git diff --cached --name-only | grep -E "(acbu_minting/src/|acbu_minting/tests/|acbu_minting/test_snapshots/|shared/src/)" || true)
+
+if [ -n "$SNAPSHOT_RELATED_FILES" ]; then
+    echo -e "${YELLOW}⚠️  Snapshot-related files modified, validating snapshots...${NC}"
+    
+    # Run snapshot validation
+    if ! cargo test test_snapshot_validation --package acbu_minting --quiet 2>&1 | grep -q "test result: ok"; then
+        echo -e "${RED}[FAIL]${NC} Snapshot validation failed!"
+        echo ""
+        echo "Modified files:"
+        echo "$SNAPSHOT_RELATED_FILES"
+        echo ""
+        echo "Run the following to see details:"
+        echo "  cargo test test_snapshot_validation --package acbu_minting -- --nocapture"
+        echo ""
+        echo "To fix:"
+        echo "  1. Review: acbu_minting/SNAPSHOT_MANAGEMENT.md"
+        echo "  2. Update EXPECTED_STORAGE_KEYS and EXPECTED_EVENT_TYPES if needed"
+        echo "  3. Regenerate: make clean-snapshots && make test-minting"
+        echo "  4. Stage updated snapshots: git add acbu_minting/test_snapshots/"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}[PASS]${NC} Snapshot validation passed"
+else
+    echo -e "${GREEN}[SKIP]${NC} No snapshot-related files modified"
+fi
+
 exit 0

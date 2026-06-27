@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contracterror, contractevent, contracttype, Address, String as SorobanString, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, String as SorobanString, Vec};
 
 pub mod reentrancy_guard;
 
@@ -51,7 +51,7 @@ pub struct MultisigConfig {
 }
 
 /// Event emitted when a new proposal is created.
-#[contractevent]
+#[contracttype]
 pub struct ProposalCreatedEvent {
     pub proposal_id: u64,
     pub proposer: Address,
@@ -60,7 +60,7 @@ pub struct ProposalCreatedEvent {
 }
 
 /// Event emitted when a signer approves a proposal.
-#[contractevent]
+#[contracttype]
 pub struct ProposalApprovedEvent {
     pub proposal_id: u64,
     pub approver: Address,
@@ -68,7 +68,7 @@ pub struct ProposalApprovedEvent {
 }
 
 /// Event emitted when a proposal reaches threshold and is executed.
-#[contractevent]
+#[contracttype]
 pub struct ProposalExecutedEvent {
     pub proposal_id: u64,
     pub action_tag: SorobanString,
@@ -144,7 +144,7 @@ pub struct AccountDetails {
 /// the ACBU/USD rate in the same fixed-point form. `usdc_amount` is USDC in 7 decimals for
 /// `mint_from_usdc`; for Afreum S-token mint paths it carries the USD-equivalent notional
 /// (still 7-decimal fixed point).
-#[contractevent]
+#[contracttype]
 pub struct MintEvent {
     pub transaction_id: SorobanString,
     pub user: Address,
@@ -164,7 +164,7 @@ pub struct MintEvent {
 /// [`CurrencyCode`] (string code such as `"NGN"`). For `burn_for_basket`, one event is emitted per
 /// recipient slice; `acbu_amount` and `fee` are the portions for that slice, not necessarily the
 /// full transaction totals.
-#[contractevent]
+#[contracttype]
 pub struct BurnEvent {
     pub transaction_id: SorobanString,
     pub user: Address,
@@ -181,7 +181,7 @@ pub struct BurnEvent {
 }
 
 /// Rate update event data
-#[contractevent]
+#[contracttype]
 pub struct RateUpdateEvent {
     pub currency: CurrencyCode,
     pub rate: i128,
@@ -190,7 +190,7 @@ pub struct RateUpdateEvent {
 }
 
 /// Outlier detection event data
-#[contractevent]
+#[contracttype]
 pub struct OutlierDetectionEvent {
     pub currency: CurrencyCode,
     pub median_rate: i128,

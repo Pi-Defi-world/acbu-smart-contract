@@ -3,17 +3,19 @@
 SHELL := /bin/bash
 MAKEFLAGS += --silent
 
-.PHONY: help build build-minting test test-minting deploy-testnet deploy-mainnet setup-hooks
+.PHONY: help build build-minting test test-minting deploy-testnet deploy-mainnet setup-hooks validate-snapshots clean-snapshots
 
 help:
 	@printf "Usage:\n"
-	@printf "  make build             Build all contracts\n"
-	@printf "  make test              Run all workspace tests\n"
-	@printf "  make deploy-testnet    Deploy to Stellar testnet\n"
-	@printf "  make deploy-mainnet    Deploy to Stellar mainnet\n"
-	@printf "  make setup-hooks       Install git hooks for the repository\n"
-	@printf "  make build-minting     Build the acbu_minting contract\n"
-	@printf "  make test-minting      Run tests for the acbu_minting contract\n"
+	@printf "  make build              Build all contracts\n"
+	@printf "  make test               Run all workspace tests\n"
+	@printf "  make deploy-testnet     Deploy to Stellar testnet\n"
+	@printf "  make deploy-mainnet     Deploy to Stellar mainnet\n"
+	@printf "  make setup-hooks        Install git hooks for the repository\n"
+	@printf "  make build-minting      Build the acbu_minting contract\n"
+	@printf "  make test-minting       Run tests for the acbu_minting contract\n"
+	@printf "  make validate-snapshots Validate test snapshots for staleness\n"
+	@printf "  make clean-snapshots    Delete all test snapshots (use before regeneration)\n"
 
 build:
 	@printf "Building all contracts...\n"
@@ -50,3 +52,12 @@ deploy-mainnet:
 setup-hooks:
 	@printf "Setting up git hooks...\n"
 	./scripts/setup-git-hooks.sh
+
+validate-snapshots:
+	@printf "Validating test snapshots...\n"
+	cargo test test_snapshot_validation --package acbu_minting -- --nocapture
+
+clean-snapshots:
+	@printf "Cleaning test snapshots...\n"
+	rm -rf acbu_minting/test_snapshots/*.json
+	@printf "Snapshots cleaned. Regenerate by running: make test-minting\n"
