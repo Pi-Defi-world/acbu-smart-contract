@@ -27,6 +27,45 @@ fn mint(env: &Env, token: &Address, recipient: &Address, amount: i128) {
     soroban_sdk::token::StellarAssetClient::new(env, token).mint(recipient, &amount);
 }
 
+#[test]
+#[should_panic(expected = "Error(Contract, #3002)")]
+fn test_create_zero_amount_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, _token, _cid, client) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+
+    client.create(&payer, &payee, &0i128, &1u64);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3017)")]
+fn test_create_self_escrow_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, acbu_token, _cid, client) = setup(&env);
+    let payer = Address::generate(&env);
+    let amount = 10_000_000i128;
+
+    mint(&env, &acbu_token, &payer, amount);
+    client.create(&payer, &payer, &amount, &2u64);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3003)")]
+fn test_release_missing_escrow_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, _token, _cid, client) = setup(&env);
+    let payer = Address::generate(&env);
+
+    client.release(&7u64, &payer);
+}
+
 // ── Create edge cases ─────────────────────────────────────────────────────────
 
 #[test]
