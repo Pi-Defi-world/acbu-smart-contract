@@ -1,6 +1,7 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Map, Symbol, Vec,
 };
 
@@ -35,39 +36,44 @@ pub enum OracleError {
     NoPendingValidatorChange = 7019,
     ValidatorTimelockNotElapsed = 7020,
     MaxValidatorsReached = 7021,
+    TimestampRollback = 7022,
+    RateNotInitialized = 7023,
     Unknown = 7999,
 }
 
-impl core::fmt::Display for OracleError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            OracleError::AlreadyInitialized => write!(f, "already initialized"),
-            OracleError::InvalidMinSignatures => write!(f, "invalid minimum signatures"),
-            OracleError::MinSignaturesZero => write!(f, "minimum signatures cannot be zero"),
-            OracleError::NoPendingAdmin => write!(f, "no pending admin"),
-            OracleError::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
-            OracleError::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
-            OracleError::UnauthorizedValidator => write!(f, "unauthorized validator"),
-            OracleError::UpdateIntervalNotMet => write!(f, "update interval not met"),
-            OracleError::InsufficientOracleSources => write!(f, "insufficient oracle sources"),
-            OracleError::InvalidRate => write!(f, "invalid rate"),
-            OracleError::RateNotFound => write!(f, "rate not found"),
-            OracleError::STokenNotConfigured => write!(f, "s-token not configured"),
-            OracleError::ValidatorAlreadyExists => write!(f, "validator already exists"),
-            OracleError::CannotRemoveValidator => write!(f, "cannot remove validator"),
-            OracleError::InvalidVersion => write!(f, "invalid version"),
-            OracleError::RateStaleLedger => write!(f, "rate is stale"),
-            OracleError::NoPendingUpgrade => write!(f, "no pending upgrade"),
-            OracleError::UpgradeTimelockNotElapsed => write!(f, "upgrade timelock not elapsed"),
-            OracleError::NoPendingValidatorChange => write!(f, "no pending validator change"),
-            OracleError::ValidatorTimelockNotElapsed => write!(f, "validator timelock not elapsed"),
-            OracleError::MaxValidatorsReached => write!(f, "maximum validators reached"),
-            OracleError::Unknown => write!(f, "unknown error"),
-        }
+impl Display for OracleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::AlreadyInitialized => "oracle already initialized",
+            Self::InvalidMinSignatures => "invalid minimum signatures",
+            Self::MinSignaturesZero => "minimum signatures cannot be zero",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::UnauthorizedValidator => "unauthorized validator",
+            Self::UpdateIntervalNotMet => "update interval not met",
+            Self::InsufficientOracleSources => "insufficient oracle sources",
+            Self::InvalidRate => "invalid rate",
+            Self::RateNotFound => "rate not found",
+            Self::STokenNotConfigured => "s-token not configured",
+            Self::ValidatorAlreadyExists => "validator already exists",
+            Self::CannotRemoveValidator => "cannot remove validator",
+            Self::InvalidVersion => "invalid contract version",
+            Self::RateStaleLedger => "rate is stale",
+            Self::NoPendingUpgrade => "no pending upgrade",
+            Self::UpgradeTimelockNotElapsed => "upgrade timelock has not elapsed",
+            Self::NoPendingValidatorChange => "no pending validator change",
+            Self::ValidatorTimelockNotElapsed => "validator timelock has not elapsed",
+            Self::MaxValidatorsReached => "maximum validators reached",
+            Self::TimestampRollback => "timestamp rollback",
+            Self::RateNotInitialized => "rate not initialized - no submissions yet",
+            Self::Unknown => "unknown oracle error",
+        };
+        f.write_str(message)
     }
 }
 
-const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
+pub const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 const MIN_ORACLE_SOURCE_FEEDS: u32 = 3;
 
 #[contracttype]
@@ -118,32 +124,28 @@ const DATA_KEY: DataKey = DataKey {
 
 const VERSION: u32 = 9;
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct AdminTransferInitiatedEvent {
     pub current_admin: Address,
     pub pending_admin: Address,
     pub eligible_at: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct AdminTransferCompletedEvent {
     pub old_admin: Address,
     pub new_admin: Address,
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct AdminTransferCancelledEvent {
     pub admin: Address,
     pub cancelled_pending: Address,
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct StaleRateEvent {
     pub currency: CurrencyCode,
     pub stored_ledger: u32,
@@ -344,25 +346,20 @@ impl OracleContract {
     ) {
         validator.require_auth();
 
-        let validator_set: Map<Address, bool> = match env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.validator_set)
-        {
-            Some(set) => set,
-            None => {
-                let validators: Vec<Address> =
-                    env.storage().instance().get(&DATA_KEY.validators).unwrap();
-                let mut set: Map<Address, bool> = Map::new(&env);
-                for v in validators.iter() {
-                    set.set(v, true);
+        let validator_set: Map<Address, bool> =
+            match env.storage().instance().get(&DATA_KEY.validator_set) {
+                Some(set) => set,
+                None => {
+                    let validators: Vec<Address> =
+                        env.storage().instance().get(&DATA_KEY.validators).unwrap();
+                    let mut set: Map<Address, bool> = Map::new(&env);
+                    for v in validators.iter() {
+                        set.set(v, true);
+                    }
+                    env.storage().instance().set(&DATA_KEY.validator_set, &set);
+                    set
                 }
-                env.storage()
-                    .instance()
-                    .set(&DATA_KEY.validator_set, &set);
-                set
-            }
-        };
+            };
         if !validator_set.contains_key(validator.clone()) {
             env.panic_with_error(OracleError::UnauthorizedValidator);
         }
@@ -375,6 +372,11 @@ impl OracleContract {
         let current_time = env.ledger().timestamp();
 
         let existing_rate = Self::get_rate_internal(&env, &currency);
+        if let Some(ref existing) = existing_rate {
+            if current_time < existing.timestamp {
+                env.panic_with_error(OracleError::TimestampRollback);
+            }
+        }
         let mut allow_update = false;
         if let Some(existing_rate) = existing_rate.clone() {
             let deviation = calculate_deviation(rate, existing_rate.rate_usd);
@@ -393,32 +395,41 @@ impl OracleContract {
             env.panic_with_error(OracleError::InsufficientOracleSources);
         }
 
-        let raw_median = median(sources.clone()).unwrap_or(rate);
-
-        let mut clean_sources: Vec<i128> = Vec::new(&env);
-        for i in 0..sources.len() {
-            let source_rate = sources.get(i).unwrap();
-            let deviation_bps = calculate_deviation(source_rate, raw_median);
-
-            if deviation_bps > OUTLIER_THRESHOLD_BPS {
-                let outlier_event = OutlierDetectionEvent {
-                    currency: currency.clone(),
-                    median_rate: raw_median,
-                    outlier_rate: source_rate,
-                    deviation_bps,
-                    timestamp: current_time,
-                };
-                env.events()
-                    .publish((symbol_short!("outlier"),), outlier_event);
-            } else {
-                clean_sources.push_back(source_rate);
-            }
-        }
-
-        let median_rate = if clean_sources.is_empty() {
-            raw_median
+        // Bypass median and outlier calculation workflows if 0 or 1 submissions exist
+        let median_rate = if sources.is_empty() {
+            rate
+        } else if sources.len() == 1 {
+            sources.get(0).unwrap()
         } else {
-            median(clean_sources).unwrap_or(raw_median)
+            let raw_median = median(sources.clone()).unwrap_or(rate);
+
+            let mut clean_sources: Vec<i128> = Vec::new(&env);
+            for i in 0..sources.len() {
+                let source_rate = sources.get(i).unwrap();
+                let deviation_bps = calculate_deviation(source_rate, raw_median);
+
+                if deviation_bps > OUTLIER_THRESHOLD_BPS {
+                    let outlier_event = OutlierDetectionEvent {
+                        currency: currency.clone(),
+                        median_rate: raw_median,
+                        outlier_rate: source_rate,
+                        deviation_bps,
+                        timestamp: current_time,
+                    };
+                    env.events()
+                        .publish((symbol_short!("outlier"),), outlier_event);
+                } else {
+                    clean_sources.push_back(source_rate);
+                }
+            }
+
+            if clean_sources.is_empty() {
+                raw_median
+            } else if clean_sources.len() == 1 {
+                clean_sources.get(0).unwrap()
+            } else {
+                median(clean_sources).unwrap_or(raw_median)
+            }
         };
 
         let rate_data = RateData {
@@ -455,6 +466,13 @@ impl OracleContract {
             env.panic_with_error(OracleError::InvalidRate);
         }
         let current_time = env.ledger().timestamp();
+
+        let existing_rate = Self::get_rate_internal(&env, &currency);
+        if let Some(ref existing) = existing_rate {
+            if current_time < existing.timestamp {
+                env.panic_with_error(OracleError::TimestampRollback);
+            }
+        }
         let rate_data = RateData {
             currency: currency.clone(),
             rate_usd: rate,
@@ -484,20 +502,22 @@ impl OracleContract {
     }
 
     pub fn get_rate(env: Env, currency: CurrencyCode) -> i128 {
+        Self::assert_currency_registered(&env, &currency);
         if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
             Self::assert_rate_fresh(&env, &rate_data, &currency);
             rate_data.rate_usd
         } else {
-            env.panic_with_error(OracleError::RateNotFound);
+            env.panic_with_error(OracleError::RateNotInitialized);
         }
     }
 
     pub fn get_rate_with_timestamp(env: Env, currency: CurrencyCode) -> (i128, u64) {
+        Self::assert_currency_registered(&env, &currency);
         if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
             Self::assert_rate_fresh(&env, &rate_data, &currency);
             (rate_data.rate_usd, rate_data.timestamp)
         } else {
-            env.panic_with_error(OracleError::RateNotFound);
+            env.panic_with_error(OracleError::RateNotInitialized);
         }
     }
 
@@ -512,6 +532,9 @@ impl OracleContract {
             .instance()
             .get(&DATA_KEY.currencies)
             .unwrap_or(Vec::new(&env));
+        if currencies.is_empty() {
+            env.panic_with_error(OracleError::RateNotInitialized);
+        }
 
         let mut weighted_sum = 0i128;
         let mut total_weight = 0i128;
@@ -531,11 +554,11 @@ impl OracleContract {
             }
         }
 
-        let rate = if total_weight > 0 {
-            weighted_sum / total_weight
-        } else {
-            DECIMALS
-        };
+        if total_weight == 0 {
+            env.panic_with_error(OracleError::RateNotInitialized);
+        }
+
+        let rate = weighted_sum / total_weight;
 
         (
             rate,
@@ -558,6 +581,9 @@ impl OracleContract {
             .instance()
             .get(&DATA_KEY.currencies)
             .unwrap_or(Vec::new(&env));
+        if currencies.is_empty() {
+            env.panic_with_error(OracleError::RateNotInitialized);
+        }
 
         let mut weighted_sum = 0i128;
         let mut total_weight = 0i128;
@@ -574,7 +600,7 @@ impl OracleContract {
         }
 
         if total_weight == 0 {
-            return DECIMALS;
+            env.panic_with_error(OracleError::RateNotInitialized);
         }
 
         (weighted_sum * 10_000) / total_weight
@@ -658,11 +684,7 @@ impl OracleContract {
 
     pub fn execute_validator_change(env: Env) {
         Self::check_admin(&env);
-        let validator: Address = match env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.pending_validator)
-        {
+        let validator: Address = match env.storage().instance().get(&DATA_KEY.pending_validator) {
             Some(v) => v,
             None => env.panic_with_error(OracleError::NoPendingValidatorChange),
         };
@@ -687,8 +709,7 @@ impl OracleContract {
             .instance()
             .remove(&DATA_KEY.pending_validator_eligible_at);
 
-        let validators: Vec<Address> =
-            env.storage().instance().get(&DATA_KEY.validators).unwrap();
+        let validators: Vec<Address> = env.storage().instance().get(&DATA_KEY.validators).unwrap();
         if is_add {
             for v in validators.iter() {
                 if v == validator {
@@ -770,6 +791,10 @@ impl OracleContract {
             .unwrap()
     }
 
+    pub fn get_rate_decimals(env: Env) -> u32 {
+        7
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Upgrade / migration
     // ─────────────────────────────────────────────────────────────────────────
@@ -842,14 +867,11 @@ impl OracleContract {
 
     pub fn execute_upgrade(env: Env) {
         Self::check_admin(&env);
-        let wasm_hash: BytesN<32> = match env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.pending_upgrade_wasm)
-        {
-            Some(h) => h,
-            None => env.panic_with_error(OracleError::NoPendingUpgrade),
-        };
+        let wasm_hash: BytesN<32> =
+            match env.storage().instance().get(&DATA_KEY.pending_upgrade_wasm) {
+                Some(h) => h,
+                None => env.panic_with_error(OracleError::NoPendingUpgrade),
+            };
         let new_version: u32 = env
             .storage()
             .instance()
@@ -928,10 +950,25 @@ impl OracleContract {
         }
     }
 
+    fn assert_currency_registered(env: &Env, currency: &CurrencyCode) {
+        let currencies: Vec<CurrencyCode> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.currencies)
+            .unwrap_or(Vec::new(env));
+        if currencies.is_empty() {
+            env.panic_with_error(OracleError::CurrencyNotRegistered);
+        }
+        if !currencies.contains(currency.clone()) {
+            env.panic_with_error(OracleError::CurrencyNotRegistered);
+        }
+    }
+
     fn check_admin(env: &Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
     }
 }
-mod tests;
-fn migrate_v0_to_v1(_env: Env) {}
+fn migrate_v0_to_v1(_env: Env) {
+    // No storage schema changes between v0 and v1.
+}

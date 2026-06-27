@@ -1,4 +1,5 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, vec, Address,
@@ -120,38 +121,63 @@ pub enum MintingError {
     AdminTimelockNotElapsed = 5021,
     NoPendingAdminToCancel = 5022,
     InvalidRecipient = 5023,
+    InvalidRoleSeparation = 5024,
     Unknown = 5999,
 }
 
-impl core::fmt::Display for MintingError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            MintingError::AlreadyInitialized => write!(f, "already initialized"),
-            MintingError::InvalidFeeRate => write!(f, "invalid fee rate"),
-            MintingError::InvalidMintAmount => write!(f, "invalid mint amount"),
-            MintingError::InsufficientReserves => write!(f, "insufficient reserves"),
-            MintingError::ProofAlreadyUsed => write!(f, "proof already used"),
-            MintingError::InvalidOracleRate => write!(f, "invalid oracle rate"),
-            MintingError::UnauthorizedOperator => write!(f, "unauthorized operator"),
-            MintingError::DuplicateFintechTxId => write!(f, "duplicate fintech transaction id"),
-            MintingError::InvalidDripAmount => write!(f, "invalid drip amount"),
-            MintingError::DripExceedsCap => write!(f, "drip exceeds cap"),
-            MintingError::InsufficientDemoCustody => write!(f, "insufficient demo custody"),
-            MintingError::Paused => write!(f, "contract is paused"),
-            MintingError::OracleStale => write!(f, "oracle rate is stale"),
-            MintingError::FintechTxIdEmpty => write!(f, "fintech transaction id is empty"),
-            MintingError::FintechTxIdTooShort => write!(f, "fintech transaction id too short"),
-            MintingError::FintechTxIdTooLong => write!(f, "fintech transaction id too long"),
-            MintingError::FintechTxIdInvalidChar => write!(f, "fintech transaction id contains invalid character"),
-            MintingError::InvalidVersion => write!(f, "invalid version"),
-            MintingError::MaxSupplyExceeded => write!(f, "max supply exceeded"),
-            MintingError::NoPendingAdmin => write!(f, "no pending admin"),
-            MintingError::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
-            MintingError::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
-            MintingError::InvalidRecipient => write!(f, "invalid recipient"),
-            MintingError::Unknown => write!(f, "unknown error"),
-        }
+impl Display for MintingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::AlreadyInitialized => "minting contract already initialized",
+            Self::InvalidFeeRate => "invalid fee rate",
+            Self::InvalidMintAmount => "invalid mint amount",
+            Self::InsufficientReserves => "insufficient reserves",
+            Self::ProofAlreadyUsed => "proof already used",
+            Self::InvalidOracleRate => "invalid oracle rate",
+            Self::UnauthorizedOperator => "unauthorized operator",
+            Self::DuplicateFintechTxId => "duplicate fintech transaction id",
+            Self::InvalidDripAmount => "invalid drip amount",
+            Self::DripExceedsCap => "drip exceeds cap",
+            Self::InsufficientDemoCustody => "insufficient demo custody",
+            Self::Paused => "minting contract is paused",
+            Self::OracleStale => "oracle rate is stale",
+            Self::FintechTxIdEmpty => "fintech transaction id is empty",
+            Self::FintechTxIdTooShort => "fintech transaction id is too short",
+            Self::FintechTxIdTooLong => "fintech transaction id is too long",
+            Self::FintechTxIdInvalidChar => "fintech transaction id contains invalid characters",
+            Self::InvalidVersion => "invalid contract version",
+            Self::MaxSupplyExceeded => "maximum supply exceeded",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::InvalidRecipient => "invalid recipient",
+            Self::Unknown => "unknown minting error",
+        };
+        f.write_str(message)
     }
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MintingConfig {
+    pub admin: Address,
+    pub oracle: Address,
+    pub reserve_tracker: Address,
+    pub acbu_token: Address,
+    pub usdc_token: Address,
+    pub vault: Address,
+    pub treasury: Address,
+    pub fee_rate_bps: i128,
+    pub fee_single_bps: i128,
+    pub operator: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeRateUpdatedEvent {
+    pub old_fee_rate_bps: i128,
+    pub new_fee_rate_bps: i128,
+    pub timestamp: u64,
 }
 
 #[contract]
@@ -161,50 +187,41 @@ pub struct MintingContract;
 impl MintingContract {
     /// Initialize the minting contract.
     /// `fee_rate_bps` applies to basket and USDC paths; `fee_single_bps` to single S-token deposits (typically higher).
-    // Soroban initialize functions are idiomatic with many parameters; a config-struct
-    // refactor is a separate concern.
-    #[allow(clippy::too_many_arguments)]
-    pub fn initialize(
-        env: Env,
-        admin: Address,
-        oracle: Address,
-        reserve_tracker: Address,
-        acbu_token: Address,
-        usdc_token: Address,
-        vault: Address,
-        treasury: Address,
-        fee_rate_bps: i128,
-        fee_single_bps: i128,
-    ) {
+    pub fn initialize(env: Env, config: MintingConfig) {
         if env.storage().instance().has(&DATA_KEY.admin) {
             env.panic_with_error(MintingError::AlreadyInitialized);
         }
 
-        if !(0..=BASIS_POINTS).contains(&fee_rate_bps)
-            || !(0..=BASIS_POINTS).contains(&fee_single_bps)
+        if config.admin == config.operator {
+            env.panic_with_error(MintingError::InvalidRoleSeparation);
+        }
+
+        if !(0..=BASIS_POINTS).contains(&config.fee_rate_bps)
+            || !(0..=BASIS_POINTS).contains(&config.fee_single_bps)
         {
             env.panic_with_error(MintingError::InvalidFeeRate);
         }
 
-        env.storage().instance().set(&DATA_KEY.admin, &admin);
-        env.storage().instance().set(&DATA_KEY.oracle, &oracle);
+        env.storage().instance().set(&DATA_KEY.admin, &config.admin);
+        env.storage().instance().set(&DATA_KEY.oracle, &config.oracle);
         env.storage()
             .instance()
-            .set(&DATA_KEY.reserve_tracker, &reserve_tracker);
+            .set(&DATA_KEY.reserve_tracker, &config.reserve_tracker);
         env.storage()
             .instance()
-            .set(&DATA_KEY.acbu_token, &acbu_token);
+            .set(&DATA_KEY.acbu_token, &config.acbu_token);
         env.storage()
             .instance()
-            .set(&DATA_KEY.usdc_token, &usdc_token);
-        env.storage().instance().set(&DATA_KEY.vault, &vault);
-        env.storage().instance().set(&DATA_KEY.treasury, &treasury);
+            .set(&DATA_KEY.usdc_token, &config.usdc_token);
+        env.storage().instance().set(&DATA_KEY.vault, &config.vault);
+        env.storage().instance().set(&DATA_KEY.treasury, &config.treasury);
         env.storage()
             .instance()
-            .set(&DATA_KEY.fee_rate, &fee_rate_bps);
+            .set(&DATA_KEY.fee_rate, &config.fee_rate_bps);
         env.storage()
             .instance()
-            .set(&DATA_KEY.fee_single, &fee_single_bps);
+            .set(&DATA_KEY.fee_single, &config.fee_single_bps);
+        env.storage().instance().set(&DATA_KEY.operator, &config.operator);
         env.storage().instance().set(&DATA_KEY.paused, &false);
         env.storage()
             .instance()
@@ -230,7 +247,7 @@ impl MintingContract {
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        Self::assert_recipient_is_account(&recipient);
+        assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -341,7 +358,7 @@ impl MintingContract {
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        Self::assert_recipient_is_account(&recipient);
+        assert_recipient_is_account(&recipient);
 
         if !check_proof_unused(&env, &proof_id) {
             env.panic_with_error(MintingError::ProofAlreadyUsed);
@@ -513,7 +530,7 @@ impl MintingContract {
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        Self::assert_recipient_is_account(&recipient);
+        assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -789,6 +806,7 @@ impl MintingContract {
         // C-039: Strict input validation — enforce length bounds and charset
         // before touching any storage, so garbage IDs are rejected cheaply.
         validate_fintech_tx_id(&env, &fintech_tx_id);
+        let normalized_tx_id = normalize_fintech_tx_id(&env, &fintech_tx_id);
 
         // Check if fintech_tx_id has already been processed
         let mut processed_ids: soroban_sdk::Map<SorobanString, bool> = env
@@ -797,7 +815,7 @@ impl MintingContract {
             .get(&DATA_KEY.processed_fintech_tx_ids)
             .unwrap_or_else(|| soroban_sdk::map![&env]);
 
-        if processed_ids.contains_key(fintech_tx_id.clone()) {
+        if processed_ids.contains_key(normalized_tx_id.clone()) {
             env.panic_with_error(MintingError::DuplicateFintechTxId);
         }
 
@@ -893,13 +911,13 @@ impl MintingContract {
         }
 
         // Mark fintech_tx_id as processed to prevent duplicate minting
-        processed_ids.set(fintech_tx_id.clone(), true);
+        processed_ids.set(normalized_tx_id.clone(), true);
         env.storage()
             .instance()
             .set(&DATA_KEY.processed_fintech_tx_ids, &processed_ids);
 
         let mint_event = MintEvent {
-            transaction_id: fintech_tx_id,
+            transaction_id: normalized_tx_id,
             user: recipient.clone(),
             usdc_amount: usd_gross,
             acbu_amount,
@@ -997,9 +1015,11 @@ impl MintingContract {
     }
 
     pub fn set_operator(env: Env, new_operator: Address) {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        admin.require_auth();
-        Self::check_paused(&env);
+        Self::check_admin(&env);
+        let admin = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        if admin == new_operator {
+            env.panic_with_error(MintingError::InvalidRoleSeparation);
+        }
         env.storage()
             .instance()
             .set(&DATA_KEY.operator, &new_operator);
@@ -1068,9 +1088,21 @@ impl MintingContract {
         if !(0..=BASIS_POINTS).contains(&fee_rate_bps) {
             env.panic_with_error(MintingError::InvalidFeeRate);
         }
+        let old_fee_rate: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.fee_rate)
+            .unwrap_or(0);
         env.storage()
             .instance()
             .set(&DATA_KEY.fee_rate, &fee_rate_bps);
+        let event = FeeRateUpdatedEvent {
+            old_fee_rate_bps: old_fee_rate,
+            new_fee_rate_bps: fee_rate_bps,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events()
+            .publish((symbol_short!("fee_upd"),), event);
     }
 
     pub fn set_fee_single(env: Env, fee_single_bps: i128) {
@@ -1080,9 +1112,21 @@ impl MintingContract {
         if !(0..=BASIS_POINTS).contains(&fee_single_bps) {
             env.panic_with_error(MintingError::InvalidFeeRate);
         }
+        let old_fee_single: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.fee_single)
+            .unwrap_or(0);
         env.storage()
             .instance()
             .set(&DATA_KEY.fee_single, &fee_single_bps);
+        let event = FeeRateUpdatedEvent {
+            old_fee_rate_bps: old_fee_single,
+            new_fee_rate_bps: fee_single_bps,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events()
+            .publish((symbol_short!("fee_sgl"),), event);
     }
 
     pub fn get_fee_rate(env: Env) -> i128 {
@@ -1270,7 +1314,6 @@ impl MintingContract {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
 
         // Run migrations — the match will gain new arms as versions are added.
-        #[allow(clippy::single_match)]
         for v in current_version..new_version {
             match v {
                 0 => migrate_v0_to_v1(env.clone()),
@@ -1356,12 +1399,9 @@ fn next_tx_nonce(env: &Env) -> u64 {
 // Stellar's native authorization model.  This stub preserves the call sites so
 // the intent is visible and can be filled in when the SDK gains the API.
 // ---------------------------------------------------------------------------
-impl MintingContract {
-    #[allow(clippy::unused_self)]
-    fn assert_recipient_is_account(_address: &Address) {
-        // On-chain account-vs-contract check is not available in soroban-sdk 21.
-        // Enforcement is the responsibility of the calling client.
-    }
+fn assert_recipient_is_account(_address: &Address) {
+    // On-chain account-vs-contract check is not available in soroban-sdk 21.
+    // Enforcement is the responsibility of the calling client.
 }
 
 // ---------------------------------------------------------------------------
@@ -1431,5 +1471,19 @@ fn validate_fintech_tx_id(env: &Env, id: &SorobanString) {
             env.panic_with_error(MintingError::FintechTxIdInvalidChar);
         }
     }
-    let _ = env; // env kept in signature for future on-chain logging
+}
+
+fn normalize_fintech_tx_id(env: &Env, id: &SorobanString) -> SorobanString {
+    let len = id.len();
+    let mut buf = [0u8; 64];
+    let slice = &mut buf[..len as usize];
+    id.copy_into_slice(slice);
+
+    for b in slice.iter_mut() {
+        if *b >= b'A' && *b <= b'Z' {
+            *b += 32; // Convert to lowercase
+        }
+    }
+
+    SorobanString::from_slice(env, slice)
 }

@@ -1,6 +1,7 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Symbol, Vec,
 };
 
@@ -41,32 +42,33 @@ pub enum Error {
     Unknown = 1999,
 }
 
-impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Error::Paused => write!(f, "contract is paused"),
-            Error::InvalidAmount => write!(f, "invalid amount"),
-            Error::NoDeposit => write!(f, "no deposit found"),
-            Error::AccountingError => write!(f, "accounting error"),
-            Error::Overflow => write!(f, "arithmetic overflow"),
-            Error::InsufficientUnlocked => write!(f, "insufficient unlocked balance"),
-            Error::InvalidTerm => write!(f, "invalid lock term"),
-            Error::NotInitialized => write!(f, "contract not initialized"),
-            Error::NoAdmin => write!(f, "no admin set"),
-            Error::AlreadyInitialized => write!(f, "already initialized"),
-            Error::InvalidFeeRate => write!(f, "invalid fee rate"),
-            Error::InvalidYieldRate => write!(f, "invalid yield rate"),
-            Error::NoFeeRate => write!(f, "fee rate not set"),
-            Error::NoYieldRate => write!(f, "yield rate not set"),
-            Error::ZeroNetDeposit => write!(f, "zero net deposit"),
-            Error::InvalidVersion => write!(f, "invalid version"),
-            Error::TimelockNotElapsed => write!(f, "timelock not elapsed"),
-            Error::NoPendingUpgrade => write!(f, "no pending upgrade"),
-            Error::NoPendingAdmin => write!(f, "no pending admin"),
-            Error::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
-            Error::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
-            Error::Unknown => write!(f, "unknown error"),
-        }
+impl Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::Paused => "savings vault is paused",
+            Self::InvalidAmount => "invalid amount",
+            Self::NoDeposit => "no deposit found",
+            Self::AccountingError => "accounting error",
+            Self::Overflow => "overflow",
+            Self::InsufficientUnlocked => "insufficient unlocked balance",
+            Self::InvalidTerm => "invalid term",
+            Self::NotInitialized => "savings vault not initialized",
+            Self::NoAdmin => "no admin configured",
+            Self::AlreadyInitialized => "savings vault already initialized",
+            Self::InvalidFeeRate => "invalid fee rate",
+            Self::InvalidYieldRate => "invalid yield rate",
+            Self::NoFeeRate => "fee rate not configured",
+            Self::NoYieldRate => "yield rate not configured",
+            Self::ZeroNetDeposit => "net deposit is zero",
+            Self::InvalidVersion => "invalid contract version",
+            Self::TimelockNotElapsed => "timelock has not elapsed",
+            Self::NoPendingUpgrade => "no pending upgrade",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::Unknown => "unknown savings vault error",
+        };
+        f.write_str(message)
     }
 }
 
@@ -117,8 +119,7 @@ pub struct DepositLot {
     pub term_seconds: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct DepositEvent {
     pub user: Address,
     pub gross_amount: i128,
@@ -129,8 +130,7 @@ pub struct DepositEvent {
     pub maturity_timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct WithdrawEvent {
     pub user: Address,
     pub amount: i128,

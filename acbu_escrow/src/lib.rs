@@ -1,6 +1,7 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Symbol,
 };
 
@@ -25,29 +26,34 @@ pub enum EscrowError {
     AdminTimelockNotElapsed = 3013,
     NoPendingAdminToCancel = 3014,
     InsufficientBalance = 3015,
+    Expired = 3016,
+    SelfEscrow = 3017,
     Unknown = 3999,
 }
 
-impl core::fmt::Display for EscrowError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            EscrowError::Paused => write!(f, "contract is paused"),
-            EscrowError::InvalidAmount => write!(f, "invalid amount"),
-            EscrowError::EscrowNotFound => write!(f, "escrow not found"),
-            EscrowError::PayerMismatch => write!(f, "payer mismatch"),
-            EscrowError::EscrowExists => write!(f, "escrow already exists"),
-            EscrowError::UninitializedAdmin => write!(f, "admin not initialized"),
-            EscrowError::UninitializedAcBuToken => write!(f, "AcBu token not initialized"),
-            EscrowError::AlreadyInitialized => write!(f, "already initialized"),
-            EscrowError::TimelockNotElapsed => write!(f, "timelock not elapsed"),
-            EscrowError::NoPendingUpgrade => write!(f, "no pending upgrade"),
-            EscrowError::Unauthorized => write!(f, "unauthorized"),
-            EscrowError::NoPendingAdmin => write!(f, "no pending admin"),
-            EscrowError::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
-            EscrowError::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
-            EscrowError::InsufficientBalance => write!(f, "insufficient balance"),
-            EscrowError::Unknown => write!(f, "unknown error"),
-        }
+impl Display for EscrowError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::Paused => "escrow is paused",
+            Self::InvalidAmount => "invalid escrow amount",
+            Self::EscrowNotFound => "escrow not found",
+            Self::PayerMismatch => "payer mismatch",
+            Self::EscrowExists => "escrow already exists",
+            Self::UninitializedAdmin => "escrow admin not initialized",
+            Self::UninitializedAcBuToken => "escrow token not initialized",
+            Self::AlreadyInitialized => "escrow already initialized",
+            Self::TimelockNotElapsed => "timelock has not elapsed",
+            Self::NoPendingUpgrade => "no pending upgrade",
+            Self::Unauthorized => "unauthorized",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::InsufficientBalance => "insufficient contract balance",
+            Self::Expired => "escrow has expired",
+            Self::SelfEscrow => "payee cannot be the same as payer",
+            Self::Unknown => "unknown escrow error",
+        };
+        f.write_str(message)
     }
 }
 
@@ -86,8 +92,7 @@ const MAX_ESCROW_LIFETIME: u64 = 30 * 86_400; // 30 days
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EscrowId(pub Address, pub u64);
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct EscrowCreatedEvent {
     pub escrow_id: u64,
     pub payer: Address,
@@ -96,8 +101,7 @@ pub struct EscrowCreatedEvent {
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct EscrowReleasedEvent {
     pub escrow_id: u64,
     pub payee: Address,
@@ -105,8 +109,7 @@ pub struct EscrowReleasedEvent {
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct EscrowRefundedEvent {
     pub escrow_id: u64,
     pub payer: Address,
@@ -129,8 +132,8 @@ impl Escrow {
     }
 
     /// Current admin address.
-    pub fn get_admin(env: Env) -> Result<Address, EscrowError> {
-        Self::load_admin(&env)
+    pub fn get_admin(env: Env) -> Address {
+        Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e))
     }
 
     fn get_acbu_token(env: &Env) -> Result<Address, EscrowError> {
@@ -164,14 +167,12 @@ impl Escrow {
         env: Env,
         payer: Address,
         escrow_id: u64,
-    ) -> Result<(Address, Address, i128), EscrowError> {
+    ) -> (Address, Address, i128) {
         let key = EscrowId(payer, escrow_id);
-        let (stored_payer, payee, amount): (Address, Address, i128) = env
-            .storage()
+        env.storage()
             .temporary()
             .get(&key)
-            .ok_or(EscrowError::EscrowNotFound)?;
-        Ok((stored_payer, payee, amount))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::EscrowNotFound))
     }
 
     /// Create escrow: payer deposits ACBU, payee can claim after release
@@ -182,7 +183,7 @@ impl Escrow {
         payee: Address,
         amount: i128,
         escrow_id: u64,
-    ) -> Result<(), EscrowError> {
+    ) {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
@@ -192,19 +193,23 @@ impl Escrow {
             .get(&DATA_KEY.paused)
             .unwrap_or(false);
         if paused {
-            return Err(EscrowError::Paused);
+            env.panic_with_error(EscrowError::Paused);
         }
         if amount < MIN_ESCROW_AMOUNT {
-            return Err(EscrowError::InvalidAmount);
+            env.panic_with_error(EscrowError::InvalidAmount);
+        }
+        if payer == payee {
+            env.panic_with_error(EscrowError::SelfEscrow);
         }
         payer.require_auth();
+        payee.require_auth();
         let key = EscrowId(payer.clone(), escrow_id);
 
         if env.storage().temporary().has(&key) {
-            return Err(EscrowError::EscrowExists);
+            env.panic_with_error(EscrowError::EscrowExists);
         }
 
-        let acbu = Self::get_acbu_token(&env)?;
+        let acbu = Self::get_acbu_token(&env).unwrap_or_else(|e| env.panic_with_error(e));
         let client = soroban_sdk::token::Client::new(&env, &acbu);
 
         let expiry = env.ledger().timestamp() + MAX_ESCROW_LIFETIME;
@@ -234,15 +239,11 @@ impl Escrow {
 
         // Release re-entrancy guard
         reentrancy_guard::release_guard(&env);
-
-        Ok(())
     }
 
     /// Release escrow: payee receives ACBU.
     /// Only the payer or admin can authorize the release.
-
-
-    pub fn release(env: Env, escrow_id: u64, payer: Address) -> Result<(), EscrowError> {
+    pub fn release(env: Env, escrow_id: u64, payer: Address) {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
@@ -252,9 +253,9 @@ impl Escrow {
             .get(&DATA_KEY.paused)
             .unwrap_or(false);
         if paused {
-            return Err(EscrowError::Paused);
+            env.panic_with_error(EscrowError::Paused);
         }
-        let admin = Self::load_admin(&env)?;
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         if payer == admin {
             admin.require_auth();
         } else {
@@ -265,14 +266,14 @@ impl Escrow {
             .storage()
             .temporary()
             .get(&key)
-            .ok_or(EscrowError::EscrowNotFound)?;
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::EscrowNotFound));
         if stored_payer != payer {
-            return Err(EscrowError::PayerMismatch);
+            env.panic_with_error(EscrowError::PayerMismatch);
         }
         if env.ledger().timestamp() > expiry {
-            return Err(EscrowError::Expired);
+            env.panic_with_error(EscrowError::Expired);
         }
-        let acbu = Self::get_acbu_token(&env)?;
+        let acbu = Self::get_acbu_token(&env).unwrap_or_else(|e| env.panic_with_error(e));
         let client = soroban_sdk::token::Client::new(&env, &acbu);
         env.storage().temporary().remove(&key);
         client.transfer(&env.current_contract_address(), &payee, &amount);
@@ -288,16 +289,14 @@ impl Escrow {
 
         // Release re-entrancy guard
         reentrancy_guard::release_guard(&env);
-
-        Ok(())
     }
     /// Refund escrow: payer gets ACBU back (admin or dispute resolution, or payer after expiry)
     /// key is same as release since it identifies which escrow to refund
-    pub fn refund(env: Env, escrow_id: u64, payer: Address) -> Result<(), EscrowError> {
+    pub fn refund(env: Env, escrow_id: u64, payer: Address) {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
-        let admin = Self::load_admin(&env)?;
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
 
         let key = EscrowId(payer.clone(), escrow_id);
@@ -305,27 +304,27 @@ impl Escrow {
             .storage()
             .temporary()
             .get(&key)
-            .ok_or(EscrowError::EscrowNotFound)?;
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::EscrowNotFound));
 
         if stored_payer != payer {
-            return Err(EscrowError::PayerMismatch);
+            env.panic_with_error(EscrowError::PayerMismatch);
         }
 
-        let admin = Self::load_admin(&env)?;
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         if env.ledger().timestamp() > expiry {
             payer.require_auth();
         } else {
             admin.require_auth();
         }
 
-        let acbu = Self::get_acbu_token(&env)?;
+        let acbu = Self::get_acbu_token(&env).unwrap_or_else(|e| env.panic_with_error(e));
         let client = soroban_sdk::token::Client::new(&env, &acbu);
 
         // Validate contract balance before mutating storage.
         // Ensures balance state is sound and prevents premature state update if the transfer would fail.
         let balance = client.balance(&env.current_contract_address());
         if balance < amount {
-            return Err(EscrowError::InsufficientBalance);
+            env.panic_with_error(EscrowError::InsufficientBalance);
         }
 
         // CEI: remove the escrow record before the external transfer so the
@@ -346,31 +345,26 @@ impl Escrow {
 
         // Release re-entrancy guard
         reentrancy_guard::release_guard(&env);
-
-        Ok(())
     }
 
-    pub fn pause(env: Env) -> Result<(), EscrowError> {
-        let admin = Self::load_admin(&env)?;
+    pub fn pause(env: Env) {
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &true);
-        Ok(())
     }
 
-    pub fn unpause(env: Env) -> Result<(), EscrowError> {
-        let admin = Self::load_admin(&env)?;
+    pub fn unpause(env: Env) {
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &false);
-        Ok(())
     }
 
-    pub fn update_acbu_token(env: Env, new_acbu_token: Address) -> Result<(), EscrowError> {
-        let admin = Self::load_admin(&env)?;
+    pub fn update_acbu_token(env: Env, new_acbu_token: Address) {
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         env.storage()
             .instance()
             .set(&DATA_KEY.acbu_token, &new_acbu_token);
-        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -383,8 +377,8 @@ impl Escrow {
     // -----------------------------------------------------------------------
 
     /// Step 1 — current admin nominates `new_admin` and starts the timelock.
-    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), EscrowError> {
-        let admin = Self::load_admin(&env)?;
+    pub fn transfer_admin(env: Env, new_admin: Address) {
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         let eligible_at = env.ledger().timestamp() + ADMIN_TIMELOCK_SECONDS;
         env.storage()
@@ -397,16 +391,15 @@ impl Escrow {
             (symbol_short!("adm_init"),),
             (admin, new_admin, eligible_at),
         );
-        Ok(())
     }
 
     /// Step 2 — the nominated address claims ownership after the timelock.
-    pub fn accept_admin(env: Env) -> Result<(), EscrowError> {
+    pub fn accept_admin(env: Env) {
         let pending_admin: Address = env
             .storage()
             .instance()
             .get(&DATA_KEY.pending_admin)
-            .ok_or(EscrowError::NoPendingAdmin)?;
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::NoPendingAdmin));
         pending_admin.require_auth();
 
         let eligible_at: u64 = env
@@ -415,10 +408,10 @@ impl Escrow {
             .get(&DATA_KEY.pending_admin_eligible_at)
             .unwrap_or(u64::MAX);
         if env.ledger().timestamp() < eligible_at {
-            return Err(EscrowError::AdminTimelockNotElapsed);
+            env.panic_with_error(EscrowError::AdminTimelockNotElapsed);
         }
 
-        let old_admin = Self::load_admin(&env)?;
+        let old_admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         env.storage().instance().set(&DATA_KEY.admin, &pending_admin);
         env.storage().instance().remove(&DATA_KEY.pending_admin);
         env.storage()
@@ -429,18 +422,17 @@ impl Escrow {
             (symbol_short!("adm_done"),),
             (old_admin, pending_admin, env.ledger().timestamp()),
         );
-        Ok(())
     }
 
     /// Cancel a pending transfer (current admin only).
-    pub fn cancel_admin_transfer(env: Env) -> Result<(), EscrowError> {
-        let admin = Self::load_admin(&env)?;
+    pub fn cancel_admin_transfer(env: Env) {
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         let pending_admin: Address = env
             .storage()
             .instance()
             .get(&DATA_KEY.pending_admin)
-            .ok_or(EscrowError::NoPendingAdminToCancel)?;
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::NoPendingAdminToCancel));
         env.storage().instance().remove(&DATA_KEY.pending_admin);
         env.storage()
             .instance()
@@ -449,7 +441,6 @@ impl Escrow {
             (symbol_short!("adm_cncl"),),
             (admin, pending_admin, env.ledger().timestamp()),
         );
-        Ok(())
     }
 
     /// Pending successor, if a transfer is in progress.
@@ -492,8 +483,8 @@ impl Escrow {
         }
     }
 
-    pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), EscrowError> {
-        let admin = Self::load_admin(&env)?;
+    pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         let eligible_at = env.ledger().timestamp() + UPGRADE_TIMELOCK_SECONDS;
         env.storage()
@@ -502,42 +493,41 @@ impl Escrow {
         env.storage()
             .instance()
             .set(&DATA_KEY.pending_upgrade_eligible_at, &eligible_at);
-        Ok(())
     }
 
-    pub fn execute_upgrade(env: Env) -> Result<(), EscrowError> {
-        let admin = Self::load_admin(&env)?;
+    pub fn execute_upgrade(env: Env) {
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         let wasm_hash: BytesN<32> = env
             .storage()
             .instance()
             .get(&DATA_KEY.pending_upgrade)
-            .ok_or(EscrowError::NoPendingUpgrade)?;
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::NoPendingUpgrade));
         let eligible_at: u64 = env
             .storage()
             .instance()
             .get(&DATA_KEY.pending_upgrade_eligible_at)
             .unwrap_or(u64::MAX);
         if env.ledger().timestamp() < eligible_at {
-            return Err(EscrowError::TimelockNotElapsed);
+            env.panic_with_error(EscrowError::TimelockNotElapsed);
         }
         env.storage().instance().remove(&DATA_KEY.pending_upgrade);
         env.storage()
             .instance()
             .remove(&DATA_KEY.pending_upgrade_eligible_at);
         env.deployer().update_current_contract_wasm(wasm_hash);
-        Ok(())
     }
 
-    pub fn cancel_upgrade(env: Env) -> Result<(), EscrowError> {
-        let admin = Self::load_admin(&env)?;
+    pub fn cancel_upgrade(env: Env) {
+        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
         env.storage().instance().remove(&DATA_KEY.pending_upgrade);
         env.storage()
             .instance()
             .remove(&DATA_KEY.pending_upgrade_eligible_at);
-        Ok(())
     }
 }
+
+#[cfg(test)]
 
 

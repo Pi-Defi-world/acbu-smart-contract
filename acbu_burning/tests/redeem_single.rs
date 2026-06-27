@@ -70,7 +70,6 @@ fn test_redeem_single_fee_calculation() {
         .redeem_single(&ctx.user, &recipient, &burn_amount, &currency);
 
     // Verify fee: 2% of 100 * DECIMALS = 2 * DECIMALS
-    let _expected_fee = 2 * DECIMALS;
     let expected_out = 98 * DECIMALS;
     assert_eq!(out, expected_out);
     assert_eq!(stoken_client.balance(&recipient), expected_out);

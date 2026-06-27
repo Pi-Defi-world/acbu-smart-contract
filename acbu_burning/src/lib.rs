@@ -5,8 +5,8 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_fee, BurnEvent, ContractError, CurrencyCode, DataKey as SharedDataKey,
-    reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MIN_BURN_AMOUNT,
+    calculate_fee, reentrancy_guard, BurnEvent, ContractError, CurrencyCode,
+    DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MIN_BURN_AMOUNT,
     ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_CURRENCIES,
     ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT,
     TOKEN_GET_TOTAL_SUPPLY, UPDATE_INTERVAL_SECONDS,
@@ -42,6 +42,14 @@ const DATA_KEY: DataKey = DataKey {
     pending_admin: symbol_short!("PEND_ADM"),
     pending_admin_eligible_at: symbol_short!("PEND_ETA"),
 };
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeRateUpdatedEvent {
+    pub old_fee_rate_bps: i128,
+    pub new_fee_rate_bps: i128,
+    pub timestamp: u64,
+}
 
 contractmeta!(key = "version", val = "1");
 
@@ -230,7 +238,8 @@ impl BurningContract {
         user.require_auth();
 
         if recipients.is_empty() {
-            env.panic_with_error(ContractError::InvalidRecipient);
+            reentrancy_guard::release_guard(&env);
+            return Vec::new(&env);
         }
 
         // C-057: Enforce all recipient addresses are distinct.
@@ -445,9 +454,21 @@ impl BurningContract {
         if !(0..=BASIS_POINTS).contains(&fee_rate_bps) {
             env.panic_with_error(ContractError::InvalidRate);
         }
+        let old_fee_rate: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.fee_rate)
+            .unwrap_or(0);
         env.storage()
             .instance()
             .set(&DATA_KEY.fee_rate, &fee_rate_bps);
+        let event = FeeRateUpdatedEvent {
+            old_fee_rate_bps: old_fee_rate,
+            new_fee_rate_bps: fee_rate_bps,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events()
+            .publish((symbol_short!("fee_upd"),), event);
     }
 
     pub fn set_fee_single_redeem(env: Env, fee_bps: i128) {
@@ -456,9 +477,21 @@ impl BurningContract {
         if !(0..=BASIS_POINTS).contains(&fee_bps) {
             env.panic_with_error(ContractError::InvalidRate);
         }
+        let old_fee_single: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.fee_single_redeem)
+            .unwrap_or(0);
         env.storage()
             .instance()
             .set(&DATA_KEY.fee_single_redeem, &fee_bps);
+        let event = FeeRateUpdatedEvent {
+            old_fee_rate_bps: old_fee_single,
+            new_fee_rate_bps: fee_bps,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events()
+            .publish((symbol_short!("fee_sgl"),), event);
     }
 
     pub fn get_fee_rate(env: Env) -> i128 {
@@ -504,7 +537,6 @@ impl BurningContract {
         Self::check_admin(&env);
         env.storage().instance().set(&DATA_KEY.vault, &new_vault);
     }
-
 
     // -----------------------------------------------------------------------
     // Two-step admin rotation

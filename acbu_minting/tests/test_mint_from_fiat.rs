@@ -11,8 +11,10 @@ use soroban_sdk::{
 // --- Mocks (reuse from test.rs) ---
 
 mod oracle_mock {
-    use super::*;
+    use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
+
     use shared::CurrencyCode;
+    use super::DECIMALS;
 
     #[contract]
     pub struct MockOracle;
@@ -59,7 +61,7 @@ mod oracle_mock {
 }
 
 mod reserve_mock {
-    use super::*;
+    use soroban_sdk::{contract, contractimpl, Env};
 
     #[contract]
     pub struct MockReserveTracker;
@@ -124,17 +126,19 @@ fn init_mint_client(
     fee_rate: i128,
     fee_single: i128,
 ) {
-    client.initialize(
-        admin,
-        oracle,
-        reserve_tracker,
-        acbu_token,
-        usdc_token,
-        vault,
-        treasury,
-        &fee_rate,
-        &fee_single,
-    );
+    let config = acbu_minting::MintingConfig {
+        admin: admin.clone(),
+        oracle: oracle.clone(),
+        reserve_tracker: reserve_tracker.clone(),
+        acbu_token: acbu_token.clone(),
+        usdc_token: usdc_token.clone(),
+        vault: vault.clone(),
+        treasury: treasury.clone(),
+        fee_rate_bps: fee_rate,
+        fee_single_bps: fee_single,
+        operator: admin.clone(),
+    };
+    client.initialize(&config);
 }
 
 // --- Tests for mint_from_fiat: Access Control and Validation ---

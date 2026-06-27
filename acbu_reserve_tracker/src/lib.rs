@@ -1,4 +1,5 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Map, Symbol, Vec,
@@ -23,18 +24,19 @@ pub enum ReserveTrackerError {
     Unknown = 8999,
 }
 
-impl core::fmt::Display for ReserveTrackerError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            ReserveTrackerError::AlreadyInitialized => write!(f, "already initialized"),
-            ReserveTrackerError::InvalidVersion => write!(f, "invalid version"),
-            ReserveTrackerError::ZeroSupply => write!(f, "zero supply"),
-            ReserveTrackerError::NoPendingAdmin => write!(f, "no pending admin"),
-            ReserveTrackerError::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
-            ReserveTrackerError::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
-            ReserveTrackerError::Unauthorized => write!(f, "unauthorized"),
-            ReserveTrackerError::Unknown => write!(f, "unknown error"),
-        }
+impl Display for ReserveTrackerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::AlreadyInitialized => "reserve tracker already initialized",
+            Self::InvalidVersion => "invalid contract version",
+            Self::ZeroSupply => "zero supply",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::Unauthorized => "unauthorized",
+            Self::Unknown => "unknown reserve tracker error",
+        };
+        f.write_str(message)
     }
 }
 
@@ -238,7 +240,6 @@ impl ReserveTrackerContract {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
 
         // Run migrations
-        #[allow(clippy::single_match)]
         for v in current_version..new_version {
             match v {
                 0 => migrate_v0_to_v1(env.clone()),
@@ -391,5 +392,5 @@ impl ReserveTrackerContract {
 }
 
 fn migrate_v0_to_v1(_env: Env) {
-    // Migration logic
+    // No storage schema changes between v0 and v1.
 }
