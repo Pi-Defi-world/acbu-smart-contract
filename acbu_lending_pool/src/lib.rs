@@ -64,6 +64,18 @@ pub struct LoanData {
     pub status: LoanStatus,
 }
 
+/// Emitted when a lender deposits liquidity into the pool.
+///
+/// The `lender` address is carried in the event **payload** (not only the
+/// topic) so off-chain indexers can attribute a deposit to a specific user
+/// without having to parse the originating transaction envelope. See #369.
+#[contractevent]
+pub struct DepositEvent {
+    pub lender: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+}
+
 #[contractevent]
 pub struct BorrowEvent {
     pub creator: Address,
@@ -217,8 +229,14 @@ impl LendingPool {
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
         token.transfer(&lender, &env.current_contract_address(), &amount);
 
-        env.events()
-            .publish((symbol_short!("deposit"), lender), amount);
+        env.events().publish(
+            (symbol_short!("deposit"), lender.clone()),
+            DepositEvent {
+                lender,
+                amount,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         // Release re-entrancy guard
         reentrancy_guard::release_guard(&env);
