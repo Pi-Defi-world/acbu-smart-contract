@@ -3,7 +3,7 @@
 SHELL := /bin/bash
 MAKEFLAGS += --silent
 
-.PHONY: help build build-minting test test-minting deploy-testnet deploy-mainnet setup-hooks validate-snapshots clean-snapshots
+.PHONY: help build build-minting test test-minting deploy-testnet deploy-mainnet setup-hooks validate-snapshots clean-snapshots docs-error-codes check-error-codes
 
 help:
 	@printf "Usage:\n"
@@ -16,6 +16,8 @@ help:
 	@printf "  make test-minting       Run tests for the acbu_minting contract\n"
 	@printf "  make validate-snapshots Validate test snapshots for staleness\n"
 	@printf "  make clean-snapshots    Delete all test snapshots (use before regeneration)\n"
+	@printf "  make docs-error-codes   Regenerate docs/ERROR_CODES.md from source\n"
+	@printf "  make check-error-codes  Verify docs/ERROR_CODES.md matches source\n"
 
 build:
 	@printf "Building all contracts...\n"
@@ -61,3 +63,11 @@ clean-snapshots:
 	@printf "Cleaning test snapshots...\n"
 	rm -rf acbu_minting/test_snapshots/*.json
 	@printf "Snapshots cleaned. Regenerate by running: make test-minting\n"
+
+docs-error-codes:
+	@printf "Regenerating docs/ERROR_CODES.md...\n"
+	python scripts/generate_error_codes.py
+
+check-error-codes:
+	@printf "Checking docs/ERROR_CODES.md against source...\n"
+	python scripts/generate_error_codes.py --check
