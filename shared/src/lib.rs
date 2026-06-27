@@ -223,6 +223,29 @@ pub enum ContractError {
     Unknown = 9999,
 }
 
+impl core::fmt::Display for ContractError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ContractError::Unauthorized => write!(f, "unauthorized"),
+            ContractError::Paused => write!(f, "contract is paused"),
+            ContractError::InvalidAmount => write!(f, "invalid amount"),
+            ContractError::InvalidRate => write!(f, "invalid rate"),
+            ContractError::InsufficientReserves => write!(f, "insufficient reserves"),
+            ContractError::RateLimitExceeded => write!(f, "rate limit exceeded"),
+            ContractError::InvalidCurrency => write!(f, "invalid currency"),
+            ContractError::OracleError => write!(f, "oracle error"),
+            ContractError::ReserveError => write!(f, "reserve error"),
+            ContractError::InsufficientBalance => write!(f, "insufficient balance"),
+            ContractError::InvalidRecipient => write!(f, "invalid recipient"),
+            ContractError::InvalidVersion => write!(f, "invalid version"),
+            ContractError::NoPendingAdmin => write!(f, "no pending admin"),
+            ContractError::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
+            ContractError::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
+            ContractError::Unknown => write!(f, "unknown error"),
+        }
+    }
+}
+
 /// Cross-contract method name constants — prevents silent logic splits from typos
 /// when the same string is used in multiple contracts to call shared interfaces.
 pub const ORACLE_GET_ACBU_RATE: &str = "get_acbu_usd_rate";
