@@ -1,16 +1,26 @@
 #![no_std]
+use core::fmt::{self, Display};
+use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env,
-    IntoVal, String as SorobanString, Symbol,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, vec, Address,
+    Bytes, BytesN, Env, IntoVal, String as SorobanString, Symbol,
 };
 
 use shared::{
     calculate_amount_after_fee, calculate_fee, CurrencyCode, DataKey as SharedDataKey, MintEvent,
-    BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MAX_MINT_AMOUNT, MIN_MINT_AMOUNT,
-    UPDATE_INTERVAL_SECONDS,
-    ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_RATE_WITH_TS, ORACLE_GET_CURRENCIES,
-    ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_RATE, ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT,
+    reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MAX_MINT_AMOUNT, MAX_TOTAL_SUPPLY,
+    MIN_MINT_AMOUNT, ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT,
+    ORACLE_GET_CURRENCIES, ORACLE_GET_RATE, ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR,
+    RESERVE_IS_SUFFICIENT, UPDATE_INTERVAL_SECONDS,
 };
+
+#[allow(dead_code)]
+pub mod token_contract {
+    soroban_sdk::contractimport!(
+        file = "../soroban_token_contract.wasm",
+        sha256 = "fff46d90821401584414ee6afc5ef36d99e95ef7e37d8652ad3e6c4a4e099dc0"
+    );
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,6 +30,9 @@ pub struct SettlementProof {
     pub timestamp: u64,
 }
 
+/// Centralised storage key registry — all instance/persistent keys for this contract are
+/// declared here so accidental key reuse or silent string-literal collisions can be caught
+/// by reviewing a single place.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataKey {
@@ -39,8 +52,13 @@ pub struct DataKey {
     pub operator: Symbol,
     pub used_proofs: Symbol,
     pub processed_fintech_tx_ids: Symbol,
+    pub max_supply: Symbol,
     pub pending_admin: Symbol,
     pub pending_admin_eligible_at: Symbol,
+    /// Prefix for persistent per-proof replay-prevention keys: `(proof_prefix, proof_id)`.
+    pub proof_prefix: Symbol,
+    /// Monotonically increasing nonce used to generate unique transaction IDs.
+    pub tx_nonce: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -60,8 +78,11 @@ const DATA_KEY: DataKey = DataKey {
     operator: symbol_short!("OPERATOR"),
     used_proofs: symbol_short!("PROOFS"),
     processed_fintech_tx_ids: symbol_short!("FTX_IDS"),
+    max_supply: symbol_short!("MAX_SUP"),
     pending_admin: symbol_short!("PEND_ADM"),
-    pending_admin_eligible_at: symbol_short!("PEND_ETA"),
+    pending_admin_eligible_at: symbol_short!("PA_ETA"),
+    proof_prefix: symbol_short!("PRF_SET"),
+    tx_nonce: symbol_short!("TX_NONCE"),
 };
 
 /// Admin rotation timelock: the pending admin must wait this long before
@@ -70,6 +91,8 @@ const DATA_KEY: DataKey = DataKey {
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 
 // CONTRACT_VERSION is imported from shared
+
+contractmeta!(key = "version", val = "1");
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -93,12 +116,68 @@ pub enum MintingError {
     FintechTxIdTooLong = 5016,
     FintechTxIdInvalidChar = 5017,
     InvalidVersion = 5018,
-    /// `accept_admin`/`cancel_admin_transfer` called with no transfer pending.
-    NoPendingAdmin = 5019,
-    /// `accept_admin` called before the admin-rotation timelock elapsed.
-    AdminTimelockNotElapsed = 5020,
-    /// `cancel_admin_transfer` called with no transfer pending.
-    NoPendingAdminToCancel = 5021,
+    MaxSupplyExceeded = 5019,
+    NoPendingAdmin = 5020,
+    AdminTimelockNotElapsed = 5021,
+    NoPendingAdminToCancel = 5022,
+    InvalidRecipient = 5023,
+    InvalidRoleSeparation = 5024,
+    Unknown = 5999,
+}
+
+impl Display for MintingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::AlreadyInitialized => "minting contract already initialized",
+            Self::InvalidFeeRate => "invalid fee rate",
+            Self::InvalidMintAmount => "invalid mint amount",
+            Self::InsufficientReserves => "insufficient reserves",
+            Self::ProofAlreadyUsed => "proof already used",
+            Self::InvalidOracleRate => "invalid oracle rate",
+            Self::UnauthorizedOperator => "unauthorized operator",
+            Self::DuplicateFintechTxId => "duplicate fintech transaction id",
+            Self::InvalidDripAmount => "invalid drip amount",
+            Self::DripExceedsCap => "drip exceeds cap",
+            Self::InsufficientDemoCustody => "insufficient demo custody",
+            Self::Paused => "minting contract is paused",
+            Self::OracleStale => "oracle rate is stale",
+            Self::FintechTxIdEmpty => "fintech transaction id is empty",
+            Self::FintechTxIdTooShort => "fintech transaction id is too short",
+            Self::FintechTxIdTooLong => "fintech transaction id is too long",
+            Self::FintechTxIdInvalidChar => "fintech transaction id contains invalid characters",
+            Self::InvalidVersion => "invalid contract version",
+            Self::MaxSupplyExceeded => "maximum supply exceeded",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::InvalidRecipient => "invalid recipient",
+            Self::Unknown => "unknown minting error",
+        };
+        f.write_str(message)
+    }
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MintingConfig {
+    pub admin: Address,
+    pub oracle: Address,
+    pub reserve_tracker: Address,
+    pub acbu_token: Address,
+    pub usdc_token: Address,
+    pub vault: Address,
+    pub treasury: Address,
+    pub fee_rate_bps: i128,
+    pub fee_single_bps: i128,
+    pub operator: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeRateUpdatedEvent {
+    pub old_fee_rate_bps: i128,
+    pub new_fee_rate_bps: i128,
+    pub timestamp: u64,
 }
 
 #[contract]
@@ -108,50 +187,41 @@ pub struct MintingContract;
 impl MintingContract {
     /// Initialize the minting contract.
     /// `fee_rate_bps` applies to basket and USDC paths; `fee_single_bps` to single S-token deposits (typically higher).
-    // Soroban initialize functions are idiomatic with many parameters; a config-struct
-    // refactor is a separate concern.
-    #[allow(clippy::too_many_arguments)]
-    pub fn initialize(
-        env: Env,
-        admin: Address,
-        oracle: Address,
-        reserve_tracker: Address,
-        acbu_token: Address,
-        usdc_token: Address,
-        vault: Address,
-        treasury: Address,
-        fee_rate_bps: i128,
-        fee_single_bps: i128,
-    ) {
+    pub fn initialize(env: Env, config: MintingConfig) {
         if env.storage().instance().has(&DATA_KEY.admin) {
             env.panic_with_error(MintingError::AlreadyInitialized);
         }
 
-        if !(0..=BASIS_POINTS).contains(&fee_rate_bps)
-            || !(0..=BASIS_POINTS).contains(&fee_single_bps)
+        if config.admin == config.operator {
+            env.panic_with_error(MintingError::InvalidRoleSeparation);
+        }
+
+        if !(0..=BASIS_POINTS).contains(&config.fee_rate_bps)
+            || !(0..=BASIS_POINTS).contains(&config.fee_single_bps)
         {
             env.panic_with_error(MintingError::InvalidFeeRate);
         }
 
-        env.storage().instance().set(&DATA_KEY.admin, &admin);
-        env.storage().instance().set(&DATA_KEY.oracle, &oracle);
+        env.storage().instance().set(&DATA_KEY.admin, &config.admin);
+        env.storage().instance().set(&DATA_KEY.oracle, &config.oracle);
         env.storage()
             .instance()
-            .set(&DATA_KEY.reserve_tracker, &reserve_tracker);
+            .set(&DATA_KEY.reserve_tracker, &config.reserve_tracker);
         env.storage()
             .instance()
-            .set(&DATA_KEY.acbu_token, &acbu_token);
+            .set(&DATA_KEY.acbu_token, &config.acbu_token);
         env.storage()
             .instance()
-            .set(&DATA_KEY.usdc_token, &usdc_token);
-        env.storage().instance().set(&DATA_KEY.vault, &vault);
-        env.storage().instance().set(&DATA_KEY.treasury, &treasury);
+            .set(&DATA_KEY.usdc_token, &config.usdc_token);
+        env.storage().instance().set(&DATA_KEY.vault, &config.vault);
+        env.storage().instance().set(&DATA_KEY.treasury, &config.treasury);
         env.storage()
             .instance()
-            .set(&DATA_KEY.fee_rate, &fee_rate_bps);
+            .set(&DATA_KEY.fee_rate, &config.fee_rate_bps);
         env.storage()
             .instance()
-            .set(&DATA_KEY.fee_single, &fee_single_bps);
+            .set(&DATA_KEY.fee_single, &config.fee_single_bps);
+        env.storage().instance().set(&DATA_KEY.operator, &config.operator);
         env.storage().instance().set(&DATA_KEY.paused, &false);
         env.storage()
             .instance()
@@ -162,16 +232,22 @@ impl MintingContract {
         env.storage().instance().set(&DATA_KEY.total_supply, &0i128);
         env.storage()
             .instance()
+            .set(&DATA_KEY.max_supply, &MAX_TOTAL_SUPPLY);
+        env.storage()
+            .instance()
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
     /// Mint ACBU from USDC deposit (unchanged reserve/oracle flow).
     pub fn mint_from_usdc(env: Env, user: Address, usdc_amount: i128, recipient: Address) -> i128 {
+        // Re-entrancy guard
+        reentrancy_guard::acquire_guard(&env);
+
         Self::check_paused(&env);
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        Self::assert_recipient_is_account(&recipient);
+        assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -215,11 +291,12 @@ impl MintingContract {
         let acbu_amount = usdc_after_fee
             .checked_mul(DECIMALS)
             .and_then(|v| v.checked_div(acbu_rate))
-            .expect("Overflow in acbu amount calculation");
+            .unwrap_or_else(|| env.panic_with_error(MintingError::InvalidMintAmount));
 
         let projected_supply = total_supply
             .checked_add(acbu_amount)
             .expect("Overflow in projected supply calculation");
+        Self::check_supply_cap(&env, projected_supply);
         let reserve_ok: bool = env.invoke_contract(
             &reserve_tracker_addr,
             &Symbol::new(&env, RESERVE_IS_SUFFICIENT),
@@ -259,6 +336,9 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
+        // Release re-entrancy guard
+        reentrancy_guard::release_guard(&env);
+
         acbu_amount
     }
 
@@ -271,11 +351,14 @@ impl MintingContract {
         acbu_amount: i128,
         proof_id: SorobanString,
     ) -> i128 {
+        // Re-entrancy guard
+        reentrancy_guard::acquire_guard(&env);
+
         Self::check_paused(&env);
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        Self::assert_recipient_is_account(&recipient);
+        assert_recipient_is_account(&recipient);
 
         if !check_proof_unused(&env, &proof_id) {
             env.panic_with_error(MintingError::ProofAlreadyUsed);
@@ -326,6 +409,7 @@ impl MintingContract {
         let projected_supply = total_supply
             .checked_add(acbu_amount)
             .expect("Overflow in projected supply calculation");
+        Self::check_supply_cap(&env, projected_supply);
 
         let reserve_ok: bool = env.invoke_contract(
             &reserve_tracker_addr,
@@ -341,11 +425,20 @@ impl MintingContract {
             &Symbol::new(&env, ORACLE_GET_CURRENCIES),
             vec![&env],
         );
+        if currencies.len() > 10 {
+            env.panic_with_error(MintingError::InvalidRecipient);
+        }
 
         let usd_total: i128 = acbu_amount
             .checked_mul(acbu_rate)
             .and_then(|v| v.checked_div(DECIMALS))
             .expect("Overflow in usd total calculation");
+
+        // CEI: Update state before external calls
+        total_supply += acbu_amount;
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.total_supply, &total_supply);
 
         for currency in currencies.iter() {
             let weight: i128 = env.invoke_contract(
@@ -391,11 +484,6 @@ impl MintingContract {
             }
         }
 
-        total_supply += acbu_amount;
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.total_supply, &total_supply);
-
         // C-038: `StellarAssetClient::mint` requires this contract to be the
         // issuer or an authorized minter on the ACBU Stellar Asset Contract.
         // The Soroban auth tree for this call is: admin/issuer → minting_contract.
@@ -419,6 +507,9 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
+        // Release re-entrancy guard
+        reentrancy_guard::release_guard(&env);
+
         acbu_amount
     }
 
@@ -432,11 +523,14 @@ impl MintingContract {
         currency: CurrencyCode,
         s_token_amount: i128,
     ) -> i128 {
+        // Re-entrancy guard
+        reentrancy_guard::acquire_guard(&env);
+
         Self::check_paused(&env);
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        Self::assert_recipient_is_account(&recipient);
+        assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -506,6 +600,7 @@ impl MintingContract {
         let projected_supply = total_supply
             .checked_add(acbu_amount)
             .expect("Overflow in projected supply calculation");
+        Self::check_supply_cap(&env, projected_supply);
         let reserve_ok: bool = env.invoke_contract(
             &reserve_tracker_addr,
             &Symbol::new(&env, RESERVE_IS_SUFFICIENT),
@@ -515,13 +610,14 @@ impl MintingContract {
             env.panic_with_error(MintingError::InsufficientReserves);
         }
 
-        let token = soroban_sdk::token::Client::new(&env, &expected_stoken);
-        token.transfer(&user, &vault, &s_token_amount);
-
+        // CEI: Update state before external calls
         total_supply += acbu_amount;
         env.storage()
             .instance()
             .set(&DATA_KEY.total_supply, &total_supply);
+
+        let token = soroban_sdk::token::Client::new(&env, &expected_stoken);
+        token.transfer(&user, &vault, &s_token_amount);
 
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &acbu_amount);
@@ -540,6 +636,9 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
+        // Release re-entrancy guard
+        reentrancy_guard::release_guard(&env);
+
         acbu_amount
     }
 
@@ -554,6 +653,9 @@ impl MintingContract {
         fiat_amount: i128,
         proof_id: SorobanString,
     ) -> i128 {
+        // Re-entrancy guard
+        reentrancy_guard::acquire_guard(&env);
+
         Self::check_paused(&env);
         let expected_operator: Address = Self::get_operator(env.clone());
         if operator != expected_operator {
@@ -632,6 +734,7 @@ impl MintingContract {
         let projected_supply = total_supply
             .checked_add(acbu_amount)
             .expect("Overflow in projected supply calculation");
+        Self::check_supply_cap(&env, projected_supply);
         let reserve_ok: bool = env.invoke_contract(
             &reserve_tracker_addr,
             &Symbol::new(&env, RESERVE_IS_SUFFICIENT),
@@ -641,21 +744,23 @@ impl MintingContract {
             env.panic_with_error(MintingError::InsufficientReserves);
         }
 
-        let custody = env.current_contract_address();
-        let token = soroban_sdk::token::Client::new(&env, &expected_stoken);
-        token.transfer(&custody, &vault, &fiat_amount);
-
+        // CEI: Update state before external calls
         total_supply += acbu_amount;
         env.storage()
             .instance()
             .set(&DATA_KEY.total_supply, &total_supply);
 
+        let custody = env.current_contract_address();
+        let token = soroban_sdk::token::Client::new(&env, &expected_stoken);
+        token.transfer(&custody, &vault, &fiat_amount);
+
         let acbu_sac = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
         acbu_sac.mint(&recipient, &acbu_amount);
 
         let fee = calculate_fee(usd_gross, fee_single);
+        let tx_id = generate_unique_tx_id(&env, &recipient, acbu_amount, "mint_demo");
         let mint_event = MintEvent {
-            transaction_id: SorobanString::from_str(&env, "mint_demo_fiat"),
+            transaction_id: tx_id,
             user: recipient.clone(),
             usdc_amount: usd_gross,
             acbu_amount,
@@ -668,6 +773,9 @@ impl MintingContract {
 
         // Seal the proof so it cannot be replayed (fixes the check_proof_unused guard above).
         mark_proof_used(&env, &proof_id);
+
+        // Release re-entrancy guard
+        reentrancy_guard::release_guard(&env);
 
         acbu_amount
     }
@@ -683,6 +791,9 @@ impl MintingContract {
         fiat_amount: i128,
         fintech_tx_id: SorobanString,
     ) -> i128 {
+        // Re-entrancy guard
+        reentrancy_guard::acquire_guard(&env);
+
         Self::check_paused(&env);
         let expected_operator: Address = Self::get_operator(env.clone());
 
@@ -695,6 +806,7 @@ impl MintingContract {
         // C-039: Strict input validation — enforce length bounds and charset
         // before touching any storage, so garbage IDs are rejected cheaply.
         validate_fintech_tx_id(&env, &fintech_tx_id);
+        let normalized_tx_id = normalize_fintech_tx_id(&env, &fintech_tx_id);
 
         // Check if fintech_tx_id has already been processed
         let mut processed_ids: soroban_sdk::Map<SorobanString, bool> = env
@@ -703,7 +815,7 @@ impl MintingContract {
             .get(&DATA_KEY.processed_fintech_tx_ids)
             .unwrap_or_else(|| soroban_sdk::map![&env]);
 
-        if processed_ids.contains_key(fintech_tx_id.clone()) {
+        if processed_ids.contains_key(normalized_tx_id.clone()) {
             env.panic_with_error(MintingError::DuplicateFintechTxId);
         }
 
@@ -772,6 +884,7 @@ impl MintingContract {
         let projected_supply = total_supply
             .checked_add(acbu_amount)
             .expect("Overflow in projected supply calculation");
+        Self::check_supply_cap(&env, projected_supply);
         let reserve_ok: bool = env.invoke_contract(
             &reserve_tracker_addr,
             &Symbol::new(&env, RESERVE_IS_SUFFICIENT),
@@ -798,13 +911,13 @@ impl MintingContract {
         }
 
         // Mark fintech_tx_id as processed to prevent duplicate minting
-        processed_ids.set(fintech_tx_id.clone(), true);
+        processed_ids.set(normalized_tx_id.clone(), true);
         env.storage()
             .instance()
             .set(&DATA_KEY.processed_fintech_tx_ids, &processed_ids);
 
         let mint_event = MintEvent {
-            transaction_id: fintech_tx_id,
+            transaction_id: normalized_tx_id,
             user: recipient.clone(),
             usdc_amount: usd_gross,
             acbu_amount,
@@ -814,6 +927,9 @@ impl MintingContract {
         };
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
+
+        // Release re-entrancy guard
+        reentrancy_guard::release_guard(&env);
 
         acbu_amount
     }
@@ -832,16 +948,33 @@ impl MintingContract {
         address == &admin
     }
 
-    /// Testnet / ops: transfer demo basket S-token from custodial balance on this contract to
+    /// Transfer a basket S-token from this contract's custodial balance to
     /// `recipient` (e.g. user faucet). Admin only; caps per call to limit abuse.
-    pub fn admin_drip_demo_fiat(
+    ///
+    /// FIX(#330): Accepts an explicit `recipient` address so the admin can seed
+    /// test user accounts in one transaction, instead of dripping to themselves
+    /// and relaying in a second call.
+    ///
+    /// FIX(#327): This is an admin-only entry point, fully isolated from
+    /// `mint_from_fiat`. It requires admin auth (not operator auth), enforces
+    /// the reentrancy guard and paused check, and does NOT mint ACBU — it only
+    /// moves pre-funded S-tokens from custody to a recipient.
+    pub fn admin_drip_fiat(
         env: Env,
         recipient: Address,
         currency: CurrencyCode,
         amount: i128,
     ) {
+        reentrancy_guard::acquire_guard(&env);
+        Self::check_paused(&env);
+
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+
+        if !Self::check_is_admin(&env, &admin) {
+            env.panic_with_error(MintingError::UnauthorizedOperator);
+        }
+
         // C-058: reject contract-type recipients to prevent stranded token transfers.
         Self::assert_recipient_is_account(&recipient);
         if amount <= 0 {
@@ -865,8 +998,12 @@ impl MintingContract {
             env.panic_with_error(MintingError::InsufficientDemoCustody);
         }
         token.transfer(&custody, &recipient, &amount);
+
+        reentrancy_guard::release_guard(&env);
     }
 
+    /// Return the operator address (the key authorized to sign day-to-day mint
+    /// requests). Falls back to the admin address if no separate operator is set.
     pub fn get_operator(env: Env) -> Address {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         env.storage()
@@ -875,24 +1012,35 @@ impl MintingContract {
             .unwrap_or(admin)
     }
 
+    /// Set the operator address (admin only). The operator must differ from the
+    /// admin to preserve role separation, otherwise it reverts with
+    /// `InvalidRoleSeparation`.
     pub fn set_operator(env: Env, new_operator: Address) {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        admin.require_auth();
-        Self::check_paused(&env);
+        Self::check_admin(&env);
+        let admin = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        if admin == new_operator {
+            env.panic_with_error(MintingError::InvalidRoleSeparation);
+        }
         env.storage()
             .instance()
             .set(&DATA_KEY.operator, &new_operator);
     }
 
+    /// Overwrite the tracked total ACBU supply with `new_supply` (admin only).
+    ///
+    /// Used to reconcile the contract's supply counter with the actual on-chain
+    /// token supply. Reverts if paused or if `new_supply` exceeds the max supply.
     pub fn sync_supply(env: Env, new_supply: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         Self::check_paused(&env);
+        Self::check_supply_cap(&env, new_supply);
         env.storage()
             .instance()
             .set(&DATA_KEY.total_supply, &new_supply);
     }
 
+    /// Return the current tracked total ACBU supply (7 decimals).
     pub fn get_total_supply(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -900,18 +1048,53 @@ impl MintingContract {
             .unwrap_or(0)
     }
 
+    /// Return the maximum ACBU supply cap (defaults to [`MAX_TOTAL_SUPPLY`]).
+    pub fn get_max_supply(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.max_supply)
+            .unwrap_or(MAX_TOTAL_SUPPLY)
+    }
+
+    /// Set the maximum ACBU supply cap (admin only). Reverts if paused.
+    pub fn set_max_supply(env: Env, new_max_supply: i128) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+        Self::check_paused(&env);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.max_supply, &new_max_supply);
+    }
+
+    fn check_supply_cap(env: &Env, projected_supply: i128) {
+        let max_supply: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.max_supply)
+            .unwrap_or(MAX_TOTAL_SUPPLY);
+        if projected_supply > max_supply {
+            env.panic_with_error(MintingError::MaxSupplyExceeded);
+        }
+    }
+
+    /// Pause the contract, disabling all minting operations (admin only).
     pub fn pause(env: Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &true);
     }
 
+    /// Unpause the contract, re-enabling minting operations (admin only).
     pub fn unpause(env: Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.paused, &false);
     }
 
+    /// Set the basket/USDC mint fee in basis points (admin only).
+    ///
+    /// Reverts if paused or `fee_rate_bps` is outside `0..=BASIS_POINTS`. Emits a
+    /// `FeeRateUpdatedEvent`.
     pub fn set_fee_rate(env: Env, fee_rate_bps: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -919,11 +1102,27 @@ impl MintingContract {
         if !(0..=BASIS_POINTS).contains(&fee_rate_bps) {
             env.panic_with_error(MintingError::InvalidFeeRate);
         }
+        let old_fee_rate: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.fee_rate)
+            .unwrap_or(0);
         env.storage()
             .instance()
             .set(&DATA_KEY.fee_rate, &fee_rate_bps);
+        let event = FeeRateUpdatedEvent {
+            old_fee_rate_bps: old_fee_rate,
+            new_fee_rate_bps: fee_rate_bps,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events()
+            .publish((symbol_short!("fee_upd"),), event);
     }
 
+    /// Set the single-currency mint fee in basis points (admin only).
+    ///
+    /// Reverts if paused or `fee_single_bps` is outside `0..=BASIS_POINTS`. Emits a
+    /// `FeeRateUpdatedEvent`.
     pub fn set_fee_single(env: Env, fee_single_bps: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -931,19 +1130,34 @@ impl MintingContract {
         if !(0..=BASIS_POINTS).contains(&fee_single_bps) {
             env.panic_with_error(MintingError::InvalidFeeRate);
         }
+        let old_fee_single: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.fee_single)
+            .unwrap_or(0);
         env.storage()
             .instance()
             .set(&DATA_KEY.fee_single, &fee_single_bps);
+        let event = FeeRateUpdatedEvent {
+            old_fee_rate_bps: old_fee_single,
+            new_fee_rate_bps: fee_single_bps,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events()
+            .publish((symbol_short!("fee_sgl"),), event);
     }
 
+    /// Return the basket/USDC mint fee in basis points.
     pub fn get_fee_rate(env: Env) -> i128 {
         env.storage().instance().get(&DATA_KEY.fee_rate).unwrap()
     }
 
+    /// Return the single-currency mint fee in basis points.
     pub fn get_fee_single(env: Env) -> i128 {
         env.storage().instance().get(&DATA_KEY.fee_single).unwrap()
     }
 
+    /// Return `true` if the contract is currently paused.
     pub fn is_paused(env: Env) -> bool {
         env.storage()
             .instance()
@@ -953,12 +1167,14 @@ impl MintingContract {
 
     // ── Dependency address updaters (admin only) ──────────────────────────
 
+    /// Update the oracle contract address (admin only).
     pub fn update_oracle(env: Env, new_oracle: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.oracle, &new_oracle);
     }
 
+    /// Update the reserve tracker contract address (admin only).
     pub fn update_reserve_tracker(env: Env, new_reserve_tracker: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -967,6 +1183,7 @@ impl MintingContract {
             .set(&DATA_KEY.reserve_tracker, &new_reserve_tracker);
     }
 
+    /// Update the ACBU token contract address (admin only).
     pub fn update_acbu_token(env: Env, new_acbu_token: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -975,12 +1192,14 @@ impl MintingContract {
             .set(&DATA_KEY.acbu_token, &new_acbu_token);
     }
 
+    /// Update the vault contract address (admin only).
     pub fn update_vault(env: Env, new_vault: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.vault, &new_vault);
     }
 
+    /// Update the treasury address that receives collected fees (admin only).
     pub fn update_treasury(env: Env, new_treasury: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -989,6 +1208,7 @@ impl MintingContract {
             .set(&DATA_KEY.treasury, &new_treasury);
     }
 
+    /// Update the USDC token contract address (admin only).
     pub fn update_usdc_token(env: Env, new_usdc_token: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -1101,6 +1321,7 @@ impl MintingContract {
         }
     }
 
+    /// Return the stored contract version (0 if never set).
     pub fn get_version(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -1108,6 +1329,11 @@ impl MintingContract {
             .unwrap_or(0)
     }
 
+    /// Upgrade the contract WASM to `new_wasm_hash` and bump the stored version to
+    /// `new_version` (admin only).
+    ///
+    /// `new_version` must be greater than the current version. Reverts if paused.
+    /// Runs any required migrations between the old and new versions.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
@@ -1121,7 +1347,6 @@ impl MintingContract {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
 
         // Run migrations — the match will gain new arms as versions are added.
-        #[allow(clippy::single_match)]
         for v in current_version..new_version {
             match v {
                 0 => migrate_v0_to_v1(env.clone()),
@@ -1147,21 +1372,54 @@ fn check_oracle_freshness(env: &Env, oracle_timestamp: u64, max_staleness_second
     }
 }
 
-fn generate_unique_tx_id(env: &Env, _user: &Address, amount: i128, _prefix: &str) -> SorobanString {
-    let timestamp = env.ledger().timestamp();
-    let seq = env.ledger().sequence() as u64;
-    let hash = (amount as u64)
-        .wrapping_mul(0x9e3779b97f4a7c15)
-        .wrapping_add(timestamp.wrapping_mul(0x6c62272e07bb0142))
-        .wrapping_add(seq);
+
+fn generate_unique_tx_id(env: &Env, user: &Address, amount: i128, prefix: &str) -> SorobanString {
+    let nonce = next_tx_nonce(env);
+    let mut preimage = Bytes::new(env);
+
+    preimage.append(&SorobanString::from_str(env, prefix).to_xdr(env));
+    preimage.append(&env.current_contract_address().to_xdr(env));
+    preimage.append(&user.to_xdr(env));
+    preimage.append(&amount.to_xdr(env));
+    preimage.append(&env.ledger().timestamp().to_xdr(env));
+    preimage.append(&env.ledger().sequence().to_xdr(env));
+    preimage.append(&nonce.to_xdr(env));
+
+    let digest = env.crypto().sha256(&preimage).to_array();
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut buf = [0u8; 16];
-    let mut h = hash;
-    for i in (0..16).rev() {
-        buf[i] = HEX[(h & 0xF) as usize];
-        h >>= 4;
+    let prefix_bytes = prefix.as_bytes();
+    let mut buf = [0u8; 80];
+    let mut offset = 0usize;
+
+    for &b in prefix_bytes.iter() {
+        buf[offset] = b;
+        offset += 1;
     }
-    SorobanString::from_str(env, core::str::from_utf8(&buf).unwrap_or("0000000000000000"))
+    buf[offset] = b'_';
+    offset += 1;
+
+    for byte in digest.iter() {
+        buf[offset] = HEX[(byte >> 4) as usize];
+        buf[offset + 1] = HEX[(byte & 0x0f) as usize];
+        offset += 2;
+    }
+
+    SorobanString::from_str(
+        env,
+        core::str::from_utf8(&buf[..offset]).unwrap_or("mint_invalid_tx_id"),
+    )
+}
+
+fn next_tx_nonce(env: &Env) -> u64 {
+    let nonce = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY.tx_nonce)
+        .unwrap_or(0u64)
+        .checked_add(1)
+        .expect("transaction nonce overflow");
+    env.storage().instance().set(&DATA_KEY.tx_nonce, &nonce);
+    nonce
 }
 
 // ---------------------------------------------------------------------------
@@ -1174,12 +1432,9 @@ fn generate_unique_tx_id(env: &Env, _user: &Address, amount: i128, _prefix: &str
 // Stellar's native authorization model.  This stub preserves the call sites so
 // the intent is visible and can be filled in when the SDK gains the API.
 // ---------------------------------------------------------------------------
-impl MintingContract {
-    #[allow(clippy::unused_self)]
-    fn assert_recipient_is_account(_address: &Address) {
-        // On-chain account-vs-contract check is not available in soroban-sdk 21.
-        // Enforcement is the responsibility of the calling client.
-    }
+fn assert_recipient_is_account(_address: &Address) {
+    // On-chain account-vs-contract check is not available in soroban-sdk 21.
+    // Enforcement is the responsibility of the calling client.
 }
 
 // ---------------------------------------------------------------------------
@@ -1188,13 +1443,13 @@ impl MintingContract {
 fn check_proof_unused(env: &Env, proof_id: &SorobanString) -> bool {
     !env.storage()
         .persistent()
-        .has(&(symbol_short!("PRF_SET"), proof_id.clone()))
+        .has(&(DATA_KEY.proof_prefix, proof_id.clone()))
 }
 
 fn mark_proof_used(env: &Env, proof_id: &SorobanString) {
     env.storage()
         .persistent()
-        .set(&(symbol_short!("PRF_SET"), proof_id.clone()), &true);
+        .set(&(DATA_KEY.proof_prefix, proof_id.clone()), &true);
 }
 
 // ---------------------------------------------------------------------------
@@ -1249,5 +1504,19 @@ fn validate_fintech_tx_id(env: &Env, id: &SorobanString) {
             env.panic_with_error(MintingError::FintechTxIdInvalidChar);
         }
     }
-    let _ = env; // env kept in signature for future on-chain logging
+}
+
+fn normalize_fintech_tx_id(env: &Env, id: &SorobanString) -> SorobanString {
+    let len = id.len();
+    let mut buf = [0u8; 64];
+    let slice = &mut buf[..len as usize];
+    id.copy_into_slice(slice);
+
+    for b in slice.iter_mut() {
+        if *b >= b'A' && *b <= b'Z' {
+            *b += 32; // Convert to lowercase
+        }
+    }
+
+    SorobanString::from_slice(env, slice)
 }

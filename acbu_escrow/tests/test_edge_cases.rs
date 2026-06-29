@@ -2,7 +2,7 @@
 
 use acbu_escrow::{Escrow, EscrowClient, EscrowError};
 use soroban_sdk::{
-    testutils::{Address as _, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, MockAuth, MockAuthInvoke, Ledger as _},
     Address, Env, IntoVal,
 };
 
@@ -71,7 +71,7 @@ fn test_create_when_paused_fails() {
     let (_admin, acbu_token, _cid, client) = setup(&env);
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
-    let amount = 1_000_000i128;
+    let amount = 10_000_000i128;
 
     mint(&env, &acbu_token, &payer, amount);
     client.pause();
@@ -92,7 +92,7 @@ fn test_release_when_paused_fails() {
     let (_admin, acbu_token, _cid, client) = setup(&env);
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
-    let amount = 1_000_000i128;
+    let amount = 10_000_000i128;
     let escrow_id = 10u64;
 
     mint(&env, &acbu_token, &payer, amount);
@@ -116,7 +116,7 @@ fn test_duplicate_create_same_payer_same_id_fails() {
     let (_admin, acbu_token, _cid, client) = setup(&env);
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
-    let amount = 500_000i128;
+    let amount = 10_000_000i128;
     let escrow_id = 99u64;
 
     mint(&env, &acbu_token, &payer, amount * 2);
@@ -139,7 +139,7 @@ fn test_same_payer_different_ids_are_independent() {
     let (_admin, acbu_token, _cid, client) = setup(&env);
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
-    let amount = 300_000i128;
+    let amount = 10_000_000i128;
 
     mint(&env, &acbu_token, &payer, amount * 2);
 
@@ -166,7 +166,7 @@ fn test_non_admin_cannot_call_refund() {
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
     let attacker = Address::generate(&env);
-    let amount = 1_000_000i128;
+    let amount = 10_000_000i128;
     let escrow_id = 5u64;
 
     mint(&env, &acbu_token, &payer, amount);
@@ -200,7 +200,7 @@ fn test_unpause_restores_create_and_release() {
     let (_admin, acbu_token, _cid, client) = setup(&env);
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
-    let amount = 1_000_000i128;
+    let amount = 10_000_000i128;
     let escrow_id = 77u64;
 
     mint(&env, &acbu_token, &payer, amount);
@@ -229,7 +229,7 @@ fn test_payer_receives_full_amount_after_admin_refund() {
     let (_admin, acbu_token, _cid, client) = setup(&env);
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
-    let amount = 2_000_000i128;
+    let amount = 20_000_000i128;
     let escrow_id = 33u64;
 
     mint(&env, &acbu_token, &payer, amount);
@@ -257,8 +257,8 @@ fn test_two_payers_same_escrow_id_independent() {
     let payer_a = Address::generate(&env);
     let payer_b = Address::generate(&env);
     let payee = Address::generate(&env);
-    let amount_a = 400_000i128;
-    let amount_b = 600_000i128;
+    let amount_a = 40_000_000i128;
+    let amount_b = 60_000_000i128;
     let escrow_id = 42u64;
 
     mint(&env, &acbu_token, &payer_a, amount_a);
@@ -276,4 +276,39 @@ fn test_two_payers_same_escrow_id_independent() {
         amount_a + amount_b,
         "payee must receive funds from both independent escrows"
     );
+}
+
+#[test]
+fn test_escrow_expiration_and_self_refund() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, acbu_token, _cid, client) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let amount = 10_000_000i128;
+    let escrow_id = 99u64;
+
+    mint(&env, &acbu_token, &payer, amount);
+    client.create(&payer, &payee, &amount, &escrow_id);
+
+    // Advance ledger timestamp to 30 days + 1 second
+    let current_time = env.ledger().timestamp();
+    env.ledger().set_timestamp(current_time + 30 * 86_400 + 1);
+
+    // Release should fail with Expired
+    let release_res = client.try_release(&escrow_id, &payer);
+    assert_eq!(
+        release_res,
+        Err(Ok(EscrowError::Expired)),
+        "Expired escrow must not be releasable"
+    );
+
+    // Payer can self-refund after expiry
+    let token = soroban_sdk::token::Client::new(&env, &acbu_token);
+    assert_eq!(token.balance(&payer), 0);
+
+    // Refund can be executed now
+    client.refund(&escrow_id, &payer);
+    assert_eq!(token.balance(&payer), amount);
 }

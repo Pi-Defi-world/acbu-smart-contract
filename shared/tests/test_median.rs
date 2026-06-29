@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use shared::median;
-use soroban_sdk::{Env, Vec};
+use soroban_sdk::{testutils::budget::Budget, Env, Vec};
 
 fn make_vec(env: &Env, values: &[i128]) -> Vec<i128> {
     let mut v = Vec::new(env);
@@ -80,7 +80,10 @@ fn test_median_all_equal() {
 fn test_median_large_7decimal_rates() {
     let env = Env::default();
     // Simulate oracle source rates at 7 decimals
-    let v = make_vec(&env, &[1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000]);
+    let v = make_vec(
+        &env,
+        &[1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000],
+    );
     assert_eq!(median(v), Some(3_000_000));
 }
 
@@ -97,4 +100,41 @@ fn test_median_reverse_sorted() {
     let env = Env::default();
     let v = make_vec(&env, &[9, 7, 5, 3, 1]);
     assert_eq!(median(v), Some(5));
+}
+
+fn measured_median_budget(values: &[i128]) -> (u64, u64) {
+    let env = Env::default();
+    let v = make_vec(&env, values);
+
+    let mut budget: Budget = env.budget();
+    budget.reset_default();
+    budget.reset_tracker();
+
+    assert_eq!(median(v), Some(1_000_000));
+
+    (budget.cpu_instruction_cost(), budget.memory_bytes_cost())
+}
+
+#[test]
+fn test_median_max_source_budget_regression() {
+    let values = [
+        900_000, 1_050_000, 1_010_000, 970_000, 1_030_000, 980_000, 1_020_000, 960_000, 1_040_000,
+        990_000, 1_000_000,
+    ];
+    let (cpu, mem) = measured_median_budget(&values);
+
+    assert!(cpu > 0, "median budget tracker did not record CPU usage");
+    assert!(mem > 0, "median budget tracker did not record memory usage");
+
+    // Native Rust tests underestimate WASM metering, so this is a regression ceiling rather
+    // than an exact mainnet fee quote. It still fails if the median path becomes materially
+    // more expensive for the largest quorum-sized source set we submit in oracle tests.
+    assert!(
+        cpu <= 50_000,
+        "median CPU budget regression: consumed {cpu}, limit 50_000"
+    );
+    assert!(
+        mem <= 10_000,
+        "median memory budget regression: consumed {mem}, limit 10_000"
+    );
 }

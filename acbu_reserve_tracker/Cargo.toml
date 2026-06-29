@@ -12,4 +12,4 @@ soroban-sdk = { workspace = true }
 shared = { path = "../shared" }
 
 [dev-dependencies]
-soroban-sdk = { workspace = true, features = ["testutils"] }
+soroban-sdk = { workspace = true, features = ['testutils'] }

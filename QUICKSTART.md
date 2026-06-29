@@ -75,29 +75,20 @@ const result = await mintingService.mintFromUsdc({
 ## Project Structure
 
 ```
-contracts/
-├── Cargo.toml              # Workspace config
-├── shared/                 # Shared types
-├── minting/                # Minting contract
-├── burning/                # Burning contract
-├── oracle/                 # Oracle contract
-├── reserve_tracker/        # Reserve tracker
-├── scripts/                # Deployment scripts
-└── README.md               # Main documentation
-
-backend/src/
-├── services/
-│   ├── stellar/           # Stellar SDK integration
-│   │   ├── client.ts
-│   │   ├── contractClient.ts
-│   │   └── eventListener.ts
-│   └── contracts/         # Contract services
-│       ├── mintingService.ts
-│       ├── burningService.ts
-│       ├── oracleService.ts
-│       └── reserveTrackerService.ts
-└── config/
-    └── contracts.ts       # Contract addresses
+.
+├── acbu_minting/
+├── acbu_burning/
+├── acbu_oracle/
+├── acbu_reserve_tracker/
+├── acbu_savings_vault/
+├── acbu_lending_pool/
+├── acbu_escrow/
+├── acbu_multisig/
+├── shared/
+├── scripts/
+├── docs/
+├── tests/
+└── README.md
 ```
 
 ## Support

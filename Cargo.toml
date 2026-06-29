@@ -16,16 +16,20 @@ resolver = "2"
 build = "build.rs"
 
 # ---------------------------------------------------------------------------
-# Workspace-wide dependency versions — the single source of truth.
+# Workspace-wide dependency versions
 #
-# Every contract must reference these via `{ workspace = true }` rather than
-# pinning its own version. This keeps the soroban-sdk version (which defines
-# the shared ABI types) identical across all contracts, so cross-contract
-# calls stay ABI-compatible. Per-crate feature flags (e.g. "alloc",
-# "testutils") are still added at the member level.
+# Use `=` (exact) requirements for Soroban SDK crates, not caret (`^`) or
+# bare version strings.  A Soroban minor release can change WASM encoding,
+# host-function signatures, gas cost tables, or XDR event shapes — all of
+# which break on-chain compatibility without any change to contract source.
+#
+# To upgrade: bump *both* fields below (and run `cargo update` to regenerate
+# Cargo.lock), then rebuild + re-test every contract before deploying.
 # ---------------------------------------------------------------------------
 [workspace.dependencies]
-soroban-sdk = "21.0.0"
+# Exact pin — caret (`^`) is intentionally *not* used here.
+# (Note: 21.0.0 was yanked from crates.io, using latest 21.x version)
+soroban-sdk = "=21.7.7"
 
 [profile.release]
 opt-level = "z"      # Optimize for size

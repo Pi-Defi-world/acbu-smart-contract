@@ -17,8 +17,7 @@ fn advance_ledger_to(env: &Env, contract_id: &Address, target_seq: u32) {
         let cur = env.ledger().sequence();
         let next = (cur + 200).min(target_seq);
         env.ledger().with_mut(|l| l.sequence_number = next);
-        env
-            .deployer()
+        env.deployer()
             .extend_ttl(contract_id.clone(), TTL_TARGET, TTL_TARGET);
     }
 }
@@ -109,7 +108,7 @@ fn test_update_rate() {
     client.update_rate(&validator, &ngn, &rate, &sources, &env.ledger().timestamp());
 
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1235000);
+    assert_eq!(stored_rate, 1235000); // median of sources, not rate parameter (1234567)
 
     let events = env.events().all();
     let mut found = false;
@@ -125,6 +124,54 @@ fn test_update_rate() {
             assert_eq!(event_data.currency, ngn.clone());
             assert_eq!(event_data.rate, 1235000);
             assert_eq!(event_data.validator, validator);
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "expected rate_upd event");
+}
+
+#[test]
+fn test_admin_set_rate_emits_rate_update_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn.clone(), 10000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
+
+    let admin_rate = 2_000_000i128;
+    client.set_rate_admin(&ngn, &admin_rate);
+
+    let stored_rate = client.get_rate(&ngn);
+    assert_eq!(stored_rate, admin_rate);
+
+    let events = env.events().all();
+    let mut found = false;
+    for event in events.iter() {
+        if event.0 != contract_id {
+            continue;
+        }
+        let topics = event.1;
+        if !topics.is_empty()
+            && Symbol::from_val(&env, &topics.get(0).unwrap()) == symbol_short!("rate_upd")
+        {
+            let event_data: RateUpdateEvent = event.2.into_val(&env);
+            assert_eq!(event_data.currency, ngn.clone());
+            assert_eq!(event_data.rate, admin_rate);
+            assert_eq!(event_data.validator, admin);
             found = true;
             break;
         }
@@ -432,7 +479,13 @@ fn test_stale_rate_rejected_at_read() {
     sources.push_back(1_000_000i128);
     sources.push_back(1_000_001i128);
     sources.push_back(999_999i128);
-    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     // Advance ledger sequence past STALE_RATE_MAX_LEDGERS (4_320).
     advance_ledger_to(&env, &contract_id, 100 + 4_321); // one beyond the limit
@@ -447,9 +500,10 @@ fn test_stale_rate_rejected_at_read() {
     // A stale_rt event must have been emitted.
     let events = env.events().all();
     let stale_event_found = events.iter().any(|e| {
-        if e.0 != contract_id { return false; }
-        !e.1.is_empty()
-            && Symbol::from_val(&env, &e.1.get(0).unwrap()) == symbol_short!("stale_rt")
+        if e.0 != contract_id {
+            return false;
+        }
+        !e.1.is_empty() && Symbol::from_val(&env, &e.1.get(0).unwrap()) == symbol_short!("stale_rt")
     });
     assert!(stale_event_found, "expected stale_rt event to be emitted");
 }
@@ -483,7 +537,13 @@ fn test_rate_at_boundary_is_accepted() {
     sources.push_back(1_000_000i128);
     sources.push_back(1_000_001i128);
     sources.push_back(999_999i128);
-    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     // Advance exactly to the limit — should still pass.
     advance_ledger_to(&env, &contract_id, 100 + 4_320); // exactly at limit
@@ -521,7 +581,13 @@ fn test_admin_override_unblocks_stale_rate() {
     sources.push_back(1_000_000i128);
     sources.push_back(1_000_001i128);
     sources.push_back(999_999i128);
-    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     // Advance past staleness window.
     advance_ledger_to(&env, &contract_id, 100 + 4_321);
@@ -535,7 +601,10 @@ fn test_admin_override_unblocks_stale_rate() {
 
     // Now get_rate must succeed with the admin-set value.
     let rate = client.get_rate(&ngn);
-    assert_eq!(rate, override_rate, "admin override should unblock stale rate");
+    assert_eq!(
+        rate, override_rate,
+        "admin override should unblock stale rate"
+    );
 }
 
 /// Basket rate (get_acbu_usd_rate_with_timestamp) must also be blocked when any
@@ -568,7 +637,13 @@ fn test_stale_basket_component_blocks_acbu_rate() {
     sources.push_back(1_000_000i128);
     sources.push_back(1_000_001i128);
     sources.push_back(999_999i128);
-    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     // Advance past staleness window.
     advance_ledger_to(&env, &contract_id, 100 + 4_321);
@@ -577,5 +652,50 @@ fn test_stale_basket_component_blocks_acbu_rate() {
     });
 
     let result = client.try_get_acbu_usd_rate_with_timestamp();
-    assert!(result.is_err(), "stale basket component must block acbu rate");
+    assert!(
+        result.is_err(),
+        "stale basket component must block acbu rate"
+    );
+}
+
+/// Oracle must return RateNotInitialized error before any rate submissions.
+/// This prevents division by zero or 0-rate mints/burns before the first epoch.
+#[test]
+fn test_rate_not_initialized_before_first_submission() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let kes = CurrencyCode::new(&env, "KES");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+    currencies.push_back(kes.clone());
+
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn.clone(), 5000i128);
+    basket_weights.set(kes.clone(), 5000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
+
+    // get_rate should fail before first submission
+    let result = client.try_get_rate(&ngn);
+    assert!(result.is_err(), "get_rate should fail before first submission");
+
+    // get_rate_with_timestamp should fail before first submission
+    let result = client.try_get_rate_with_timestamp(&ngn);
+    assert!(result.is_err(), "get_rate_with_timestamp should fail before first submission");
+
+    // get_acbu_usd_rate should fail before first submission
+    let result = client.try_get_acbu_usd_rate();
+    assert!(result.is_err(), "get_acbu_usd_rate should fail before first submission");
+
+    // get_acbu_usd_rate_with_timestamp should fail before first submission
+    let result = client.try_get_acbu_usd_rate_with_timestamp();
+    assert!(result.is_err(), "get_acbu_usd_rate_with_timestamp should fail before first submission");
 }

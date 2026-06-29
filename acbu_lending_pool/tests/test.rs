@@ -1,15 +1,15 @@
 #![cfg(test)]
 
-use acbu_lending_pool::{BorrowEvent, LendingPool, LendingPoolClient, RepayEvent};
-use soroban_sdk::{
-    symbol_short, testutils::Address as _, testutils::Events, Address, Env, TryIntoVal,
+use acbu_lending_pool::{
+    BorrowEvent, LendingPool, LendingPoolClient, LoanStatus, RepayEvent, RepaymentEvent,
 };
-// Add these imports for the lifecycle test
-use soroban_sdk::token::StellarAssetClient;
-use acbu_lending_pool::{BorrowEvent, RepayEvent, LendingPool, LendingPoolClient};
-use soroban_sdk::{symbol_short, testutils::{Address as _, Events}, Address, Env, TryIntoVal};
-use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
-use shared::DECIMALS;
+use soroban_sdk::{
+    symbol_short,
+    testutils::{Address as _, Events, Ledger},
+    token::{Client as TokenClient, StellarAssetClient},
+    Address, Env, TryIntoVal,
+};
+use shared::{BASIS_POINTS, DECIMALS};
 
 #[test]
 fn test_deposit_and_withdraw() {
@@ -194,14 +194,14 @@ fn test_borrow_basic() {
     // Borrower borrows half the pool
     let borrower = Address::generate(&env);
     let borrow_amount: i128 = 400_000;
-    let collateral: i128 = 200_000;
+    let collateral: i128 = 400_000;
     let loan_id: u64 = 1;
 
     // Mint collateral tokens to borrower
     token_admin.mint(&borrower, &collateral);
 
     // (contract transfers ACBU *out* to borrower; collateral is recorded but not transferred in MVP)
-    client.borrow(&borrower, &borrow_amount, &collateral, &loan_id);
+    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
 
     // Loan is recorded with correct fields
     let loan = client
@@ -219,6 +219,50 @@ fn test_borrow_basic() {
         token_client.balance(&contract_id),
         pool_liquidity - borrow_amount + collateral
     );
+}
+
+#[test]
+fn test_fee_rate_accrues_into_repayment_due() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1_000_000);
+
+    let admin = Address::generate(&env);
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    let contract_id = env.register_contract(None, LendingPool);
+    let client = LendingPoolClient::new(&env, &contract_id);
+    let fee_rate_bps = 1_000i128;
+    client.initialize(&admin, &acbu_token, &fee_rate_bps);
+
+    let token_admin = StellarAssetClient::new(&env, &acbu_token);
+
+    let lender = Address::generate(&env);
+    let pool_liquidity = 1_000_000i128;
+    token_admin.mint(&lender, &pool_liquidity);
+    client.deposit(&lender, &pool_liquidity);
+
+    let borrower = Address::generate(&env);
+    let borrow_amount = 100_000i128;
+    let collateral = borrow_amount;
+    token_admin.mint(&borrower, &(collateral + borrow_amount));
+
+    let loan_id = 226u64;
+    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
+
+    let elapsed = 365u64 * 24 * 60 * 60 / 2;
+    env.ledger().with_mut(|l| l.timestamp += elapsed);
+
+    let loan = client
+        .get_loan(&borrower, &loan_id)
+        .expect("loan must exist");
+    let expected_fee =
+        borrow_amount * fee_rate_bps * i128::from(elapsed) / (BASIS_POINTS * 31_536_000);
+
+    assert_eq!(loan.accrued_interest, expected_fee);
+    assert_eq!(loan.total_repayment_due, borrow_amount + expected_fee);
 }
 
 /// 2. Basic repay: borrower repays the full loan.
@@ -247,23 +291,25 @@ fn test_repay_basic() {
 
     let borrower = Address::generate(&env);
     let borrow_amount: i128 = 300_000;
+    let collateral: i128 = 300_000;
     let loan_id: u64 = 7;
-    client.borrow(&borrower, &borrow_amount, &0, &loan_id);
+    token_admin.mint(&borrower, &collateral);
+    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
 
     // Borrower now holds borrow_amount tokens; repay the full amount
     client.repay(&borrower, &borrow_amount, &loan_id);
 
-    // Loan must be removed after full repayment
-    assert!(
-        client.get_loan(&borrower, &loan_id).is_none(),
-        "loan must be cleared after full repayment"
-    );
+    let loan = client
+        .get_loan(&borrower, &loan_id)
+        .expect("repaid loan state must remain available");
+    assert_eq!(loan.amount, 0);
+    assert!(matches!(loan.status, LoanStatus::Repaid));
 
     // Pool token balance is restored to original liquidity
     assert_eq!(token_client.balance(&contract_id), pool_liquidity);
 
     // Borrower's token balance is back to zero (no fee in this test; fee_rate = 0)
-    assert_eq!(token_client.balance(&borrower), 0);
+    assert_eq!(token_client.balance(&borrower), collateral);
 }
 
 /// 3. Borrow exceeds available liquidity — must return an error.
@@ -292,7 +338,9 @@ fn test_borrow_exceeds_liquidity_fails() {
     // Attempt to borrow more than what is in the pool
     let borrower = Address::generate(&env);
     let over_amount: i128 = small_liquidity + 1;
-    let result = client.try_borrow(&borrower, &over_amount, &0, &1u64);
+    let collateral: i128 = over_amount;
+    token_admin.mint(&borrower, &collateral);
+    let result = client.try_borrow(&borrower, &lender, &over_amount, &collateral, &1u64);
 
     assert!(
         result.is_err(),
@@ -324,8 +372,10 @@ fn test_repay_wrong_loan_id_fails() {
 
     let borrower = Address::generate(&env);
     let borrow_amount: i128 = 100_000;
+    let collateral: i128 = 100_000;
     let real_loan_id: u64 = 42;
-    client.borrow(&borrower, &borrow_amount, &0, &real_loan_id);
+    token_admin.mint(&borrower, &collateral);
+    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &real_loan_id);
 
     // Attempt to repay using a different loan_id
     let wrong_loan_id: u64 = 99;
@@ -368,8 +418,10 @@ fn test_loan_default_scenario() {
 
     let borrower = Address::generate(&env);
     let borrow_amount: i128 = 200_000;
+    let collateral: i128 = 200_000;
     let loan_id: u64 = 55;
-    client.borrow(&borrower, &borrow_amount, &0, &loan_id);
+    token_admin.mint(&borrower, &collateral);
+    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
 
     // Borrower never repays — loan remains open.
     // No liquidation function exists yet; assert the loan is still present and overdue.
@@ -417,13 +469,15 @@ fn test_borrow_repay_full_lifecycle() {
     // ── Step 2: borrower borrows ──────────────────────────────────────────────
     let borrower = Address::generate(&env);
     let borrow_amount: i128 = 600_000;
+    let collateral: i128 = 600_000;
     let loan_id: u64 = 100;
-    client.borrow(&borrower, &borrow_amount, &0, &loan_id);
+    token_admin.mint(&borrower, &collateral);
+    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
 
     assert_eq!(token_client.balance(&borrower), borrow_amount);
     assert_eq!(
         token_client.balance(&contract_id),
-        pool_liquidity - borrow_amount
+        pool_liquidity - borrow_amount + collateral
     );
     let loan = client
         .get_loan(&borrower, &loan_id)
@@ -433,12 +487,13 @@ fn test_borrow_repay_full_lifecycle() {
     // ── Step 3: borrower repays in full ───────────────────────────────────────
     client.repay(&borrower, &borrow_amount, &loan_id);
 
-    assert_eq!(token_client.balance(&borrower), 0);
+    assert_eq!(token_client.balance(&borrower), collateral);
     assert_eq!(token_client.balance(&contract_id), pool_liquidity);
-    assert!(
-        client.get_loan(&borrower, &loan_id).is_none(),
-        "loan must be gone after full repayment"
-    );
+    let repaid_loan = client
+        .get_loan(&borrower, &loan_id)
+        .expect("repaid loan state must remain available");
+    assert_eq!(repaid_loan.amount, 0);
+    assert!(matches!(repaid_loan.status, LoanStatus::Repaid));
 
     // ── Step 4: lender withdraws ──────────────────────────────────────────────
     client.withdraw(&lender, &pool_liquidity);
@@ -464,7 +519,6 @@ fn test_loan_lifecycle_emits_events() {
     let token_id = env
         .register_stellar_asset_contract_v2(token_admin.clone())
         .address();
-    let _token_client = TokenClient::new(&env, &token_id);
     let token_admin_client = StellarAssetClient::new(&env, &token_id);
 
     let contract_id = env.register_contract(None, LendingPool);
@@ -483,7 +537,7 @@ fn test_loan_lifecycle_emits_events() {
     let borrow_amount = 300_000i128;
 
     // 1. Borrow - verify state transition + event
-    client.borrow(&borrower, &borrow_amount, &collateral, &loan_id);
+    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
 
     // Assert loan state created
     let loan = client.get_loan(&borrower, &loan_id).unwrap();
@@ -544,9 +598,32 @@ fn test_loan_lifecycle_emits_events() {
     assert_eq!(repay_event_data.token, token_id);
     assert_eq!(repay_event_data.loan_id, loan_id);
 
-    // 3. Repay full - loan removed
+    // 3. Repay full - loan state retained as repaid
     client.repay(&borrower, &(borrow_amount - repay_amount), &loan_id);
 
-    // Assert loan deleted after full repayment
-    assert!(client.get_loan(&borrower, &loan_id).is_none());
+    let repaid_loan = client
+        .get_loan(&borrower, &loan_id)
+        .expect("repaid loan state must remain available");
+    assert_eq!(repaid_loan.amount, 0);
+    assert!(matches!(repaid_loan.status, LoanStatus::Repaid));
+
+    let events = env.events().all();
+    let repayment_event = events
+        .iter()
+        .rev()
+        .find(|e| {
+            e.1.first().map_or(false, |t| {
+                if let Ok(symbol_val) =
+                    TryIntoVal::<_, soroban_sdk::Symbol>::try_into_val(&t, &env)
+                {
+                    symbol_val == symbol_short!("repaymt")
+                } else {
+                    false
+                }
+            })
+        })
+        .expect("repayment event not found");
+    let repayment_event_data: RepaymentEvent = repayment_event.2.try_into_val(&env).unwrap();
+    assert_eq!(repayment_event_data.borrower, borrower);
+    assert_eq!(repayment_event_data.amount, borrow_amount - repay_amount);
 }

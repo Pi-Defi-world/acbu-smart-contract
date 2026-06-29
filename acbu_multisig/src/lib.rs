@@ -29,8 +29,9 @@
 
 #![no_std]
 
+use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+    contract, contractimpl, contractmeta, contracttype, symbol_short, Address, BytesN, Env,
     String as SorobanString, Vec,
 };
 
@@ -88,11 +89,35 @@ pub enum Error {
     TooManySigners = 10,
     EmptySigners = 11,
     DuplicateSigner = 12,
+    Unknown = 999,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::AlreadyInitialized => "multisig already initialized",
+            Self::NotInitialized => "multisig not initialized",
+            Self::Unauthorized => "unauthorized",
+            Self::ProposalNotFound => "proposal not found",
+            Self::AlreadyApproved => "proposal already approved",
+            Self::AlreadyExecuted => "proposal already executed",
+            Self::Expired => "proposal expired",
+            Self::ThresholdNotMet => "approval threshold not met",
+            Self::InvalidThreshold => "invalid threshold",
+            Self::TooManySigners => "too many signers",
+            Self::EmptySigners => "signers list cannot be empty",
+            Self::DuplicateSigner => "duplicate signer",
+            Self::Unknown => "unknown multisig error",
+        };
+        f.write_str(message)
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Contract
 // ---------------------------------------------------------------------------
+
+contractmeta!(key = "version", val = "1");
 
 #[contract]
 pub struct MultisigContract;
@@ -300,10 +325,13 @@ impl MultisigContract {
     // Read-only helpers
     // -----------------------------------------------------------------------
 
+    /// Return the current multisig configuration (signer list and threshold).
     pub fn get_config(env: Env) -> MultisigConfig {
         Self::load_config(&env)
     }
 
+    /// Return the proposal identified by `proposal_id`, panicking with
+    /// `ProposalNotFound` if it does not exist.
     pub fn get_proposal(env: Env, proposal_id: u64) -> AdminProposal {
         env.storage()
             .instance()
@@ -311,10 +339,12 @@ impl MultisigContract {
             .unwrap_or_else(|| env.panic_with_error(Error::ProposalNotFound))
     }
 
+    /// Return the id that will be assigned to the next created proposal.
     pub fn get_next_id(env: Env) -> u64 {
         env.storage().instance().get(&DataKey::NextId).unwrap_or(0)
     }
 
+    /// Return `true` if `address` is one of the configured signers.
     pub fn is_signer(env: Env, address: Address) -> bool {
         let config = Self::load_config(&env);
         for s in config.signers.iter() {
@@ -325,6 +355,8 @@ impl MultisigContract {
         false
     }
 
+    /// Return the number of approvals recorded for `proposal_id`, panicking with
+    /// `ProposalNotFound` if it does not exist.
     pub fn approval_count(env: Env, proposal_id: u64) -> u32 {
         let proposal: AdminProposal = env
             .storage()
@@ -334,6 +366,7 @@ impl MultisigContract {
         proposal.approvals.len()
     }
 
+    /// Return the stored contract version (0 if never set).
     pub fn version(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -368,7 +401,9 @@ impl MultisigContract {
         if signers.len() > MAX_SIGNERS {
             env.panic_with_error(Error::TooManySigners);
         }
-        if threshold == 0 || threshold > signers.len() {
+        // Threshold must be at least 1 and at most the number of signers.
+        // A threshold of 0 would allow proposals to execute with zero approvals.
+        if threshold < 1 || threshold > signers.len() {
             env.panic_with_error(Error::InvalidThreshold);
         }
         // Reject duplicate signers.
