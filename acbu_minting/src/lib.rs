@@ -7,7 +7,7 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_amount_after_fee, calculate_fee, CurrencyCode, DataKey as SharedDataKey, MintEvent,
+    calculate_amount_after_fee, calculate_fee, ContractPhase, CurrencyCode, DataKey as SharedDataKey, MintEvent,
     reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MAX_MINT_AMOUNT, MAX_TOTAL_SUPPLY,
     MIN_MINT_AMOUNT, ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT,
     ORACLE_GET_CURRENCIES, ORACLE_GET_RATE, ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR,
@@ -45,7 +45,7 @@ pub struct DataKey {
     pub treasury: Symbol,
     pub fee_rate: Symbol,
     pub fee_single: Symbol,
-    pub paused: Symbol,
+    pub phase: Symbol,
     pub min_mint_amount: Symbol,
     pub max_mint_amount: Symbol,
     pub total_supply: Symbol,
@@ -71,7 +71,7 @@ const DATA_KEY: DataKey = DataKey {
     treasury: symbol_short!("TRSY"),
     fee_rate: symbol_short!("FEE_RATE"),
     fee_single: symbol_short!("FEE_SGL"),
-    paused: symbol_short!("PAUSED"),
+    phase: symbol_short!("PHASE"),
     min_mint_amount: symbol_short!("MIN_MINT"),
     max_mint_amount: symbol_short!("MAX_MINT"),
     total_supply: symbol_short!("SUPPLY"),
@@ -222,7 +222,7 @@ impl MintingContract {
             .instance()
             .set(&DATA_KEY.fee_single, &config.fee_single_bps);
         env.storage().instance().set(&DATA_KEY.operator, &config.operator);
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
         env.storage()
             .instance()
             .set(&DATA_KEY.min_mint_amount, &MIN_MINT_AMOUNT);
@@ -1081,14 +1081,14 @@ impl MintingContract {
     pub fn pause(env: Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.paused, &true);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Paused);
     }
 
     /// Unpause the contract, re-enabling minting operations (admin only).
     pub fn unpause(env: Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
     }
 
     /// Set the basket/USDC mint fee in basis points (admin only).
@@ -1159,10 +1159,12 @@ impl MintingContract {
 
     /// Return `true` if the contract is currently paused.
     pub fn is_paused(env: Env) -> bool {
-        env.storage()
+        let phase: ContractPhase = env
+            .storage()
             .instance()
-            .get(&DATA_KEY.paused)
-            .unwrap_or(false)
+            .get(&DATA_KEY.phase)
+            .unwrap_or(ContractPhase::Uninitialized);
+        phase == ContractPhase::Paused
     }
 
     // ── Dependency address updaters (admin only) ──────────────────────────
@@ -1319,12 +1321,12 @@ impl MintingContract {
     }
 
     fn check_paused(env: &Env) {
-        let paused: bool = env
+        let phase: ContractPhase = env
             .storage()
             .instance()
-            .get(&DATA_KEY.paused)
-            .unwrap_or(false);
-        if paused {
+            .get(&DATA_KEY.phase)
+            .unwrap_or(ContractPhase::Uninitialized);
+        if phase == ContractPhase::Paused {
             env.panic_with_error(MintingError::Paused);
         }
     }

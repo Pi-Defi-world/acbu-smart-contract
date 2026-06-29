@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use acbu_savings_vault::{SavingsVault, SavingsVaultClient, WithdrawEvent, DepositEvent};
-use shared::DECIMALS;
+use shared::{BASIS_POINTS, DECIMALS};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger},
@@ -9,7 +9,6 @@ use soroban_sdk::{
 };
 
 const SECONDS_PER_YEAR: u64 = 31_536_000;
-const BASIS_POINTS: i128 = 10_000;
 
 // ============================================================================
 // Test Harness

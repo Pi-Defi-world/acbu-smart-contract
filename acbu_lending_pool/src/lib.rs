@@ -5,7 +5,7 @@ use soroban_sdk::{
     BytesN, Env,
 };
 
-use shared::{DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, reentrancy_guard};
+use shared::{ContractPhase, DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, reentrancy_guard};
 
 #[contracttype]
 #[derive(Copy, Clone)]
@@ -13,7 +13,7 @@ pub enum DataKey {
     Admin,
     AcbuToken,
     FeeRate,
-    Paused,
+    Phase,
     Balance(Address),
     Borrowed(Address), // Tracks total amount borrowed from each lender
     Loan(LoanId),
@@ -193,7 +193,7 @@ impl LendingPool {
         env.storage()
             .instance()
             .set(&DataKey::FeeRate, &fee_rate_bps);
-        env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().set(&DataKey::Phase, &ContractPhase::Active);
         env.storage().instance().set(&DataKey::ActiveLoansLiquidity, &0i128);
         env.storage()
             .instance()
@@ -611,13 +611,13 @@ impl LendingPool {
     /// Pause the pool, disabling deposit/withdraw/borrow/repay. Admin only.
     pub fn pause(env: Env) {
         Self::check_admin(&env);
-        env.storage().instance().set(&DataKey::Paused, &true);
+        env.storage().instance().set(&DataKey::Phase, &ContractPhase::Paused);
     }
 
     /// Unpause the pool, re-enabling state-changing operations. Admin only.
     pub fn unpause(env: Env) {
         Self::check_admin(&env);
-        env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().set(&DataKey::Phase, &ContractPhase::Active);
     }
 
     /// Stage a WASM upgrade to `new_wasm_hash`/`new_version` and start the upgrade
@@ -858,12 +858,12 @@ impl LendingPool {
     }
 
     fn check_not_paused(env: &Env) {
-        let paused: bool = env
+        let phase: ContractPhase = env
             .storage()
             .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false);
-        if paused {
+            .get(&DataKey::Phase)
+            .unwrap_or(ContractPhase::Uninitialized);
+        if phase == ContractPhase::Paused {
             env.panic_with_error(Error::Paused);
         }
     }

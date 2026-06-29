@@ -21,6 +21,7 @@
 #![cfg(test)]
 
 use acbu_savings_vault::{SavingsVault, SavingsVaultClient, WithdrawEvent};
+use shared::BASIS_POINTS;
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger},
@@ -30,7 +31,6 @@ use soroban_sdk::{
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 const SECONDS_PER_YEAR: u64 = 31_536_000;
-const BASIS_POINTS: i128 = 10_000;
 
 /// Compute the expected yield using the same formula as the contract:
 ///   principal * yield_rate_bps * elapsed_seconds / (BASIS_POINTS * SECONDS_PER_YEAR)

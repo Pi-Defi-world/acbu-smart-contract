@@ -5,7 +5,7 @@ use soroban_sdk::{
     BytesN, Env, Symbol,
 };
 
-use shared::{DataKey as SharedDataKey, CONTRACT_VERSION, reentrancy_guard};
+use shared::{ContractPhase, DataKey as SharedDataKey, CONTRACT_VERSION, reentrancy_guard};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -62,7 +62,7 @@ impl Display for EscrowError {
 pub struct EscrowDataKey {
     pub admin: Symbol,
     pub acbu_token: Symbol,
-    pub paused: Symbol,
+    pub phase: Symbol,
     pub pending_upgrade: Symbol,
     pub pending_upgrade_eligible_at: Symbol,
     pub pending_admin: Symbol,
@@ -72,7 +72,7 @@ pub struct EscrowDataKey {
 const DATA_KEY: EscrowDataKey = EscrowDataKey {
     admin: symbol_short!("ADMIN"),
     acbu_token: symbol_short!("ACBU_TKN"),
-    paused: symbol_short!("PAUSED"),
+    phase: symbol_short!("PHASE"),
     pending_upgrade: symbol_short!("PEND_UPG"),
     pending_upgrade_eligible_at: symbol_short!("PU_ETA"),
     pending_admin: symbol_short!("PEND_ADM"),
@@ -152,7 +152,7 @@ impl Escrow {
         env.storage()
             .instance()
             .set(&DATA_KEY.acbu_token, &acbu_token);
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
         env.storage()
             .instance()
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
@@ -187,12 +187,12 @@ impl Escrow {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
-        let paused: bool = env
+        let phase: ContractPhase = env
             .storage()
             .instance()
-            .get(&DATA_KEY.paused)
-            .unwrap_or(false);
-        if paused {
+            .get(&DATA_KEY.phase)
+            .unwrap_or(ContractPhase::Uninitialized);
+        if phase == ContractPhase::Paused {
             env.panic_with_error(EscrowError::Paused);
         }
         if amount < MIN_ESCROW_AMOUNT {
@@ -247,12 +247,12 @@ impl Escrow {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
-        let paused: bool = env
+        let phase: ContractPhase = env
             .storage()
             .instance()
-            .get(&DATA_KEY.paused)
-            .unwrap_or(false);
-        if paused {
+            .get(&DATA_KEY.phase)
+            .unwrap_or(ContractPhase::Uninitialized);
+        if phase == ContractPhase::Paused {
             env.panic_with_error(EscrowError::Paused);
         }
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
@@ -351,14 +351,14 @@ impl Escrow {
     pub fn pause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.paused, &true);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Paused);
     }
 
     /// Unpause the contract, re-enabling state-changing operations (admin only).
     pub fn unpause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
     }
 
     /// Update the ACBU token contract address (admin only).
