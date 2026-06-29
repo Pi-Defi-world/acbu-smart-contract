@@ -216,7 +216,7 @@ impl Escrow {
 
         // CEI: write state before the external token transfer so any token-level
         // callback observes the escrow as already recorded.
-        env.storage()
+       env.storage()
             .temporary()
             .set(&key, &(payer.clone(), payee.clone(), amount, expiry));
 
