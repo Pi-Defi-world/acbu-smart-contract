@@ -492,6 +492,65 @@ impl SavingsVault {
         ends
     }
 
+    /// Returns deposit lots for a specific term with pagination support.
+    ///
+    /// This function prevents exceeding Soroban's return value size limit by allowing
+    /// callers to request lots in chunks. Use `offset` to skip lots and `limit` to
+    /// specify the maximum number of lots to return.
+    ///
+    /// # Arguments
+    /// * `user` - The address whose deposit lots to retrieve
+    /// * `term_seconds` - The term bucket to query
+    /// * `offset` - Number of lots to skip from the beginning (0-indexed)
+    /// * `limit` - Maximum number of lots to return (use 0 for no limit, but be cautious)
+    ///
+    /// # Returns
+    /// A paginated Vec of DepositLot structures
+    pub fn get_user_lots(
+        env: Env,
+        user: Address,
+        term_seconds: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<DepositLot> {
+        let key = (DEPOSIT_KEY, user, term_seconds);
+        let lots: Vec<DepositLot> = env
+            .storage()
+            .temporary()
+            .get(&key)
+            .unwrap_or(Vec::new(&env));
+
+        let total_lots = lots.len();
+        let offset_u32 = u32::try_from(offset).unwrap_or(0);
+        
+        if offset_u32 >= total_lots {
+            return Vec::new(&env);
+        }
+
+        let limit_u32 = if limit == 0 || limit > 100 {
+            // Default to max 100 lots per call to prevent oversized returns
+            100
+        } else {
+            limit
+        };
+
+        let end_idx = if offset_u32 + limit_u32 < total_lots {
+            offset_u32 + limit_u32
+        } else {
+            total_lots
+        };
+        let mut result = Vec::new(&env);
+
+        for i in offset_u32..end_idx {
+            let idx = u32::try_from(i).unwrap_or(0);
+            if let Some(lot) = lots.get(idx) {
+                result.push_back(lot);
+            }
+        }
+
+        result
+    }
+
     /// Pause the vault, disabling deposits and withdrawals (admin only).
     pub fn pause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
@@ -552,6 +611,14 @@ impl SavingsVault {
             .instance()
             .get(&SharedDataKey::Version)
             .unwrap_or(0)
+    }
+
+    /// Check if the contract has been initialized.
+    ///
+    /// Backend services can call this before invoking other functions to avoid
+    /// cryptic storage-not-found errors from uninitialized contracts.
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&SharedDataKey::Version)
     }
 
     /// Stage a WASM upgrade to `new_wasm_hash`/`new_version` and start the upgrade

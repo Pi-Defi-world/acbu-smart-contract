@@ -486,3 +486,54 @@ fn test_deposit_fails_and_does_not_write_to_storage_when_balance_insufficient() 
     // Verify that NO deposit lot was recorded in storage for the user.
     assert_eq!(client.get_balance(&user, &term_seconds), 0);
 }
+
+/// Issue #336 regression test: get_user_lots with pagination prevents
+/// exceeding Soroban's return value size limit when users have many deposit lots.
+#[test]
+fn test_get_user_lots_pagination() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1_000_000);
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    let contract_id = env.register_contract(None, SavingsVault);
+    let client = SavingsVaultClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &acbu_token, &0i128, &0i128);
+
+    let term_seconds = 3600u64;
+    let num_lots = 150; // More than default limit of 100
+
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
+    token_admin.mint(&user, &(num_lots as i128 * 1_000_000));
+
+    // Create many deposit lots
+    for _ in 0..num_lots {
+        client.deposit(&user, &1_000_000i128, &term_seconds);
+    }
+
+    // Test pagination: first page (offset 0, limit 100)
+    let page1 = client.get_user_lots(&user, &term_seconds, &0u32, &100u32);
+    assert_eq!(page1.len(), 100, "First page should return 100 lots");
+
+    // Test pagination: second page (offset 100, limit 100)
+    let page2 = client.get_user_lots(&user, &term_seconds, &100u32, &100u32);
+    assert_eq!(page2.len(), 50, "Second page should return remaining 50 lots");
+
+    // Test pagination: offset beyond available lots
+    let page3 = client.get_user_lots(&user, &term_seconds, &200u32, &100u32);
+    assert_eq!(page3.len(), 0, "Offset beyond available lots should return empty");
+
+    // Test pagination: limit of 0 should use default max of 100
+    let page4 = client.get_user_lots(&user, &term_seconds, &0u32, &0u32);
+    assert_eq!(page4.len(), 100, "Limit 0 should default to max 100");
+
+    // Test pagination: custom limit
+    let page5 = client.get_user_lots(&user, &term_seconds, &0u32, &25u32);
+    assert_eq!(page5.len(), 25, "Custom limit of 25 should return 25 lots");
+}
