@@ -398,3 +398,19 @@ pub fn calculate_deviation(value1: i128, value2: i128) -> i128 {
     };
     (diff * BASIS_POINTS) / value2
 }
+
+/// Check if a contract is initialized by verifying the version key exists.
+///
+/// This helper function allows backend services and other contracts to check
+/// if a contract has been initialized before calling its functions. This prevents
+/// cryptic storage-not-found errors from uninitialized contracts.
+///
+/// # Arguments
+/// * `env` - The Soroban environment
+///
+/// # Returns
+/// * `true` if the contract is initialized (version key exists)
+/// * `false` if the contract is not initialized
+pub fn is_initialized(env: &soroban_sdk::Env) -> bool {
+    env.storage().instance().has(&DataKey::Version)
+}

@@ -1298,6 +1298,14 @@ impl MintingContract {
         env.storage().instance().get(&DATA_KEY.admin).unwrap()
     }
 
+    /// Check if the contract has been initialized.
+    ///
+    /// Backend services can call this before invoking other functions to avoid
+    /// cryptic storage-not-found errors from uninitialized contracts.
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&SharedDataKey::Version)
+    }
+
     /// Pending successor, if a transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&DATA_KEY.pending_admin)

@@ -51,6 +51,7 @@ pub struct DataKey {
     pub version: Symbol,
     pub pending_admin: Symbol,
     pub pending_admin_eligible_at: Symbol,
+    pub last_verify_call: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -62,12 +63,17 @@ const DATA_KEY: DataKey = DataKey {
     version: symbol_short!("VERSION"),
     pending_admin: symbol_short!("PEND_ADM"),
     pending_admin_eligible_at: symbol_short!("PEND_ETA"),
+    last_verify_call: symbol_short!("LAST_VFY"),
 };
 
 /// Admin rotation timelock: the pending admin must wait this long before
 /// claiming ownership, giving the current admin a window to cancel a mistaken
 /// or malicious transfer.
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
+
+/// Rate limit for verify_reserves calls to prevent spam and ledger load.
+/// Only one verify_reserves call is allowed per this cooldown period.
+const VERIFY_RESERVES_COOLDOWN_SECONDS: u64 = 60;
 
 contractmeta!(key = "version", val = "1");
 
@@ -123,7 +129,20 @@ impl ReserveTrackerContract {
     /// `acbu_client.balance(&env.current_contract_address())`, which always returned 0
     /// because the reserve tracker holds no ACBU — causing reserve checks to be skipped
     /// entirely (fix for issue #193).
+    ///
+    /// Rate limited to prevent spam: only one call per VERIFY_RESERVES_COOLDOWN_SECONDS.
     pub fn verify_reserves(env: Env) -> bool {
+        let now = env.ledger().timestamp();
+
+        let last_call: Option<u64> = env.storage().instance().get(&DATA_KEY.last_verify_call);
+        if let Some(last) = last_call {
+            if now.saturating_sub(last) < VERIFY_RESERVES_COOLDOWN_SECONDS {
+                return false;
+            }
+        }
+
+        env.storage().instance().set(&DATA_KEY.last_verify_call, &now);
+
         let total_acbu_supply = Self::get_total_supply_from_token(&env);
         if total_acbu_supply == 0 {
             env.panic_with_error(ReserveTrackerError::ZeroSupply);
@@ -383,6 +402,14 @@ impl ReserveTrackerContract {
     /// Current admin address.
     pub fn get_admin(env: Env) -> Address {
         env.storage().instance().get(&DATA_KEY.admin).unwrap()
+    }
+
+    /// Check if the contract has been initialized.
+    ///
+    /// Backend services can call this before invoking other functions to avoid
+    /// cryptic storage-not-found errors from uninitialized contracts.
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&SharedDataKey::Version)
     }
 
     /// Pending successor, if a transfer is in progress.
