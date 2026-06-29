@@ -83,8 +83,8 @@ fn different_payers_can_reuse_same_escrow_id_without_collision() {
     let payee = Address::generate(&env);
     let escrow_id = 42u64;
 
-    mint(&env, &admin, &token, &payer_a, 700);
-    mint(&env, &admin, &token, &payer_b, 300);
+    mint(&env, &admin, &token, &payer_a, 100_000_000);
+    mint(&env, &admin, &token, &payer_b, 100_000_000);
 
     client.create(&payer_a, &payee, &70_000_000, &escrow_id);
     client.create(&payer_b, &payee, &30_000_000, &escrow_id);
@@ -93,7 +93,7 @@ fn different_payers_can_reuse_same_escrow_id_without_collision() {
     client.release(&escrow_id, &payer_b);
 
     let token_client = soroban_sdk::token::Client::new(&env, &token);
-    assert_eq!(token_client.balance(&payee), 1_000, "token_client.balance(&payee) should equal 1_000");
+    assert_eq!(token_client.balance(&payee), 100_000_000, "token_client.balance(&payee) should equal 100_000_000");
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn same_payer_same_escrow_id_is_rejected_until_released() {
     assert!(client.try_create(&payer, &payee, &10_000_000, &escrow_id).is_err());
 
     client.release(&escrow_id, &payer);
-    client.create(&payer, &payee, &100, &escrow_id);
+    client.create(&payer, &payee, &10_000_000, &escrow_id);
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn test_pause_without_initialize_returns_uninitialized_admin_error() {
     let client = EscrowClient::new(&env, &contract_id);
 
     let result = client.try_pause();
-    assert_eq!(result, Err(Ok(EscrowError::UninitializedAdmin)), "result should equal Err(Ok(EscrowError::UninitializedAdmin))");
+    assert_eq!(result, Err(Ok(EscrowError::UninitializedAdmin)), "pause should fail before admin initialization");
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn test_refund_fails_with_insufficient_contract_balance() {
     let (client, admin, token) = setup(&env);
     let payer = Address::generate(&env);
     let payee = Address::generate(&env);
-    let amount = 2_000i128;
+    let amount = 10_000_000i128;
     let escrow_id = 9u64;
 
     mint(&env, &admin, &token, &payer, amount);
@@ -159,5 +159,24 @@ fn test_refund_fails_with_insufficient_contract_balance() {
 
     // Refund should fail with InsufficientBalance error.
     let result = client.try_refund(&escrow_id, &payer);
-    assert_eq!(result, Err(Ok(EscrowError::InsufficientBalance)), "result should equal Err(Ok(EscrowError::InsufficientBalance))");
+    assert_eq!(result, Err(Ok(EscrowError::InsufficientBalance)), "refund should fail when the contract balance is insufficient");
+}
+
+#[test]
+fn test_self_escrow_is_rejected() {
+    let env = Env::default();
+    let (client, admin, token) = setup(&env);
+    let payer = Address::generate(&env);
+    let amount = 10_000_000i128;
+    let escrow_id = 1u64;
+
+    mint(&env, &admin, &token, &payer, amount);
+
+    // Creating an escrow with payee == payer should fail with SelfEscrow error.
+    let result = client.try_create(&payer, &payer, &amount, &escrow_id);
+    assert_eq!(
+        result,
+        Err(Ok(EscrowError::SelfEscrow)),
+        "self-escrow (payee == payer) should be rejected"
+    );
 }

@@ -35,8 +35,8 @@ const BASIS_POINTS: i128 = 10_000;
 /// Compute the expected yield using the same formula as the contract:
 ///   principal * yield_rate_bps * elapsed_seconds / (BASIS_POINTS * SECONDS_PER_YEAR)
 fn expected_yield(principal: i128, yield_rate_bps: i128, elapsed_seconds: u64) -> i128 {
-    let elapsed = elapsed_seconds as i128;
-    principal * yield_rate_bps * elapsed / (BASIS_POINTS * SECONDS_PER_YEAR as i128)
+    let elapsed = i128::from(elapsed_seconds);
+    principal * yield_rate_bps * elapsed / (BASIS_POINTS * i128::from(SECONDS_PER_YEAR))
 }
 
 struct Harness {

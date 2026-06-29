@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use acbu_lending_pool::{BorrowEvent, LendingPool, LendingPoolClient, RepayEvent};
+use acbu_lending_pool::{BorrowEvent, LendingPool, LendingPoolClient, LoanStatus, RepayEvent};
 use shared::DECIMALS;
 use soroban_sdk::{
     symbol_short,
@@ -391,7 +391,11 @@ fn test_repay_full_removes_loan() {
     client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
     client.repay(&borrower, &borrow_amount, &loan_id);
 
-    assert!(client.get_loan(&borrower, &loan_id).is_none());
+    let loan = client
+        .get_loan(&borrower, &loan_id)
+        .expect("repaid loan state should remain available");
+    assert_eq!(loan.amount, 0);
+    assert!(matches!(loan.status, LoanStatus::Repaid));
 }
 
 #[test]
@@ -412,7 +416,6 @@ fn test_repay_full_returns_collateral() {
 
     client.deposit(&lender, &pool_liquidity);
     
-    let _borrower_balance_before = token_client.balance(&borrower);
     client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
     
     // After borrow: borrower has borrow_amount (collateral was transferred to contract)

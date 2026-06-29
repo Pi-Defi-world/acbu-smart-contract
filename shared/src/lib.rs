@@ -52,7 +52,6 @@ pub struct MultisigConfig {
 
 /// Event emitted when a new proposal is created.
 #[contracttype]
-#[derive(Clone, Debug)]
 pub struct ProposalCreatedEvent {
     pub proposal_id: u64,
     pub proposer: Address,
@@ -62,7 +61,6 @@ pub struct ProposalCreatedEvent {
 
 /// Event emitted when a signer approves a proposal.
 #[contracttype]
-#[derive(Clone, Debug)]
 pub struct ProposalApprovedEvent {
     pub proposal_id: u64,
     pub approver: Address,
@@ -71,13 +69,14 @@ pub struct ProposalApprovedEvent {
 
 /// Event emitted when a proposal reaches threshold and is executed.
 #[contracttype]
-#[derive(Clone, Debug)]
 pub struct ProposalExecutedEvent {
     pub proposal_id: u64,
     pub action_tag: SorobanString,
     pub executed_by: Address,
 }
 
+/// Increment this constant with every bug fix, feature addition, or breaking change
+/// so that patched deployments can be distinguished from unpatched ones.
 pub const CONTRACT_VERSION: u32 = 1;
 
 /// Currency code type (e.g., "NGN", "KES", "RWF").
@@ -146,7 +145,6 @@ pub struct AccountDetails {
 /// `mint_from_usdc`; for Afreum S-token mint paths it carries the USD-equivalent notional
 /// (still 7-decimal fixed point).
 #[contracttype]
-#[derive(Clone, Debug)]
 pub struct MintEvent {
     pub transaction_id: SorobanString,
     pub user: Address,
@@ -163,11 +161,10 @@ pub struct MintEvent {
 ///
 /// **Backend / indexer alignment:** Same field order as XDR struct encoding. Amounts (`acbu_amount`,
 /// `local_amount`, `fee`, `rate`) are **7-decimal fixed point** (`DECIMALS`). `currency` is
-/// [`CurrencyCode`] (string code such as `\"NGN\"`). For `burn_for_basket`, one event is emitted per
+/// [`CurrencyCode`] (string code such as `"NGN"`). For `burn_for_basket`, one event is emitted per
 /// recipient slice; `acbu_amount` and `fee` are the portions for that slice, not necessarily the
 /// full transaction totals.
 #[contracttype]
-#[derive(Clone, Debug)]
 pub struct BurnEvent {
     pub transaction_id: SorobanString,
     pub user: Address,
@@ -185,7 +182,6 @@ pub struct BurnEvent {
 
 /// Rate update event data
 #[contracttype]
-#[derive(Clone, Debug)]
 pub struct RateUpdateEvent {
     pub currency: CurrencyCode,
     pub rate: i128,
@@ -195,7 +191,6 @@ pub struct RateUpdateEvent {
 
 /// Outlier detection event data
 #[contracttype]
-#[derive(Clone, Debug)]
 pub struct OutlierDetectionEvent {
     pub currency: CurrencyCode,
     pub median_rate: i128,
@@ -211,23 +206,71 @@ pub struct OutlierDetectionEvent {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum ContractError {
+    /// The caller is not authorized for this action (e.g. not the admin/operator,
+    /// or `require_auth` was not satisfied).
     Unauthorized = 1,
+    /// The contract is paused; state-changing operations are temporarily disabled.
     Paused = 2,
+    /// The supplied amount is invalid (non-positive, or outside the allowed bounds
+    /// such as min/max mint or burn limits).
     InvalidAmount = 3,
+    /// The exchange/conversion rate is invalid (e.g. zero, negative, or rejected
+    /// by outlier/deviation checks).
     InvalidRate = 4,
+    /// Reserves are insufficient to back the requested mint/operation against the
+    /// configured collateralization requirement.
     InsufficientReserves = 5,
+    /// The per-window operation rate limit has been exceeded; retry later.
     RateLimitExceeded = 6,
+    /// The currency code is not recognized or not registered in the oracle/basket.
     InvalidCurrency = 7,
+    /// A cross-contract call to the oracle failed or returned an unusable result
+    /// (e.g. missing or stale rate).
     OracleError = 8,
+    /// A cross-contract call to the reserve tracker failed or returned an
+    /// unusable result.
     ReserveError = 9,
+    /// The account's token balance is too low to complete the transfer/operation.
     InsufficientBalance = 10,
+    /// The recipient address is invalid for this operation (e.g. a contract
+    /// address where a classic account is required).
     InvalidRecipient = 11,
     /// WASM upgrade rejected: `new_version` must be greater than the stored version.
     InvalidVersion = 12,
+    /// No admin transfer is in progress, so `accept_admin` has nothing to claim.
     NoPendingAdmin = 13,
+    /// The two-step admin transfer timelock has not yet elapsed; the pending admin
+    /// must wait before calling `accept_admin`.
     AdminTimelockNotElapsed = 14,
+    /// No admin transfer is in progress, so `cancel_admin_transfer` has nothing to
+    /// cancel.
     NoPendingAdminToCancel = 15,
+    /// Catch-all for an unexpected/unclassified failure. Should not occur in normal
+    /// operation; treat as an internal error.
     Unknown = 9999,
+}
+
+impl core::fmt::Display for ContractError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ContractError::Unauthorized => write!(f, "unauthorized"),
+            ContractError::Paused => write!(f, "contract is paused"),
+            ContractError::InvalidAmount => write!(f, "invalid amount"),
+            ContractError::InvalidRate => write!(f, "invalid rate"),
+            ContractError::InsufficientReserves => write!(f, "insufficient reserves"),
+            ContractError::RateLimitExceeded => write!(f, "rate limit exceeded"),
+            ContractError::InvalidCurrency => write!(f, "invalid currency"),
+            ContractError::OracleError => write!(f, "oracle error"),
+            ContractError::ReserveError => write!(f, "reserve error"),
+            ContractError::InsufficientBalance => write!(f, "insufficient balance"),
+            ContractError::InvalidRecipient => write!(f, "invalid recipient"),
+            ContractError::InvalidVersion => write!(f, "invalid version"),
+            ContractError::NoPendingAdmin => write!(f, "no pending admin"),
+            ContractError::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
+            ContractError::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
+            ContractError::Unknown => write!(f, "unknown error"),
+        }
+    }
 }
 
 /// Cross-contract method name constants — prevents silent logic splits from typos
@@ -239,6 +282,7 @@ pub const ORACLE_GET_RATE_WITH_TS: &str = "get_rate_with_timestamp";
 pub const ORACLE_GET_CURRENCIES: &str = "get_currencies";
 pub const ORACLE_GET_BASKET_WEIGHT: &str = "get_basket_weight";
 pub const ORACLE_GET_S_TOKEN_ADDR: &str = "get_s_token_address";
+pub const ORACLE_GET_RATE_DECIMALS: &str = "get_rate_decimals";
 pub const RESERVE_IS_SUFFICIENT: &str = "is_reserve_sufficient";
 pub const TOKEN_GET_TOTAL_SUPPLY: &str = "get_total_supply";
 
@@ -285,14 +329,14 @@ pub fn median(mut values: soroban_sdk::Vec<i128>) -> Option<i128> {
 
     if n % 2 == 0 {
         // For even count, find two middle elements and average them
-        quickselect_inplace(&mut values, 0, (n - 1) as i32, (mid - 1) as i32);
+        quickselect_inplace(&mut values, 0, i32::try_from(n - 1).unwrap_or(0), i32::try_from(mid - 1).unwrap_or(0));
         let val1 = values.get(mid - 1)?;
-        quickselect_inplace(&mut values, 0, (n - 1) as i32, mid as i32);
+        quickselect_inplace(&mut values, 0, i32::try_from(n - 1).unwrap_or(0), i32::try_from(mid).unwrap_or(0));
         let val2 = values.get(mid)?;
         Some((val1 + val2) / 2)
     } else {
         // For odd count, find the middle element
-        quickselect_inplace(&mut values, 0, (n - 1) as i32, mid as i32);
+        quickselect_inplace(&mut values, 0, i32::try_from(n - 1).unwrap_or(0), i32::try_from(mid).unwrap_or(0));
         Some(values.get(mid)?)
     }
 }
@@ -314,23 +358,23 @@ fn quickselect_inplace(values: &mut soroban_sdk::Vec<i128>, mut left: i32, mut r
 
 /// Partition array in-place for quickselect using Lomuto partition scheme
 fn partition_inplace(values: &mut soroban_sdk::Vec<i128>, left: i32, right: i32) -> i32 {
-    let pivot_value = values.get(right as u32).unwrap_or(0);
+    let pivot_value = values.get(u32::try_from(right).unwrap_or(0)).unwrap_or(0);
     let mut i = left - 1;
 
     for j in left..right {
-        let val_j = values.get(j as u32).unwrap_or(0);
+        let val_j = values.get(u32::try_from(j).unwrap_or(0)).unwrap_or(0);
         if val_j < pivot_value {
             i += 1;
-            let idx_i = i as u32;
-            let idx_j = j as u32;
+            let idx_i = u32::try_from(i).unwrap_or(0);
+            let idx_j = u32::try_from(j).unwrap_or(0);
             let val_i = values.get(idx_i).unwrap_or(0);
             values.set(idx_i, val_j);
             values.set(idx_j, val_i);
         }
     }
 
-    let idx_i_plus_1 = (i + 1) as u32;
-    let idx_right = right as u32;
+    let idx_i_plus_1 = u32::try_from(i + 1).unwrap_or(0);
+    let idx_right = u32::try_from(right).unwrap_or(0);
     let val_i_plus_1 = values.get(idx_i_plus_1).unwrap_or(0);
     values.set(idx_i_plus_1, pivot_value);
     values.set(idx_right, val_i_plus_1);
