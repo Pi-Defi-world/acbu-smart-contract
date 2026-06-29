@@ -128,13 +128,13 @@ fn test_admin_drip_fiat_success() {
     let stoken_client = soroban_sdk::token::Client::new(&env, &stoken_id);
 
     stoken_sac.mint(&client.address, &amount);
-    assert_eq!(stoken_client.balance(&recipient), 0);
+    assert_eq!(stoken_client.balance(&recipient), 0, "stoken_client.balance(&recipient) should equal 0");
 
     let currency = CurrencyCode::new(&env, "NGN");
     client.admin_drip_fiat(&recipient, &currency, &amount);
 
-    assert_eq!(stoken_client.balance(&recipient), amount);
-    assert_eq!(stoken_client.balance(&client.address), 0);
+    assert_eq!(stoken_client.balance(&recipient), amount, "stoken_client.balance(&recipient) should equal amount");
+    assert_eq!(stoken_client.balance(&client.address), 0, "stoken_client.balance(&client.address) should equal 0");
 }
 
 #[test]

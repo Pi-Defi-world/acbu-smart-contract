@@ -107,9 +107,9 @@ fn test_update_and_get_all_reserves_and_timestamp() {
     for (_c, d) in reserves.iter() {
         if d.currency == ngn {
             found = true;
-            assert_eq!(d.amount, 500);
-            assert_eq!(d.value_usd, 5 * DECIMALS);
-            assert_eq!(d.timestamp, 12345);
+            assert_eq!(d.amount, 500, "d.amount should equal 500");
+            assert_eq!(d.value_usd, 5 * DECIMALS, "d.value_usd should equal 5 * DECIMALS");
+            assert_eq!(d.timestamp, 12345, "d.timestamp should equal 12345");
         }
     }
     assert!(found);
@@ -122,9 +122,9 @@ fn test_update_and_get_all_reserves_and_timestamp() {
     for (_c, d) in reserves2.iter() {
         if d.currency == ngn {
             found2 = true;
-            assert_eq!(d.amount, 1000);
-            assert_eq!(d.value_usd, 10 * DECIMALS);
-            assert_eq!(d.timestamp, 22345);
+            assert_eq!(d.amount, 1000, "d.amount should equal 1000");
+            assert_eq!(d.value_usd, 10 * DECIMALS, "d.value_usd should equal 10 * DECIMALS");
+            assert_eq!(d.timestamp, 22345, "d.timestamp should equal 22345");
         }
     }
     assert!(found2);
@@ -203,7 +203,7 @@ fn test_reset_reserves_by_admin_clears_all_entries() {
     client.update_reserve(&admin, &ngn, &1_000, &(5 * DECIMALS));
     client.update_reserve(&admin, &kes, &2_000, &(5 * DECIMALS));
 
-    assert_eq!(client.get_all_reserves().len(), 2);
+    assert_eq!(client.get_all_reserves().len(), 2, "client.get_all_reserves().len() should equal 2");
 
     client.reset_reserves();
 

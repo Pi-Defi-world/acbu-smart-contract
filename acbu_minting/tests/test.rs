@@ -178,9 +178,9 @@ fn test_initialize() {
         fee_single,
     );
 
-    assert_eq!(client.get_fee_rate(), fee_rate);
-    assert_eq!(client.get_fee_single(), fee_single);
-    assert_eq!(client.get_total_supply(), 0);
+    assert_eq!(client.get_fee_rate(), fee_rate, "client.get_fee_rate() should equal fee_rate");
+    assert_eq!(client.get_fee_single(), fee_single, "client.get_fee_single() should equal fee_single");
+    assert_eq!(client.get_total_supply(), 0, "client.get_total_supply() should equal 0");
     assert!(!client.is_paused());
 }
 
@@ -259,10 +259,10 @@ fn test_mint_from_usdc() {
     let expected_fee = 15_000_000;
     let expected_acbu = 485_000_000;
 
-    assert_eq!(acbu_minted, expected_acbu);
-    assert_eq!(acbu_client.balance(&user), expected_acbu);
-    assert_eq!(usdc_client.balance(&user), 50 * DECIMALS);
-    assert_eq!(client.get_total_supply(), expected_acbu);
+    assert_eq!(acbu_minted, expected_acbu, "acbu_minted should equal expected_acbu");
+    assert_eq!(acbu_client.balance(&user), expected_acbu, "acbu_client.balance(&user) should equal expected_acbu");
+    assert_eq!(usdc_client.balance(&user), 50 * DECIMALS, "usdc_client.balance(&user) should equal 50 * DECIMALS");
+    assert_eq!(client.get_total_supply(), expected_acbu, "client.get_total_supply() should equal expected_acbu");
 
     let events = env.events().all();
     let mut found = false;
@@ -275,9 +275,9 @@ fn test_mint_from_usdc() {
             && Symbol::from_val(&env, &topics.get(0).unwrap()) == symbol_short!("mint")
         {
             let event_data: MintEvent = event.2.into_val(&env);
-            assert_eq!(event_data.usdc_amount, mint_amount);
-            assert_eq!(event_data.acbu_amount, expected_acbu);
-            assert_eq!(event_data.fee, expected_fee);
+            assert_eq!(event_data.usdc_amount, mint_amount, "event_data.usdc_amount should equal mint_amount");
+            assert_eq!(event_data.acbu_amount, expected_acbu, "event_data.acbu_amount should equal expected_acbu");
+            assert_eq!(event_data.fee, expected_fee, "event_data.fee should equal expected_fee");
             found = true;
             break;
         }
@@ -320,7 +320,7 @@ fn test_mint_from_basket() {
     let proof_id = soroban_sdk::String::from_str(&env, "proof_1");
     let net = client.mint_from_basket(&user, &user, &acbu_amt, &proof_id);
     assert!(net > 0);
-    assert_eq!(client.get_total_supply(), acbu_amt);
+    assert_eq!(client.get_total_supply(), acbu_amt, "client.get_total_supply() should equal acbu_amt");
 }
 
 #[test]
@@ -407,8 +407,8 @@ fn test_mint_from_demo_fiat() {
         &proof,
     );
     assert!(acbu > 0);
-    assert_eq!(acbu_client.balance(&recipient), acbu);
-    assert_eq!(client.get_total_supply(), acbu);
+    assert_eq!(acbu_client.balance(&recipient), acbu, "acbu_client.balance(&recipient) should equal acbu");
+    assert_eq!(client.get_total_supply(), acbu, "client.get_total_supply() should equal acbu");
 }
 
 #[test]
@@ -485,7 +485,7 @@ fn test_set_operator_and_mint_demo_fiat() {
     );
 
     client.set_operator(&operator);
-    assert_eq!(client.get_operator(), operator);
+    assert_eq!(client.get_operator(), operator, "client.get_operator() should equal operator");
 
     let proof = SorobanString::from_str(&env, "demo_proof_operator");
     let tx_id = soroban_sdk::String::from_str(&env, "tx_ok");
@@ -586,7 +586,7 @@ fn test_version_set_on_initialize() {
     let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
     init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
         &acbu_token, &usdc_token, &admin, &admin, 300, 100);
-    assert_eq!(client.get_version(), 1);
+    assert_eq!(client.get_version(), 1, "client.get_version() should equal 1");
 }
 
 #[test]
@@ -622,10 +622,10 @@ fn test_storage_state_intact_across_upgrade_boundary() {
     init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
         &acbu_token, &usdc_token, &admin, &admin, 300, 100);
     // All configured values must be intact regardless of whether an upgrade is attempted.
-    assert_eq!(client.get_version(), 1);
-    assert_eq!(client.get_fee_rate(), 300);
-    assert_eq!(client.get_fee_single(), 100);
-    assert_eq!(client.get_total_supply(), 0);
+    assert_eq!(client.get_version(), 1, "client.get_version() should equal 1");
+    assert_eq!(client.get_fee_rate(), 300, "client.get_fee_rate() should equal 300");
+    assert_eq!(client.get_fee_single(), 100, "client.get_fee_single() should equal 100");
+    assert_eq!(client.get_total_supply(), 0, "client.get_total_supply() should equal 0");
     assert!(!client.is_paused());
 }
 

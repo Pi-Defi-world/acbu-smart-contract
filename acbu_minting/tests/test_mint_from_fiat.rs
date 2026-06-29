@@ -188,8 +188,8 @@ fn test_mint_from_fiat_success() {
 
     assert!(acbu > 0);
     let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token_id);
-    assert_eq!(acbu_client.balance(&recipient), acbu);
-    assert_eq!(client.get_total_supply(), acbu);
+    assert_eq!(acbu_client.balance(&recipient), acbu, "acbu_client.balance(&recipient) should equal acbu");
+    assert_eq!(client.get_total_supply(), acbu, "client.get_total_supply() should equal acbu");
 }
 
 #[test]

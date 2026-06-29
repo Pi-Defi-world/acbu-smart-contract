@@ -590,11 +590,11 @@ fn test_length_boundary_64_vs_65() {
     let h = Harness::new();
 
     let id_64 = "A234567890123456789012345678901234567890123456789012345678901234";
-    assert_eq!(id_64.len(), 64);
+    assert_eq!(id_64.len(), 64, "id_64.len() should equal 64");
     assert!(h.try_mint(id_64), "64-char ID must be accepted");
 
     let id_65 = "A2345678901234567890123456789012345678901234567890123456789012345";
-    assert_eq!(id_65.len(), 65);
+    assert_eq!(id_65.len(), 65, "id_65.len() should equal 65");
     assert!(!h.try_mint(id_65), "65-char ID must be rejected");
 }
 
