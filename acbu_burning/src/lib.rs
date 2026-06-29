@@ -5,7 +5,7 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_fee, reentrancy_guard, BurnEvent, ContractError, CurrencyCode,
+    calculate_fee, reentrancy_guard, BurnEvent, ContractError, ContractPhase, CurrencyCode,
     DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MIN_BURN_AMOUNT,
     ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_CURRENCIES,
     ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT,
@@ -22,7 +22,7 @@ pub struct DataKey {
     pub vault: Symbol,
     pub fee_rate: Symbol,
     pub fee_single_redeem: Symbol,
-    pub paused: Symbol,
+    pub phase: Symbol,
     pub min_burn_amount: Symbol,
     pub pending_admin: Symbol,
     pub pending_admin_eligible_at: Symbol,
@@ -37,7 +37,7 @@ const DATA_KEY: DataKey = DataKey {
     vault: symbol_short!("VAULT"),
     fee_rate: symbol_short!("FEE_RATE"),
     fee_single_redeem: symbol_short!("FEE_S_R"),
-    paused: symbol_short!("PAUSED"),
+    phase: symbol_short!("PHASE"),
     min_burn_amount: symbol_short!("MIN_BURN"),
     pending_admin: symbol_short!("PEND_ADM"),
     pending_admin_eligible_at: symbol_short!("PEND_ETA"),
@@ -109,7 +109,7 @@ impl BurningContract {
         env.storage()
             .instance()
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
         env.storage()
             .instance()
             .set(&DATA_KEY.min_burn_amount, &MIN_BURN_AMOUNT);
@@ -438,13 +438,13 @@ impl BurningContract {
     /// Pause the contract (admin only)
     pub fn pause(env: Env) {
         Self::check_admin(&env);
-        env.storage().instance().set(&DATA_KEY.paused, &true);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Paused);
     }
 
     /// Unpause the contract (admin only)
     pub fn unpause(env: Env) {
         Self::check_admin(&env);
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
     }
 
     /// Set basket redemption fee (admin only)
@@ -513,10 +513,12 @@ impl BurningContract {
 
     /// Return `true` if the contract is currently paused.
     pub fn is_paused(env: Env) -> bool {
-        env.storage()
+        let phase: ContractPhase = env
+            .storage()
             .instance()
-            .get(&DATA_KEY.paused)
-            .unwrap_or(false)
+            .get(&DATA_KEY.phase)
+            .unwrap_or(ContractPhase::Uninitialized);
+        phase == ContractPhase::Paused
     }
 
     // ── Dependency address updaters (admin only) ──────────────────────────
@@ -698,12 +700,12 @@ impl BurningContract {
     }
 
     fn check_paused(env: &Env) {
-        if env
+        let phase: ContractPhase = env
             .storage()
             .instance()
-            .get::<_, bool>(&DATA_KEY.paused)
-            .unwrap_or(false)
-        {
+            .get(&DATA_KEY.phase)
+            .unwrap_or(ContractPhase::Uninitialized);
+        if phase == ContractPhase::Paused {
             env.panic_with_error(ContractError::Paused);
         }
     }

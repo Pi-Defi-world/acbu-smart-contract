@@ -5,7 +5,7 @@ use soroban_sdk::{
     BytesN, Env, Symbol, Vec,
 };
 
-use shared::{calculate_fee, DataKey as SharedDataKey, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION};
+use shared::{calculate_fee, ContractPhase, DataKey as SharedDataKey, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION};
 
 mod shared {
     pub use shared::*;
@@ -82,7 +82,7 @@ pub struct DataKey {
     pub acbu_token: Symbol,
     pub fee_rate: Symbol,
     pub yield_rate: Symbol,
-    pub paused: Symbol,
+    pub phase: Symbol,
     pub pending_upgrade_wasm: Symbol,
     pub pending_upgrade_version: Symbol,
     pub pending_upgrade_eligible_at: Symbol,
@@ -95,7 +95,7 @@ const DATA_KEY: DataKey = DataKey {
     acbu_token: symbol_short!("ACBU_TKN"),
     fee_rate: symbol_short!("FEE_RATE"),
     yield_rate: symbol_short!("YLD_RATE"),
-    paused: symbol_short!("PAUSED"),
+    phase: symbol_short!("PHASE"),
     pending_upgrade_wasm: symbol_short!("PU_WASM"),
     pending_upgrade_version: symbol_short!("PU_VER"),
     pending_upgrade_eligible_at: symbol_short!("PU_ETA"),
@@ -182,10 +182,12 @@ impl SavingsVault {
     }
 
     fn is_paused(env: &Env) -> bool {
-        env.storage()
+        let phase: ContractPhase = env
+            .storage()
             .instance()
-            .get(&DATA_KEY.paused)
-            .unwrap_or(false)
+            .get(&DATA_KEY.phase)
+            .unwrap_or(ContractPhase::Uninitialized);
+        phase == ContractPhase::Paused
     }
 
     // -----------------------------------------------------------------------
@@ -496,14 +498,14 @@ impl SavingsVault {
     pub fn pause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.paused, &true);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Paused);
     }
 
     /// Unpause the vault, re-enabling deposits and withdrawals (admin only).
     pub fn unpause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
     }
 
     /// Update the ACBU token contract address (admin only).

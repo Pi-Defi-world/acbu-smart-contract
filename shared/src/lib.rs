@@ -303,6 +303,19 @@ pub const MAX_VALIDATORS: u32 = 50; // Maximum number of validators to prevent g
 /// Admin can bypass via `set_rate_admin` for emergency overrides.
 pub const STALE_RATE_MAX_LEDGERS: u32 = 4_320; // ~6 hours at 5 s/ledger
 
+/// Contract lifecycle phase - tracks the state of a contract to distinguish
+/// between uninitialized, active, paused, and upgraded states.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ContractPhase {
+    /// Contract has not been initialized yet
+    Uninitialized,
+    /// Contract is active and operating normally
+    Active,
+    /// Contract is paused for maintenance (state-changing operations disabled)
+    Paused,
+}
+
 /// Utility functions
 pub fn calculate_fee(amount: i128, fee_rate_bps: i128) -> i128 {
     amount
