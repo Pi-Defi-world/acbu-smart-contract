@@ -15,6 +15,18 @@ resolver = "2"
 # Build script for WASM integrity verification
 build = "build.rs"
 
+# ---------------------------------------------------------------------------
+# Workspace-wide dependency versions — the single source of truth.
+#
+# Every contract must reference these via `{ workspace = true }` rather than
+# pinning its own version. This keeps the soroban-sdk version (which defines
+# the shared ABI types) identical across all contracts, so cross-contract
+# calls stay ABI-compatible. Per-crate feature flags (e.g. "alloc",
+# "testutils") are still added at the member level.
+# ---------------------------------------------------------------------------
+[workspace.dependencies]
+soroban-sdk = "21.0.0"
+
 [profile.release]
 opt-level = "z"      # Optimize for size
 lto = true           # Enable link-time optimization
