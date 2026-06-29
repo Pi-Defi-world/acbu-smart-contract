@@ -73,7 +73,7 @@ const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 
 /// Rate limit for verify_reserves calls to prevent spam and ledger load.
 /// Only one verify_reserves call is allowed per this cooldown period.
-const VERIFY_RESERVES_COOLDOWN_SECONDS: u64 = 60; // 1 minute cooldown
+const VERIFY_RESERVES_COOLDOWN_SECONDS: u64 = 60;
 
 contractmeta!(key = "version", val = "1");
 
@@ -133,20 +133,16 @@ impl ReserveTrackerContract {
     /// Rate limited to prevent spam: only one call per VERIFY_RESERVES_COOLDOWN_SECONDS.
     pub fn verify_reserves(env: Env) -> bool {
         let now = env.ledger().timestamp();
-        
-        // Check rate limit
+
         let last_call: Option<u64> = env.storage().instance().get(&DATA_KEY.last_verify_call);
         if let Some(last) = last_call {
             if now.saturating_sub(last) < VERIFY_RESERVES_COOLDOWN_SECONDS {
-                // Rate limit exceeded - return false instead of panicking to avoid
-                // revealing timing information to potential attackers
                 return false;
             }
         }
-        
-        // Update last call timestamp
+
         env.storage().instance().set(&DATA_KEY.last_verify_call, &now);
-        
+
         let total_acbu_supply = Self::get_total_supply_from_token(&env);
         if total_acbu_supply == 0 {
             env.panic_with_error(ReserveTrackerError::ZeroSupply);

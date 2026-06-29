@@ -507,33 +507,27 @@ fn test_get_user_lots_pagination() {
     client.initialize(&admin, &acbu_token, &0i128, &0i128);
 
     let term_seconds = 3600u64;
-    let num_lots = 150; // More than default limit of 100
+    let num_lots = 150;
 
     let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&user, &(num_lots as i128 * 1_000_000));
 
-    // Create many deposit lots
     for _ in 0..num_lots {
         client.deposit(&user, &1_000_000i128, &term_seconds);
     }
 
-    // Test pagination: first page (offset 0, limit 100)
     let page1 = client.get_user_lots(&user, &term_seconds, &0u32, &100u32);
     assert_eq!(page1.len(), 100, "First page should return 100 lots");
 
-    // Test pagination: second page (offset 100, limit 100)
     let page2 = client.get_user_lots(&user, &term_seconds, &100u32, &100u32);
     assert_eq!(page2.len(), 50, "Second page should return remaining 50 lots");
 
-    // Test pagination: offset beyond available lots
     let page3 = client.get_user_lots(&user, &term_seconds, &200u32, &100u32);
     assert_eq!(page3.len(), 0, "Offset beyond available lots should return empty");
 
-    // Test pagination: limit of 0 should use default max of 100
     let page4 = client.get_user_lots(&user, &term_seconds, &0u32, &0u32);
     assert_eq!(page4.len(), 100, "Limit 0 should default to max 100");
 
-    // Test pagination: custom limit
     let page5 = client.get_user_lots(&user, &term_seconds, &0u32, &25u32);
     assert_eq!(page5.len(), 25, "Custom limit of 25 should return 25 lots");
 }

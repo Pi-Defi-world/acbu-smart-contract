@@ -502,7 +502,7 @@ impl SavingsVault {
     /// * `user` - The address whose deposit lots to retrieve
     /// * `term_seconds` - The term bucket to query
     /// * `offset` - Number of lots to skip from the beginning (0-indexed)
-    /// * `limit` - Maximum number of lots to return (use 0 for no limit, but be cautious)
+    /// * `limit` - Maximum number of lots to return (0 defaults to max 100)
     ///
     /// # Returns
     /// A paginated Vec of DepositLot structures
@@ -522,13 +522,12 @@ impl SavingsVault {
 
         let total_lots = lots.len();
         let offset_u32 = u32::try_from(offset).unwrap_or(0);
-        
+
         if offset_u32 >= total_lots {
             return Vec::new(&env);
         }
 
         let limit_u32 = if limit == 0 || limit > 100 {
-            // Default to max 100 lots per call to prevent oversized returns
             100
         } else {
             limit
