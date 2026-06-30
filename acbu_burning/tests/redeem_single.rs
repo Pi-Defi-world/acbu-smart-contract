@@ -38,9 +38,9 @@ fn test_redeem_single_success() {
     let net_acbu = burn_amount - expected_fee;
     let expected_out = (net_acbu * acbu_rate) / ngn_rate;
 
-    assert_eq!(out, expected_out);
-    assert_eq!(stoken_client.balance(&recipient), expected_out);
-    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0);
+    assert_eq!(out, expected_out, "out should equal expected_out");
+    assert_eq!(stoken_client.balance(&recipient), expected_out, "stoken_client.balance(&recipient) should equal expected_out");
+    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
 }
 
 #[test]
@@ -70,10 +70,9 @@ fn test_redeem_single_fee_calculation() {
         .redeem_single(&ctx.user, &recipient, &burn_amount, &currency);
 
     // Verify fee: 2% of 100 * DECIMALS = 2 * DECIMALS
-    let _expected_fee = 2 * DECIMALS;
     let expected_out = 98 * DECIMALS;
-    assert_eq!(out, expected_out);
-    assert_eq!(stoken_client.balance(&recipient), expected_out);
+    assert_eq!(out, expected_out, "out should equal expected_out");
+    assert_eq!(stoken_client.balance(&recipient), expected_out, "stoken_client.balance(&recipient) should equal expected_out");
 }
 
 #[test]
@@ -102,7 +101,7 @@ fn test_redeem_single_self_redeem() {
         .burning
         .redeem_single(&ctx.user, &ctx.user, &burn_amount, &currency);
     assert!(out > 0);
-    assert_eq!(stoken_client.balance(&ctx.user), out);
+    assert_eq!(stoken_client.balance(&ctx.user), out, "stoken_client.balance(&ctx.user) should equal out");
 }
 
 #[test]
@@ -231,10 +230,10 @@ fn test_redeem_single_multiple_calls() {
     assert!(out2 > 0);
 
     // Total stoken received
-    assert_eq!(stoken_client.balance(&recipient), out1 + out2);
+    assert_eq!(stoken_client.balance(&recipient), out1 + out2, "stoken_client.balance(&recipient) should equal out1 + out2");
 
     // User balance should be 0
-    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0);
+    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
 }
 
 #[test]
@@ -264,7 +263,7 @@ fn test_redeem_single_exact_min_amount() {
         .redeem_single(&ctx.user, &recipient, &min_amount, &currency);
 
     assert!(out > 0);
-    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0);
+    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
 }
 
 #[test]
@@ -295,5 +294,5 @@ fn test_redeem_single_large_amount() {
         .redeem_single(&ctx.user, &recipient, &burn_amount, &currency);
 
     assert!(out > 0);
-    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0);
+    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
 }

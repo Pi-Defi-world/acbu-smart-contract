@@ -57,10 +57,10 @@ fn test_redeem_basket_success() {
     let expected_out1 = (6000 * net_acbu * acbu_rate) / (BASIS_POINTS * DECIMALS);
     let expected_out2 = (4000 * net_acbu * acbu_rate) / (BASIS_POINTS * DECIMALS);
 
-    assert_eq!(amounts.get(0).unwrap(), expected_out1);
-    assert_eq!(amounts.get(1).unwrap(), expected_out2);
-    assert_eq!(st1.balance(&r1), expected_out1);
-    assert_eq!(st2.balance(&r2), expected_out2);
+    assert_eq!(amounts.get(0).unwrap(), expected_out1, "amounts.get(0).unwrap() should equal expected_out1");
+    assert_eq!(amounts.get(1).unwrap(), expected_out2, "amounts.get(1).unwrap() should equal expected_out2");
+    assert_eq!(st1.balance(&r1), expected_out1, "st1.balance(&r1) should equal expected_out1");
+    assert_eq!(st2.balance(&r2), expected_out2, "st2.balance(&r2) should equal expected_out2");
 }
 
 #[test]
@@ -120,10 +120,10 @@ fn test_redeem_basket_allocates_weighted_remainder() {
     let expected_net = burn_amount - expected_fee;
     let total_out = amounts.get(0).unwrap() + amounts.get(1).unwrap() + amounts.get(2).unwrap();
 
-    assert_eq!(total_out, expected_net);
-    assert_eq!(st1.balance(&r1), amounts.get(0).unwrap());
-    assert_eq!(st2.balance(&r2), amounts.get(1).unwrap());
-    assert_eq!(st3.balance(&r3), amounts.get(2).unwrap());
+    assert_eq!(total_out, expected_net, "total_out should equal expected_net");
+    assert_eq!(st1.balance(&r1), amounts.get(0).unwrap(), "st1.balance(&r1) should equal amounts.get(0).unwrap()");
+    assert_eq!(st2.balance(&r2), amounts.get(1).unwrap(), "st2.balance(&r2) should equal amounts.get(1).unwrap()");
+    assert_eq!(st3.balance(&r3), amounts.get(2).unwrap(), "st3.balance(&r3) should equal amounts.get(2).unwrap()");
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn test_redeem_basket_zero_weight_leg() {
         .redeem_basket(&ctx.user, &recipients, &burn_amount);
 
     assert!(amounts.get(0).unwrap() > 0);
-    assert_eq!(amounts.get(1).unwrap(), 0);
+    assert_eq!(amounts.get(1).unwrap(), 0, "amounts.get(1).unwrap() should equal 0");
 }
 
 #[test]
@@ -258,7 +258,7 @@ fn test_redeem_basket_exact_min_amount() {
         .redeem_basket(&ctx.user, &recipients, &min_amount);
 
     assert!(amounts.get(0).unwrap() > 0);
-    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0);
+    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
 }
 
 #[test]
@@ -319,7 +319,7 @@ fn test_redeem_basket_insufficient_reserves() {
 
     ctx.reserve_tracker.set_reserve_ok(&false);
 
-    let recipients = vec![&env, Address::generate(&env)];
+    let recipients = vec![&env, Address::generate(&env), Address::generate(&env)];
     ctx.burning
         .redeem_basket(&ctx.user, &recipients, &burn_amount);
 }
@@ -403,10 +403,10 @@ fn test_redeem_basket_multiple_calls() {
     assert!(out2 > 0);
 
     // Total stoken received should equal sum of both redemptions
-    assert_eq!(st1.balance(&recipient), out1 + out2);
+    assert_eq!(st1.balance(&recipient), out1 + out2, "st1.balance(&recipient) should equal out1 + out2");
 
     // User ACBU balance should be 0 after burning all
-    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0);
+    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
 }
 
 // --- Edge divisibility tests (FIX #326) ---

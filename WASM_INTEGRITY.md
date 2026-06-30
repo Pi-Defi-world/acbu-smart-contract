@@ -165,10 +165,17 @@ EXPECTED_HASH="NEW_HASH_HERE"
 
 ### 4. Verify Consistency
 
+Run the automated verification script before building:
+
 ```bash
-# Build will verify all hashes match
+# Automated script verifies hash across all contracts and fails fast on mismatch
+./scripts/verify_wasm_hash.sh
+
+# Build will also verify hashes via build.rs
 cargo build --target wasm32-unknown-unknown --release
 ```
+
+CI will re-run the same checks automatically via `.github/workflows/verify-wasm-integrity.yml` on push/PR.
 
 ### 5. Create PR with Changes
 

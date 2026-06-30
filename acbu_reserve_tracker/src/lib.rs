@@ -1,17 +1,14 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Map, Symbol, Vec,
 };
 
-use shared::{CurrencyCode, DataKey as SharedDataKey, ReserveData, BASIS_POINTS, CONTRACT_VERSION};
-
-// Single shared-crate re-export. Previously the file contained duplicate
-// `token_contract` module imports and orphaned `initialize` body fragments
-// that were dead code and could shadow real logic on upgrade (issue #197).
-mod shared {
-    pub use shared::*;
-}
+use shared::{
+    CurrencyCode, DataKey as SharedDataKey, ReserveData, BASIS_POINTS, CONTRACT_VERSION,
+    ORACLE_GET_ACBU_RATE, TOKEN_GET_TOTAL_SUPPLY,
+};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -19,7 +16,28 @@ mod shared {
 pub enum ReserveTrackerError {
     AlreadyInitialized = 8001,
     InvalidVersion = 8002,
+    ZeroSupply = 8003,
+    NoPendingAdmin = 8004,
+    AdminTimelockNotElapsed = 8005,
+    NoPendingAdminToCancel = 8006,
+    Unauthorized = 8007,
     Unknown = 8999,
+}
+
+impl Display for ReserveTrackerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::AlreadyInitialized => "reserve tracker already initialized",
+            Self::InvalidVersion => "invalid contract version",
+            Self::ZeroSupply => "zero supply",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::Unauthorized => "unauthorized",
+            Self::Unknown => "unknown reserve tracker error",
+        };
+        f.write_str(message)
+    }
 }
 
 #[contracttype]
@@ -33,6 +51,7 @@ pub struct DataKey {
     pub version: Symbol,
     pub pending_admin: Symbol,
     pub pending_admin_eligible_at: Symbol,
+    pub last_verify_call: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -44,12 +63,17 @@ const DATA_KEY: DataKey = DataKey {
     version: symbol_short!("VERSION"),
     pending_admin: symbol_short!("PEND_ADM"),
     pending_admin_eligible_at: symbol_short!("PEND_ETA"),
+    last_verify_call: symbol_short!("LAST_VFY"),
 };
 
 /// Admin rotation timelock: the pending admin must wait this long before
 /// claiming ownership, giving the current admin a window to cancel a mistaken
 /// or malicious transfer.
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
+
+/// Rate limit for verify_reserves calls to prevent spam and ledger load.
+/// Only one verify_reserves call is allowed per this cooldown period.
+const VERIFY_RESERVES_COOLDOWN_SECONDS: u64 = 60;
 
 contractmeta!(key = "version", val = "1");
 
@@ -86,12 +110,14 @@ impl ReserveTrackerContract {
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
+    /// Return the circulating ACBU total supply by cross-contract-calling
+    /// `get_total_supply` on the registered ACBU token contract.
     pub fn get_total_supply_from_token(env: &Env) -> i128 {
         let acbu_token_addr: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
         // Use invoke_contract to avoid dependency on a specific token client implementation
         env.invoke_contract(
             &acbu_token_addr,
-            &Symbol::new(env, "get_total_supply"),
+            &Symbol::new(env, TOKEN_GET_TOTAL_SUPPLY),
             Vec::new(env),
         )
     }
@@ -103,7 +129,20 @@ impl ReserveTrackerContract {
     /// `acbu_client.balance(&env.current_contract_address())`, which always returned 0
     /// because the reserve tracker holds no ACBU — causing reserve checks to be skipped
     /// entirely (fix for issue #193).
+    ///
+    /// Rate limited to prevent spam: only one call per VERIFY_RESERVES_COOLDOWN_SECONDS.
     pub fn verify_reserves(env: Env) -> bool {
+        let now = env.ledger().timestamp();
+
+        let last_call: Option<u64> = env.storage().instance().get(&DATA_KEY.last_verify_call);
+        if let Some(last) = last_call {
+            if now.saturating_sub(last) < VERIFY_RESERVES_COOLDOWN_SECONDS {
+                return false;
+            }
+        }
+
+        env.storage().instance().set(&DATA_KEY.last_verify_call, &now);
+
         let total_acbu_supply = Self::get_total_supply_from_token(&env);
         if total_acbu_supply == 0 {
             env.panic_with_error(ReserveTrackerError::ZeroSupply);
@@ -111,6 +150,9 @@ impl ReserveTrackerContract {
         Self::is_reserve_sufficient(env, total_acbu_supply)
     }
 
+    /// Like [`Self::verify_reserves`] but uses the caller-supplied
+    /// `total_acbu_supply` instead of querying the token contract. Returns `true`
+    /// if reserves meet the minimum ratio.
     pub fn verify_reserves_manual(env: Env, total_acbu_supply: i128) -> bool {
         Self::is_reserve_sufficient(env, total_acbu_supply)
     }
@@ -118,13 +160,17 @@ impl ReserveTrackerContract {
     /// Update reserve amount for a currency (admin or authorized address)
     pub fn update_reserve(
         env: Env,
-        _updater: Address,
+        updater: Address,
         currency: CurrencyCode,
         amount: i128,
         value_usd: i128,
     ) {
-        // Authorize admin
-        Self::check_admin(&env);
+        // Authorize updater
+        updater.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if updater != admin {
+            env.panic_with_error(ReserveTrackerError::Unauthorized);
+        }
 
         let current_time = env.ledger().timestamp();
 
@@ -150,6 +196,7 @@ impl ReserveTrackerContract {
 
     /// Get current reserves for all currencies
     pub fn get_all_reserves(env: Env) -> Map<CurrencyCode, ReserveData> {
+        env.storage().instance().extend_ttl(5184000, 5184000);
         env.storage()
             .instance()
             .get(&DATA_KEY.reserves)
@@ -157,6 +204,21 @@ impl ReserveTrackerContract {
     }
 
     /// Check if the total reserves are sufficient to back the ACBU supply
+    pub fn total_reserves(env: Env) -> i128 {
+        let reserves = Self::get_all_reserves(env.clone());
+        let mut total_usd = 0i128;
+        for (_curr, data) in reserves.iter() {
+            total_usd = total_usd.checked_add(data.value_usd).expect("Overflow");
+        }
+        total_usd
+    }
+
+    /// Return `true` if total reserve USD value backs `total_acbu_supply` at or
+    /// above the configured minimum reserve ratio (default 100%).
+    ///
+    /// Sums the USD value of all stored reserves and compares it against the ACBU
+    /// supply valued at the oracle's ACBU/USD rate. Trivially returns `true` when
+    /// supply is non-positive or values to zero.
     pub fn is_reserve_sufficient(env: Env, total_acbu_supply: i128) -> bool {
         if total_acbu_supply <= 0 {
             return true;
@@ -174,7 +236,7 @@ impl ReserveTrackerContract {
         let oracle_addr: Address = env.storage().instance().get(&DATA_KEY.oracle).unwrap();
         let acbu_usd_rate: i128 = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, "get_acbu_usd_rate"),
+            &Symbol::new(&env, ORACLE_GET_ACBU_RATE),
             Vec::new(&env),
         );
 
@@ -193,6 +255,9 @@ impl ReserveTrackerContract {
         current_ratio >= min_reserve_ratio
     }
 
+    /// Upgrade the contract WASM to `new_wasm_hash` and bump the stored version to
+    /// `new_version` (admin only). `new_version` must exceed the current version.
+    /// Runs any required migrations.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         Self::check_admin(&env);
 
@@ -208,7 +273,6 @@ impl ReserveTrackerContract {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
 
         // Run migrations
-        #[allow(clippy::single_match)]
         for v in current_version..new_version {
             match v {
                 0 => migrate_v0_to_v1(env.clone()),
@@ -242,11 +306,13 @@ impl ReserveTrackerContract {
     // Dependency address updaters (admin only)
     // -----------------------------------------------------------------------
 
+    /// Update the oracle contract address (admin only).
     pub fn update_oracle(env: Env, new_oracle: Address) {
         Self::check_admin(&env);
         env.storage().instance().set(&DATA_KEY.oracle, &new_oracle);
     }
 
+    /// Update the ACBU token contract address (admin only).
     pub fn update_acbu_token(env: Env, new_acbu_token: Address) {
         Self::check_admin(&env);
         env.storage()
@@ -300,7 +366,9 @@ impl ReserveTrackerContract {
         }
 
         let old_admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        env.storage().instance().set(&DATA_KEY.admin, &pending_admin);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.admin, &pending_admin);
         env.storage().instance().remove(&DATA_KEY.pending_admin);
         env.storage()
             .instance()
@@ -336,6 +404,14 @@ impl ReserveTrackerContract {
         env.storage().instance().get(&DATA_KEY.admin).unwrap()
     }
 
+    /// Check if the contract has been initialized.
+    ///
+    /// Backend services can call this before invoking other functions to avoid
+    /// cryptic storage-not-found errors from uninitialized contracts.
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&SharedDataKey::Version)
+    }
+
     /// Pending successor, if a transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&DATA_KEY.pending_admin)
@@ -359,5 +435,5 @@ impl ReserveTrackerContract {
 }
 
 fn migrate_v0_to_v1(_env: Env) {
-    // Migration logic
+    // No storage schema changes between v0 and v1.
 }

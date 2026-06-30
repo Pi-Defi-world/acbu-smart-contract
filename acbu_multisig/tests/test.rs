@@ -28,8 +28,8 @@ fn test_initialize_2_of_3() {
     env.mock_all_auths();
     let (signers, client) = setup(&env, 3, 2);
     let cfg = client.get_config();
-    assert_eq!(cfg.threshold, 2);
-    assert_eq!(cfg.signers.len(), 3);
+    assert_eq!(cfg.threshold, 2, "cfg.threshold should equal 2");
+    assert_eq!(cfg.signers.len(), 3, "cfg.signers.len() should equal 3");
     assert!(client.is_signer(&signers[0]));
     assert!(client.is_signer(&signers[1]));
     assert!(client.is_signer(&signers[2]));
@@ -41,8 +41,8 @@ fn test_initialize_3_of_5() {
     env.mock_all_auths();
     let (_signers, client) = setup(&env, 5, 3);
     let cfg = client.get_config();
-    assert_eq!(cfg.threshold, 3);
-    assert_eq!(cfg.signers.len(), 5);
+    assert_eq!(cfg.threshold, 3, "cfg.threshold should equal 3");
+    assert_eq!(cfg.signers.len(), 5, "cfg.signers.len() should equal 5");
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn test_propose_returns_id_zero() {
     env.mock_all_auths();
     let (signers, client) = setup(&env, 3, 2);
     let id = client.propose(&signers[0], &SorobanString::from_str(&env, "pause"));
-    assert_eq!(id, 0);
+    assert_eq!(id, 0, "id should equal 0");
 }
 
 #[test]
@@ -113,8 +113,8 @@ fn test_propose_increments_id() {
     let (signers, client) = setup(&env, 3, 2);
     let id0 = client.propose(&signers[0], &SorobanString::from_str(&env, "pause"));
     let id1 = client.propose(&signers[1], &SorobanString::from_str(&env, "upgrade"));
-    assert_eq!(id0, 0);
-    assert_eq!(id1, 1);
+    assert_eq!(id0, 0, "id0 should equal 0");
+    assert_eq!(id1, 1, "id1 should equal 1");
 }
 
 #[test]
@@ -123,7 +123,7 @@ fn test_proposer_approval_counted_immediately() {
     env.mock_all_auths();
     let (signers, client) = setup(&env, 3, 2);
     let pid = client.propose(&signers[0], &SorobanString::from_str(&env, "pause"));
-    assert_eq!(client.approval_count(&pid), 1);
+    assert_eq!(client.approval_count(&pid), 1, "client.approval_count(&pid) should equal 1");
 }
 
 #[test]
@@ -145,7 +145,7 @@ fn test_approve_increments_count() {
     let (signers, client) = setup(&env, 3, 2);
     let pid = client.propose(&signers[0], &SorobanString::from_str(&env, "pause"));
     client.approve(&signers[1], &pid);
-    assert_eq!(client.approval_count(&pid), 2);
+    assert_eq!(client.approval_count(&pid), 2, "client.approval_count(&pid) should equal 2");
 }
 
 #[test]

@@ -5,11 +5,6 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_fee, BurnEvent, ContractError, CurrencyCode, DataKey as SharedDataKey, BASIS_POINTS,
-    CONTRACT_VERSION, DECIMALS, MIN_BURN_AMOUNT,
-    ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_CURRENCIES, ORACLE_GET_BASKET_WEIGHT,
-    ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR, UPDATE_INTERVAL_SECONDS,
-};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -22,7 +17,7 @@ pub struct DataKey {
     pub vault: Symbol,
     pub fee_rate: Symbol,
     pub fee_single_redeem: Symbol,
-    pub paused: Symbol,
+    pub phase: Symbol,
     pub min_burn_amount: Symbol,
     pub pending_admin: Symbol,
     pub pending_admin_eligible_at: Symbol,
@@ -37,13 +32,19 @@ const DATA_KEY: DataKey = DataKey {
     vault: symbol_short!("VAULT"),
     fee_rate: symbol_short!("FEE_RATE"),
     fee_single_redeem: symbol_short!("FEE_S_R"),
-    paused: symbol_short!("PAUSED"),
+    phase: symbol_short!("PHASE"),
     min_burn_amount: symbol_short!("MIN_BURN"),
     pending_admin: symbol_short!("PEND_ADM"),
     pending_admin_eligible_at: symbol_short!("PEND_ETA"),
 };
 
+
 contractmeta!(key = "version", val = "1");
+
+/// Admin rotation timelock: the pending admin must wait this long before
+/// claiming ownership, giving the current admin a window to cancel a mistaken
+/// or malicious transfer.
+const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 
 #[contract]
 pub struct BurningContract;
@@ -94,7 +95,7 @@ impl BurningContract {
         env.storage()
             .instance()
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
         env.storage()
             .instance()
             .set(&DATA_KEY.min_burn_amount, &MIN_BURN_AMOUNT);
@@ -107,7 +108,6 @@ impl BurningContract {
         acbu_amount: i128,
         currency: CurrencyCode,
     ) -> i128 {
-        shared::reentrancy_guard::acquire_guard(&env);
 
         Self::check_paused(&env);
         user.require_auth();
@@ -136,12 +136,12 @@ impl BurningContract {
             .get(&DATA_KEY.reserve_tracker)
             .unwrap();
 
+
         let (acbu_rate, oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
             &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
             vec![&env],
         );
-        let current_time = env.ledger().timestamp();
         if current_time > oracle_timestamp.saturating_add(UPDATE_INTERVAL_SECONDS) {
             env.panic_with_error(ContractError::OracleError);
         }
@@ -170,6 +170,7 @@ impl BurningContract {
             .checked_sub(fee)
             .expect("Underflow in net acbu calculation");
 
+
         let stoken_out = net_acbu
             .checked_mul(acbu_rate)
             .and_then(|v| v.checked_div(rate))
@@ -184,9 +185,9 @@ impl BurningContract {
         let spender = env.current_contract_address();
         token.transfer_from(&spender, &vault, &recipient, &stoken_out);
 
-        let tx_id = SorobanString::from_str(&env, "redeem_single");
+
         let burn_event = BurnEvent {
-            transaction_id: tx_id,
+            transaction_id: SorobanString::from_str(&env, "redeem_single"),
             user: user.clone(),
             acbu_amount,
             net_acbu,
@@ -199,32 +200,28 @@ impl BurningContract {
         env.events()
             .publish((symbol_short!("burn"), user), burn_event);
 
-        shared::reentrancy_guard::release_guard(&env);
 
         stoken_out
     }
 
     /// Redeem ACBU for proportional Afreum S-tokens across the basket (lower fee tier).
     ///
-    /// Fee is applied to the total acbu_amount FIRST, then the remainder is split
-    /// among recipients. This avoids per-slice rounding precision loss that would
-    /// occur if the gross amount were split first and fee deducted per-slice.
+
     pub fn redeem_basket(
         env: Env,
         user: Address,
         recipients: Vec<Address>,
         acbu_amount: i128,
     ) -> Vec<i128> {
-        shared::reentrancy_guard::acquire_guard(&env);
 
         Self::check_paused(&env);
         user.require_auth();
 
         if recipients.is_empty() {
+
             env.panic_with_error(ContractError::InvalidRecipient);
         }
 
-        let rlen = recipients.len();
         for i in 0..rlen {
             for j in (i + 1)..rlen {
                 if recipients.get(i).unwrap() == recipients.get(j).unwrap() {
@@ -265,22 +262,6 @@ impl BurningContract {
             env.panic_with_error(ContractError::InvalidRate);
         }
 
-        // FIX(#326): Fee applied FIRST to the total, THEN split among recipients.
-        // This avoids per-slice precision loss from splitting then applying fee.
-        let total_fee = calculate_fee(acbu_amount, fee_rate);
-        let net_acbu = acbu_amount
-            .checked_sub(total_fee)
-            .expect("Underflow in net acbu calculation");
-
-        let usd_total = net_acbu
-            .checked_mul(acbu_rate)
-            .and_then(|v| v.checked_div(DECIMALS))
-            .expect("Overflow in usd total calculation");
-
-        Self::check_reserves(&env, &acbu_token, &reserve_tracker_addr);
-
-        let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token);
-        acbu_client.burn(&user, &acbu_amount);
 
         let currencies: Vec<CurrencyCode> = env.invoke_contract(
             &oracle_addr,
@@ -294,23 +275,15 @@ impl BurningContract {
             env.panic_with_error(ContractError::InvalidRecipient);
         }
 
-        let mut total_weight: i128 = 0;
-        let mut weights = Vec::new(&env);
-        let mut last_positive_weight_index: Option<u32> = None;
 
         for i in 0..currencies.len() {
             let currency = currencies.get(i).unwrap();
             let weight: i128 = env.invoke_contract(
                 &oracle_addr,
                 &Symbol::new(&env, ORACLE_GET_BASKET_WEIGHT),
-                vec![&env, currency.clone().into_val(&env)],
+                vec![&env, currency.into_val(&env)],
             );
-            weights.push_back(weight);
-            total_weight = total_weight.checked_add(weight).expect("Overflow");
-            if weight > 0 {
-                last_positive_weight_index = Some(i);
-            }
-        }
+
 
         if total_weight == 0 {
             env.panic_with_error(ContractError::InvalidRate);
@@ -363,12 +336,7 @@ impl BurningContract {
                 )
             };
 
-            allocated_usd = allocated_usd.checked_add(usd_i).expect("Overflow");
-            allocated_gross = allocated_gross.checked_add(acbu_gross_i).expect("Overflow");
-            allocated_fee = allocated_fee.checked_add(fee_i).expect("Overflow");
 
-            let native_i = usd_i
-                .checked_mul(DECIMALS)
                 .and_then(|v| v.checked_div(rate))
                 .expect("Overflow in native amount");
 
@@ -377,21 +345,14 @@ impl BurningContract {
                 .expect("Underflow in net per-leg");
 
             if native_i > 0 {
-                let stoken: Address = env.invoke_contract(
-                    &oracle_addr,
-                    &Symbol::new(&env, ORACLE_GET_S_TOKEN_ADDR),
-                    vec![&env, currency.clone().into_val(&env)],
-                );
+
                 let token = soroban_sdk::token::Client::new(&env, &stoken);
                 let spender = env.current_contract_address();
                 token.transfer_from(&spender, &vault, &recipient, &native_i);
             }
-
             amounts_out.push_back(native_i);
 
-            let tx_id = SorobanString::from_str(&env, "redeem_basket");
-            let burn_event = BurnEvent {
-                transaction_id: tx_id,
+
                 user: user.clone(),
                 acbu_amount: acbu_gross_i,
                 net_acbu: net_acbu_i,
@@ -405,68 +366,13 @@ impl BurningContract {
                 .publish((symbol_short!("burn"), user.clone()), burn_event);
         }
 
-        shared::reentrancy_guard::release_guard(&env);
 
+
+        reentrancy_guard::release_guard(&env);
         amounts_out
     }
 
-    pub fn version(env: Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&SharedDataKey::Version)
-            .unwrap_or(0)
-    }
 
-    pub fn get_fee_rate(env: Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DATA_KEY.fee_rate)
-            .unwrap()
-    }
-
-    pub fn get_fee_single_redeem(env: Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DATA_KEY.fee_single_redeem)
-            .unwrap()
-    }
-
-    pub fn set_fee_rate(env: Env, fee_rate_bps: i128) {
-        Self::check_admin(&env);
-        if !(0..=BASIS_POINTS).contains(&fee_rate_bps) {
-            env.panic_with_error(ContractError::InvalidRate);
-        }
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.fee_rate, &fee_rate_bps);
-    }
-
-    pub fn set_fee_single_redeem(env: Env, fee_single_redeem_bps: i128) {
-        Self::check_admin(&env);
-        if !(0..=BASIS_POINTS).contains(&fee_single_redeem_bps) {
-            env.panic_with_error(ContractError::InvalidRate);
-        }
-        env.storage()
-            .instance()
-            .set(&DATA_KEY.fee_single_redeem, &fee_single_redeem_bps);
-    }
-
-    pub fn pause(env: Env) {
-        Self::check_admin(&env);
-        env.storage().instance().set(&DATA_KEY.paused, &true);
-    }
-
-    pub fn unpause(env: Env) {
-        Self::check_admin(&env);
-        env.storage().instance().set(&DATA_KEY.paused, &false);
-    }
-
-    pub fn is_paused(env: Env) -> bool {
-        env.storage()
-            .instance()
-            .get(&DATA_KEY.paused)
-            .unwrap_or(false)
-    }
 
     pub fn transfer_admin(env: Env, new_admin: Address) {
         Self::check_admin(&env);
@@ -489,7 +395,7 @@ impl BurningContract {
             .storage()
             .instance()
             .get(&DATA_KEY.pending_admin)
-            .unwrap_or_else(|| env.panic_with_error(ContractError::NoPendingAdmin));
+            .unwrap_or_else(|| env.panic_with_error(ContractError::Unknown));
         pending_admin.require_auth();
 
         let eligible_at: u64 = env
@@ -498,11 +404,13 @@ impl BurningContract {
             .get(&DATA_KEY.pending_admin_eligible_at)
             .unwrap_or(u64::MAX);
         if env.ledger().timestamp() < eligible_at {
-            env.panic_with_error(ContractError::AdminTimelockNotElapsed);
+            env.panic_with_error(ContractError::Unauthorized);
         }
 
         let old_admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        env.storage().instance().set(&DATA_KEY.admin, &pending_admin);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.admin, &pending_admin);
         env.storage().instance().remove(&DATA_KEY.pending_admin);
         env.storage()
             .instance()
@@ -516,11 +424,6 @@ impl BurningContract {
 
     pub fn cancel_admin_transfer(env: Env) {
         Self::check_admin(&env);
-        let pending_admin: Address = env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.pending_admin)
-            .unwrap_or_else(|| env.panic_with_error(ContractError::NoPendingAdminToCancel));
         env.storage().instance().remove(&DATA_KEY.pending_admin);
         env.storage()
             .instance()
@@ -528,17 +431,20 @@ impl BurningContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         env.events().publish(
             (symbol_short!("adm_cncl"),),
-            (admin, pending_admin, env.ledger().timestamp()),
+            (admin, env.ledger().timestamp()),
         );
     }
+
 
     pub fn get_admin(env: Env) -> Address {
         env.storage().instance().get(&DATA_KEY.admin).unwrap()
     }
 
+
     pub fn get_pending_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&DATA_KEY.pending_admin)
     }
+
 
     pub fn get_pending_admin_eligible_at(env: Env) -> Option<u64> {
         env.storage()
@@ -546,14 +452,13 @@ impl BurningContract {
             .get(&DATA_KEY.pending_admin_eligible_at)
     }
 
+
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         Self::check_admin(&env);
-
-        let current_version = Self::version(env.clone());
+        let current_version = Self::get_version(env.clone());
         if new_version <= current_version {
             env.panic_with_error(ContractError::InvalidVersion);
         }
-
         env.deployer().update_current_contract_wasm(new_wasm_hash);
 
         for v in current_version..new_version {
@@ -561,7 +466,6 @@ impl BurningContract {
                 migrate_v0_to_v1(env.clone());
             }
         }
-
         env.storage()
             .instance()
             .set(&SharedDataKey::Version, &new_version);
@@ -575,11 +479,14 @@ impl BurningContract {
     }
 
     fn check_reserves(env: &Env, acbu_token: &Address, reserve_tracker_addr: &Address) {
-        let current_supply: i128 =
-            env.invoke_contract(acbu_token, &Symbol::new(env, "get_total_supply"), vec![env]);
+        let current_supply: i128 = env.invoke_contract(
+            acbu_token,
+            &Symbol::new(env, TOKEN_GET_TOTAL_SUPPLY),
+            vec![env],
+        );
         let reserve_ok: bool = env.invoke_contract(
             reserve_tracker_addr,
-            &Symbol::new(env, "is_reserve_sufficient"),
+            &Symbol::new(env, RESERVE_IS_SUFFICIENT),
             vec![env, current_supply.into_val(env)],
         );
         if !reserve_ok {
@@ -588,12 +495,7 @@ impl BurningContract {
     }
 
     fn check_paused(env: &Env) {
-        let paused: bool = env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.paused)
-            .unwrap_or(false);
-        if paused {
+
             env.panic_with_error(ContractError::Paused);
         }
     }

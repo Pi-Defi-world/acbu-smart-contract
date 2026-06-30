@@ -1,18 +1,19 @@
 #![no_std]
+use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
-    BytesN, Env, Symbol,
+    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    BytesN, Env,
 };
 
-use shared::{DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, reentrancy_guard};
+use shared::{ContractPhase, DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, reentrancy_guard};
 
 #[contracttype]
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 pub enum DataKey {
     Admin,
     AcbuToken,
     FeeRate,
-    Paused,
+    Phase,
     Balance(Address),
     Borrowed(Address), // Tracks total amount borrowed from each lender
     Loan(LoanId),
@@ -27,6 +28,11 @@ pub enum DataKey {
 
 const VERSION: u32 = CONTRACT_VERSION;
 const UPGRADE_TIMELOCK_SECONDS: u64 = 86_400;
+/// Minimum balance a lender may leave in the pool after a partial withdrawal.
+/// A withdrawal must either drain the balance to zero or leave at least this
+/// amount. This prevents dust balances (e.g. 1 stroop) that waste a storage
+/// entry and cause precision errors in later operations.
+const MIN_POOL_BALANCE: i128 = 1_000_000; // 0.1 ACBU (7 decimals)
 /// Admin rotation timelock: the pending admin must wait this long before
 /// claiming ownership, giving the current admin a window to cancel a mistaken
 /// or malicious transfer.
@@ -35,6 +41,13 @@ const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoanId(pub Address, pub u64);
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LoanStatus {
+    Active,
+    Repaid,
+}
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -48,10 +61,22 @@ pub struct LoanData {
     pub repayment_deadline: u64,
     pub accrued_interest: i128,
     pub total_repayment_due: i128,
+    pub status: LoanStatus,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+/// Emitted when a lender deposits liquidity into the pool.
+///
+/// The `lender` address is carried in the event **payload** (not only the
+/// topic) so off-chain indexers can attribute a deposit to a specific user
+/// without having to parse the originating transaction envelope. See #369.
+#[contractevent]
+pub struct DepositEvent {
+    pub lender: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+}
+
+#[contractevent]
 pub struct BorrowEvent {
     pub creator: Address,
     pub amount: i128,
@@ -60,8 +85,7 @@ pub struct BorrowEvent {
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct RepayEvent {
     pub creator: Address,
     pub amount: i128,
@@ -70,8 +94,7 @@ pub struct RepayEvent {
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct LoanCreatedEvent {
     pub loan_id: u64,
     pub lender: Address,
@@ -82,8 +105,7 @@ pub struct LoanCreatedEvent {
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct LoanRepaidEvent {
     pub loan_id: u64,
     pub borrower: Address,
@@ -91,8 +113,7 @@ pub struct LoanRepaidEvent {
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct RepaymentEvent {
     pub borrower: Address,
     pub amount: i128,
@@ -111,6 +132,7 @@ pub enum Error {
     InsufficientBalance = 6,
     InsufficientCollateral = 7,
     InsufficientLiquidity = 8,
+    DustBalance = 9,
     Paused = 2001,
     InvalidVersion = 2002,
     TimelockNotElapsed = 2003,
@@ -119,6 +141,31 @@ pub enum Error {
     AdminTimelockNotElapsed = 2006,
     NoPendingAdminToCancel = 2007,
     Unknown = 2999,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::NotFound => "resource not found",
+            Self::InvalidState => "invalid lending pool state",
+            Self::Unauthorized => "unauthorized",
+            Self::AlreadyInitialized => "lending pool already initialized",
+            Self::InvalidAmount => "invalid amount",
+            Self::InsufficientBalance => "insufficient balance",
+            Self::InsufficientCollateral => "insufficient collateral",
+            Self::InsufficientLiquidity => "insufficient liquidity",
+            Self::DustBalance => "dust balance",
+            Self::Paused => "lending pool is paused",
+            Self::InvalidVersion => "invalid contract version",
+            Self::TimelockNotElapsed => "timelock has not elapsed",
+            Self::NoPendingUpgrade => "no pending upgrade",
+            Self::NoPendingAdmin => "no pending admin",
+            Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
+            Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::Unknown => "unknown lending pool error",
+        };
+        f.write_str(message)
+    }
 }
 
 contractmeta!(key = "version", val = "1");
@@ -146,13 +193,18 @@ impl LendingPool {
         env.storage()
             .instance()
             .set(&DataKey::FeeRate, &fee_rate_bps);
-        env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().set(&DataKey::Phase, &ContractPhase::Active);
         env.storage().instance().set(&DataKey::ActiveLoansLiquidity, &0i128);
         env.storage()
             .instance()
             .set(&SharedDataKey::Version, &VERSION);
     }
 
+    /// Deposit `amount` of ACBU into the pool as the caller's lendable liquidity.
+    ///
+    /// Requires `lender`'s authorization and that the pool is not paused. The
+    /// tokens are pulled from `lender` into the contract and credited to their
+    /// pool balance. `amount` must be positive. Emits a [`DepositEvent`].
     pub fn deposit(env: Env, lender: Address, amount: i128) {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
@@ -182,13 +234,25 @@ impl LendingPool {
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
         token.transfer(&lender, &env.current_contract_address(), &amount);
 
-        env.events()
-            .publish((symbol_short!("deposit"), lender), amount);
+        env.events().publish(
+            (symbol_short!("deposit"), lender.clone()),
+            DepositEvent {
+                lender,
+                amount,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         // Release re-entrancy guard
         reentrancy_guard::release_guard(&env);
     }
 
+    /// Withdraw `amount` of ACBU from the caller's pool balance.
+    ///
+    /// Requires `lender`'s authorization and that the pool is not paused. Only the
+    /// portion of the balance not currently lent out (balance minus borrowed) may
+    /// be withdrawn. A withdrawal must either drain the balance to zero or leave at
+    /// least [`MIN_POOL_BALANCE`]; otherwise it fails with [`Error::DustBalance`].
     pub fn withdraw(env: Env, lender: Address, amount: i128) {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
@@ -221,6 +285,13 @@ impl LendingPool {
         let new_balance = current_balance
             .checked_sub(amount)
             .unwrap_or_else(|| env.panic_with_error(Error::InsufficientBalance));
+
+        // Reject withdrawals that would leave a dust balance behind. The lender
+        // must either withdraw their full balance or keep at least the minimum.
+        if new_balance != 0 && new_balance < MIN_POOL_BALANCE {
+            env.panic_with_error(Error::DustBalance);
+        }
+
         env.storage()
             .persistent()
             .set(&DataKey::Balance(lender.clone()), &new_balance);
@@ -236,6 +307,14 @@ impl LendingPool {
         reentrancy_guard::release_guard(&env);
     }
 
+    /// Borrow `amount` of ACBU against `collateral_amount` from a specific
+    /// `lender`'s liquidity, creating a new loan keyed by `(borrower, loan_id)`.
+    ///
+    /// Requires `borrower`'s authorization and that the pool is not paused. The
+    /// loan must be at least 100% collateralized (`collateral_amount >= amount`)
+    /// and the lender must have enough unborrowed balance. The collateral is
+    /// pulled in before the principal is paid out. `loan_id` must be unique for
+    /// the borrower. Emits [`BorrowEvent`] and [`LoanCreatedEvent`].
     pub fn borrow(
         env: Env,
         borrower: Address,
@@ -304,19 +383,21 @@ impl LendingPool {
 
         let fee_rate_bps: i128 = env.storage().instance().get(&DataKey::FeeRate).unwrap_or(0);
         let start_time = env.ledger().timestamp();
-        
+
         let loan_data = LoanData {
             borrower: borrower.clone(),
             lender: lender.clone(),
             amount,
             collateral_amount,
-            interest_rate_bps: fee_rate_bps as u32,
+            interest_rate_bps: u32::try_from(fee_rate_bps)
+                .unwrap_or_else(|_| env.panic_with_error(Error::InvalidAmount)),
             loan_start_timestamp: start_time,
             repayment_deadline: start_time + (30 * 24 * 60 * 60),
             accrued_interest: 0,
             total_repayment_due: amount,
+            status: LoanStatus::Active,
         };
-        
+
         env.storage()
             .persistent()
             .set(&DataKey::Loan(loan_key), &loan_data);
@@ -355,9 +436,20 @@ impl LendingPool {
         reentrancy_guard::release_guard(&env);
     }
 
+    /// Return the loan identified by `(borrower, loan_id)`, or `None` if it does
+    /// not exist.
+    ///
+    /// For active loans the returned [`LoanData`] is updated in-memory with the
+    /// fee accrued up to the current ledger timestamp (`accrued_interest` and
+    /// `total_repayment_due` are recomputed); the stored loan is not modified.
+    /// Repaid loans are returned as-is.
     pub fn get_loan(env: Env, borrower: Address, loan_id: u64) -> Option<LoanData> {
         let loan_key = LoanId(borrower, loan_id);
         let mut loan_data: LoanData = env.storage().persistent().get(&DataKey::Loan(loan_key))?;
+
+        if let LoanStatus::Repaid = loan_data.status {
+            return Some(loan_data);
+        }
 
         let current_time = env.ledger().timestamp();
         let elapsed = current_time.saturating_sub(loan_data.loan_start_timestamp);
@@ -380,6 +472,13 @@ impl LendingPool {
         Some(loan_data)
     }
 
+    /// Repay `amount` toward the loan `(borrower, loan_id)`.
+    ///
+    /// Requires `borrower`'s authorization and that the pool is not paused.
+    /// `amount` is applied to accrued interest first, then principal, and may not
+    /// exceed the total amount due. When the principal reaches zero the loan is
+    /// marked [`LoanStatus::Repaid`] and the collateral is returned to the
+    /// borrower. Emits [`RepayEvent`], [`RepaymentEvent`] and [`LoanRepaidEvent`].
     pub fn repay(env: Env, borrower: Address, amount: i128, loan_id: u64) {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
@@ -398,6 +497,9 @@ impl LendingPool {
         if amount > loan_data.total_repayment_due {
             env.panic_with_error(Error::InvalidAmount);
         }
+        if let LoanStatus::Repaid = loan_data.status {
+            env.panic_with_error(Error::InvalidState);
+        }
 
         let acbu_token: Address = env.storage().instance().get(&DataKey::AcbuToken).unwrap();
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
@@ -411,8 +513,17 @@ impl LendingPool {
         // CEI: Update state before external calls
         loan_data.amount = loan_data.amount.checked_sub(principal_repaid).unwrap_or(0);
 
-        let active_loans_liquidity: i128 = env.storage().instance().get(&DataKey::ActiveLoansLiquidity).unwrap_or(0);
-        env.storage().instance().set(&DataKey::ActiveLoansLiquidity, &active_loans_liquidity.checked_sub(principal_repaid).unwrap_or(0));
+        let active_loans_liquidity: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ActiveLoansLiquidity)
+            .unwrap_or(0);
+        env.storage().instance().set(
+            &DataKey::ActiveLoansLiquidity,
+            &active_loans_liquidity
+                .checked_sub(principal_repaid)
+                .unwrap_or(0),
+        );
 
         if principal_repaid > 0 {
             let lender = loan_data.lender.clone();
@@ -437,7 +548,15 @@ impl LendingPool {
                     &loan_data.collateral_amount,
                 );
             }
-            env.storage().persistent().remove(&DataKey::Loan(loan_key));
+            loan_data.collateral_amount = 0;
+            loan_data.accrued_interest = 0;
+            loan_data.total_repayment_due = 0;
+            loan_data.loan_start_timestamp = env.ledger().timestamp();
+            loan_data.status = LoanStatus::Repaid;
+
+            env.storage()
+                .persistent()
+                .set(&DataKey::Loan(loan_key), &loan_data);
         } else {
             loan_data.loan_start_timestamp = env.ledger().timestamp();
             let remaining_interest = if amount < loan_data.accrued_interest {
@@ -489,16 +608,22 @@ impl LendingPool {
         reentrancy_guard::release_guard(&env);
     }
 
+    /// Pause the pool, disabling deposit/withdraw/borrow/repay. Admin only.
     pub fn pause(env: Env) {
         Self::check_admin(&env);
-        env.storage().instance().set(&DataKey::Paused, &true);
+        env.storage().instance().set(&DataKey::Phase, &ContractPhase::Paused);
     }
 
+    /// Unpause the pool, re-enabling state-changing operations. Admin only.
     pub fn unpause(env: Env) {
         Self::check_admin(&env);
-        env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().set(&DataKey::Phase, &ContractPhase::Active);
     }
 
+    /// Stage a WASM upgrade to `new_wasm_hash`/`new_version` and start the upgrade
+    /// timelock. Admin only. `new_version` must exceed the current version. The
+    /// upgrade is applied later via [`Self::execute_upgrade`] once the timelock
+    /// elapses, and can be aborted with [`Self::cancel_upgrade`].
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         Self::check_admin(&env);
         let current_version: u32 = env
@@ -521,6 +646,10 @@ impl LendingPool {
             .set(&DataKey::PendingUpgradeEligibleAt, &eligible_at);
     }
 
+    /// Execute a previously proposed upgrade once its timelock has elapsed,
+    /// swapping in the new WASM, running any migrations and bumping the stored
+    /// version. Admin only. Fails if no upgrade is pending or the timelock is
+    /// still active.
     pub fn execute_upgrade(env: Env) {
         Self::check_admin(&env);
         let wasm_hash: BytesN<32> = env
@@ -556,7 +685,6 @@ impl LendingPool {
             .instance()
             .remove(&DataKey::PendingUpgradeEligibleAt);
         env.deployer().update_current_contract_wasm(wasm_hash);
-        #[allow(clippy::single_match)]
         for v in current_version..new_version {
             match v {
                 0 => migrate_v0_to_v1(env.clone()),
@@ -568,6 +696,8 @@ impl LendingPool {
             .set(&SharedDataKey::Version, &new_version);
     }
 
+    /// Cancel a pending upgrade, clearing the staged WASM hash, version and
+    /// timelock. Admin only.
     pub fn cancel_upgrade(env: Env) {
         Self::check_admin(&env);
         env.storage()
@@ -581,6 +711,8 @@ impl LendingPool {
             .remove(&DataKey::PendingUpgradeEligibleAt);
     }
 
+    /// Return the lender's total pool balance (including any amount currently lent
+    /// out), or `0` if they have never deposited.
     pub fn get_balance(env: Env, lender: Address) -> i128 {
         env.storage()
             .persistent()
@@ -726,12 +858,12 @@ impl LendingPool {
     }
 
     fn check_not_paused(env: &Env) {
-        let paused: bool = env
+        let phase: ContractPhase = env
             .storage()
             .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false);
-        if paused {
+            .get(&DataKey::Phase)
+            .unwrap_or(ContractPhase::Uninitialized);
+        if phase == ContractPhase::Paused {
             env.panic_with_error(Error::Paused);
         }
     }
@@ -767,4 +899,6 @@ impl LendingPool {
     }
 }
 
-fn migrate_v0_to_v1(_env: Env) {}
+fn migrate_v0_to_v1(_env: Env) {
+    // No storage schema changes between v0 and v1.
+}

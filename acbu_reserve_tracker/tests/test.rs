@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use acbu_reserve_tracker::{ReserveTrackerContract, ReserveTrackerContractClient};
-use shared::{CurrencyCode, DECIMALS, ReserveData};
+use shared::{CurrencyCode, ReserveData, DECIMALS};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env,
@@ -107,9 +107,9 @@ fn test_update_and_get_all_reserves_and_timestamp() {
     for (_c, d) in reserves.iter() {
         if d.currency == ngn {
             found = true;
-            assert_eq!(d.amount, 500);
-            assert_eq!(d.value_usd, 5 * DECIMALS);
-            assert_eq!(d.timestamp, 12345);
+            assert_eq!(d.amount, 500, "d.amount should equal 500");
+            assert_eq!(d.value_usd, 5 * DECIMALS, "d.value_usd should equal 5 * DECIMALS");
+            assert_eq!(d.timestamp, 12345, "d.timestamp should equal 12345");
         }
     }
     assert!(found);
@@ -122,9 +122,9 @@ fn test_update_and_get_all_reserves_and_timestamp() {
     for (_c, d) in reserves2.iter() {
         if d.currency == ngn {
             found2 = true;
-            assert_eq!(d.amount, 1000);
-            assert_eq!(d.value_usd, 10 * DECIMALS);
-            assert_eq!(d.timestamp, 22345);
+            assert_eq!(d.amount, 1000, "d.amount should equal 1000");
+            assert_eq!(d.value_usd, 10 * DECIMALS, "d.value_usd should equal 10 * DECIMALS");
+            assert_eq!(d.timestamp, 22345, "d.timestamp should equal 22345");
         }
     }
     assert!(found2);
@@ -203,7 +203,7 @@ fn test_reset_reserves_by_admin_clears_all_entries() {
     client.update_reserve(&admin, &ngn, &1_000, &(5 * DECIMALS));
     client.update_reserve(&admin, &kes, &2_000, &(5 * DECIMALS));
 
-    assert_eq!(client.get_all_reserves().len(), 2);
+    assert_eq!(client.get_all_reserves().len(), 2, "client.get_all_reserves().len() should equal 2");
 
     client.reset_reserves();
 
@@ -286,5 +286,45 @@ fn test_verify_reserves_errors_when_total_supply_is_zero() {
     assert!(
         result.is_err(),
         "verify_reserves must error when total_acbu_supply is zero"
+    );
+}
+
+#[test]
+fn test_update_reserve_without_admin_auth_fails() {
+    let env = Env::default();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+
+    let acbu_token = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+
+    // Provide only the attacker auth, update_reserve must reject it
+    use soroban_sdk::testutils::MockAuth;
+    use soroban_sdk::testutils::MockAuthInvoke;
+    use soroban_sdk::IntoVal;
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "update_reserve",
+            args: (attacker.clone(), ngn.clone(), 1_000i128, 5i128 * DECIMALS).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_update_reserve(&attacker, &ngn, &1_000, &(5 * DECIMALS));
+    assert!(
+        result.is_err(),
+        "update_reserve must reject callers that are not the admin"
     );
 }

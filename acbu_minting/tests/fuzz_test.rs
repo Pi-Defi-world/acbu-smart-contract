@@ -49,7 +49,7 @@ mod mocks {
     }
 }
 
-fn setup_fuzz_test(env: &Env) -> (Address, Address, MintingContractClient, Address, soroban_sdk::token::StellarAssetClient<'_, '_>, soroban_sdk::token::Client<'_, '_>) {
+fn setup_fuzz_test(env: &Env) -> (Address, Address, MintingContractClient, Address, soroban_sdk::token::StellarAssetClient<'_>, soroban_sdk::token::Client<'_>) {
     let admin = Address::generate(env);
     let oracle = env.register_contract(None, mocks::MockOracle);
     let reserve_tracker = env.register_contract(None, mocks::MockReserveTracker);
@@ -60,17 +60,19 @@ fn setup_fuzz_test(env: &Env) -> (Address, Address, MintingContractClient, Addre
     let usdc_sac = soroban_sdk::token::StellarAssetClient::new(env, &usdc_token);
     let acbu_client = soroban_sdk::token::Client::new(env, &acbu_token);
     
-    client.initialize(
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token,
-        &usdc_token,
-        &admin,
-        &admin,
-        &300,
-        &100,
-    );
+    let config = acbu_minting::MintingConfig {
+        admin: admin.clone(),
+        oracle: oracle.clone(),
+        reserve_tracker: reserve_tracker.clone(),
+        acbu_token: acbu_token.clone(),
+        usdc_token: usdc_token.clone(),
+        vault: admin.clone(),
+        treasury: admin.clone(),
+        fee_rate_bps: 300,
+        fee_single_bps: 100,
+        operator: admin.clone(),
+    };
+    client.initialize(&config);
     (admin, oracle, client, usdc_token, usdc_sac, acbu_client)
 }
 
@@ -86,9 +88,7 @@ proptest! {
         
         let max_mint = 1_000_000_000_000;
         
-        let res = std::panic::catch_unwind(|| {
-            client.mint_from_usdc(&user, &amount, &user);
-        });
+        let res = client.try_mint_from_usdc(&user, &amount, &user);
         
         if amount > max_mint {
             assert!(res.is_err());
