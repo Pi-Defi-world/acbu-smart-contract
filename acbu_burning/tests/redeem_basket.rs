@@ -136,8 +136,8 @@ fn test_redeem_basket_duplicate_recipients() {
 
     let c1 = CurrencyCode::new(&env, "NGN");
     let c2 = CurrencyCode::new(&env, "KES");
-    let (st1_id, _, st1_sac) = create_stoken(&env, &ctx.admin);
-    let (st2_id, _, st2_sac) = create_stoken(&env, &ctx.admin);
+    let (st1_id, _, _st1_sac) = create_stoken(&env, &ctx.admin);
+    let (st2_id, _, _st2_sac) = create_stoken(&env, &ctx.admin);
     ctx.oracle.set_stoken(&c1, &st1_id);
     ctx.oracle.set_stoken(&c2, &st2_id);
 
@@ -407,4 +407,237 @@ fn test_redeem_basket_multiple_calls() {
 
     // User ACBU balance should be 0 after burning all
     assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
+}
+
+// --- Edge divisibility tests (FIX #326) ---
+
+#[test]
+fn test_redeem_basket_prime_amount_preserves_total() {
+    let env = Env::default();
+    let ctx = setup_test(&env);
+
+    let c1 = CurrencyCode::new(&env, "NGN");
+    let c2 = CurrencyCode::new(&env, "KES");
+    let c3 = CurrencyCode::new(&env, "RWF");
+
+    let (st1_id, st1, st1_sac) = create_stoken(&env, &ctx.admin);
+    let (st2_id, st2, st2_sac) = create_stoken(&env, &ctx.admin);
+    let (st3_id, st3, st3_sac) = create_stoken(&env, &ctx.admin);
+    ctx.oracle.set_stoken(&c1, &st1_id);
+    ctx.oracle.set_stoken(&c2, &st2_id);
+    ctx.oracle.set_stoken(&c3, &st3_id);
+
+    let currs = vec![&env, c1.clone(), c2.clone(), c3.clone()];
+    ctx.oracle.set_currencies(&currs);
+
+    let mut weights = Map::new(&env);
+    weights.set(c1.clone(), 5000);
+    weights.set(c2.clone(), 3000);
+    weights.set(c3.clone(), 2000);
+    ctx.oracle.set_weights(&weights);
+
+    // Use a prime amount that doesn't divide evenly by weights
+    let burn_amount: i128 = 97 * DECIMALS + 13;
+    ctx.acbu_token.mint(&ctx.user, &burn_amount);
+
+    let vault_amount: i128 = 500 * DECIMALS;
+    st1_sac.mint(&ctx.vault, &vault_amount);
+    st1.approve(&ctx.vault, &ctx.burning_id, &vault_amount, &200u32);
+    st2_sac.mint(&ctx.vault, &vault_amount);
+    st2.approve(&ctx.vault, &ctx.burning_id, &vault_amount, &200u32);
+    st3_sac.mint(&ctx.vault, &vault_amount);
+    st3.approve(&ctx.vault, &ctx.burning_id, &vault_amount, &200u32);
+
+    let ts = env.ledger().timestamp();
+    ctx.oracle.set_acbu_rate(&DECIMALS, &ts);
+    ctx.oracle.set_currency_rate(&c1, &DECIMALS);
+    ctx.oracle.set_currency_rate(&c2, &DECIMALS);
+    ctx.oracle.set_currency_rate(&c3, &DECIMALS);
+    ctx.oracle.set_timestamp(&c1, &ts);
+    ctx.oracle.set_timestamp(&c2, &ts);
+    ctx.oracle.set_timestamp(&c3, &ts);
+
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let r3 = Address::generate(&env);
+    let recipients = vec![&env, r1.clone(), r2.clone(), r3.clone()];
+
+    let amounts = ctx
+        .burning
+        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+
+    let expected_fee = (burn_amount * 100) / BASIS_POINTS;
+    let expected_net = burn_amount - expected_fee;
+    let total_out = amounts.get(0).unwrap() + amounts.get(1).unwrap() + amounts.get(2).unwrap();
+
+    // Sum of outputs must not exceed net amount (fee-first guarantee)
+    assert!(total_out <= expected_net);
+    // Rounding loss must be bounded by number of legs
+    assert!(total_out >= expected_net - 3);
+    assert_eq!(st1.balance(&r1), amounts.get(0).unwrap());
+    assert_eq!(st2.balance(&r2), amounts.get(1).unwrap());
+    assert_eq!(st3.balance(&r3), amounts.get(2).unwrap());
+}
+
+#[test]
+fn test_redeem_basket_small_amount_no_dust_loss() {
+    let env = Env::default();
+    let ctx = setup_test(&env);
+
+    let c1 = CurrencyCode::new(&env, "NGN");
+    let c2 = CurrencyCode::new(&env, "KES");
+
+    let (st1_id, st1, st1_sac) = create_stoken(&env, &ctx.admin);
+    let (st2_id, st2, st2_sac) = create_stoken(&env, &ctx.admin);
+    ctx.oracle.set_stoken(&c1, &st1_id);
+    ctx.oracle.set_stoken(&c2, &st2_id);
+
+    let mut weights = Map::new(&env);
+    weights.set(c1.clone(), 3333);
+    weights.set(c2.clone(), 6667);
+    ctx.oracle.set_weights(&weights);
+
+    // Small amount just above min to test granular rounding
+    let burn_amount: i128 = 10 * DECIMALS + 7;
+    ctx.acbu_token.mint(&ctx.user, &burn_amount);
+
+    let vault_amount: i128 = 500 * DECIMALS;
+    st1_sac.mint(&ctx.vault, &vault_amount);
+    st1.approve(&ctx.vault, &ctx.burning_id, &vault_amount, &200u32);
+    st2_sac.mint(&ctx.vault, &vault_amount);
+    st2.approve(&ctx.vault, &ctx.burning_id, &vault_amount, &200u32);
+
+    let ts = env.ledger().timestamp();
+    ctx.oracle.set_acbu_rate(&DECIMALS, &ts);
+    ctx.oracle.set_currency_rate(&c1, &DECIMALS);
+    ctx.oracle.set_currency_rate(&c2, &DECIMALS);
+    ctx.oracle.set_timestamp(&c1, &ts);
+    ctx.oracle.set_timestamp(&c2, &ts);
+
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let recipients = vec![&env, r1, r2];
+
+    let amounts = ctx
+        .burning
+        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+
+    let expected_fee = (burn_amount * 100) / BASIS_POINTS;
+    let expected_net = burn_amount - expected_fee;
+    let total_out = amounts.get(0).unwrap() + amounts.get(1).unwrap();
+
+    // Total must be <= net (fee is taken first)
+    assert!(total_out <= expected_net);
+    // Dust loss should be at most 1 unit per leg
+    assert!(total_out >= expected_net - 2);
+    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0);
+}
+
+#[test]
+fn test_redeem_basket_uneven_weights_no_precision_loss() {
+    let env = Env::default();
+    let ctx = setup_test(&env);
+
+    let c1 = CurrencyCode::new(&env, "NGN");
+    let c2 = CurrencyCode::new(&env, "KES");
+    let c3 = CurrencyCode::new(&env, "RWF");
+
+    let (st1_id, st1, st1_sac) = create_stoken(&env, &ctx.admin);
+    let (st2_id, st2, st2_sac) = create_stoken(&env, &ctx.admin);
+    let (st3_id, st3, st3_sac) = create_stoken(&env, &ctx.admin);
+    ctx.oracle.set_stoken(&c1, &st1_id);
+    ctx.oracle.set_stoken(&c2, &st2_id);
+    ctx.oracle.set_stoken(&c3, &st3_id);
+
+    let currs = vec![&env, c1.clone(), c2.clone(), c3.clone()];
+    ctx.oracle.set_currencies(&currs);
+
+    // Extremely uneven weights to stress rounding
+    let mut weights = Map::new(&env);
+    weights.set(c1.clone(), 1);
+    weights.set(c2.clone(), 1);
+    weights.set(c3.clone(), 9998);
+    ctx.oracle.set_weights(&weights);
+
+    let burn_amount: i128 = 100 * DECIMALS;
+    ctx.acbu_token.mint(&ctx.user, &burn_amount);
+
+    let vault_amount: i128 = 500 * DECIMALS;
+    st1_sac.mint(&ctx.vault, &vault_amount);
+    st1.approve(&ctx.vault, &ctx.burning_id, &vault_amount, &200u32);
+    st2_sac.mint(&ctx.vault, &vault_amount);
+    st2.approve(&ctx.vault, &ctx.burning_id, &vault_amount, &200u32);
+    st3_sac.mint(&ctx.vault, &vault_amount);
+    st3.approve(&ctx.vault, &ctx.burning_id, &vault_amount, &200u32);
+
+    let ts = env.ledger().timestamp();
+    ctx.oracle.set_acbu_rate(&DECIMALS, &ts);
+    ctx.oracle.set_currency_rate(&c1, &DECIMALS);
+    ctx.oracle.set_currency_rate(&c2, &DECIMALS);
+    ctx.oracle.set_currency_rate(&c3, &DECIMALS);
+    ctx.oracle.set_timestamp(&c1, &ts);
+    ctx.oracle.set_timestamp(&c2, &ts);
+    ctx.oracle.set_timestamp(&c3, &ts);
+
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let r3 = Address::generate(&env);
+    let recipients = vec![&env, r1.clone(), r2.clone(), r3.clone()];
+
+    let amounts = ctx
+        .burning
+        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+
+    let total_out = amounts.get(0).unwrap() + amounts.get(1).unwrap() + amounts.get(2).unwrap();
+    let expected_fee = (burn_amount * 100) / BASIS_POINTS;
+    let expected_net = burn_amount - expected_fee;
+
+    assert!(total_out <= expected_net);
+    assert!(total_out >= expected_net - 3);
+    // Legs with weight 1 should get at least something if rounding allows
+    // (they may get 0 if the slice rounds down, but that's acceptable)
+    assert_eq!(st1.balance(&r1), amounts.get(0).unwrap());
+    assert_eq!(st2.balance(&r2), amounts.get(1).unwrap());
+    assert_eq!(st3.balance(&r3), amounts.get(2).unwrap());
+}
+
+#[test]
+fn test_redeem_basket_fee_exact_divisibility() {
+    let env = Env::default();
+    let ctx = setup_test(&env);
+
+    let c1 = CurrencyCode::new(&env, "NGN");
+    let (st1_id, st1, st1_sac) = create_stoken(&env, &ctx.admin);
+    ctx.oracle.set_stoken(&c1, &st1_id);
+
+    let currs = vec![&env, c1.clone()];
+    ctx.oracle.set_currencies(&currs);
+    let mut weights = Map::new(&env);
+    weights.set(c1.clone(), 10000);
+    ctx.oracle.set_weights(&weights);
+
+    // Amount where fee calculation produces exact remainder
+    let burn_amount: i128 = 100 * DECIMALS;
+    ctx.acbu_token.mint(&ctx.user, &burn_amount);
+
+    let vault_amount: i128 = 500 * DECIMALS;
+    st1_sac.mint(&ctx.vault, &vault_amount);
+    st1.approve(&ctx.vault, &ctx.burning_id, &vault_amount, &200u32);
+
+    let ts = env.ledger().timestamp();
+    ctx.oracle.set_acbu_rate(&DECIMALS, &ts);
+    ctx.oracle.set_currency_rate(&c1, &DECIMALS);
+    ctx.oracle.set_timestamp(&c1, &ts);
+
+    let recipient = Address::generate(&env);
+    let recipients = vec![&env, recipient.clone()];
+
+    let amounts = ctx
+        .burning
+        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+
+    // Fee = 1%, net = 99 * DECIMALS
+    // With single currency and weight = 10000, amounts[0] must be exactly 99 * DECIMALS
+    assert_eq!(amounts.get(0).unwrap(), 99 * DECIMALS);
+    assert_eq!(st1.balance(&recipient), 99 * DECIMALS);
 }

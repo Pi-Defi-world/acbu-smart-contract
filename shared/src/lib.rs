@@ -237,16 +237,7 @@ pub enum ContractError {
     InvalidRecipient = 11,
     /// WASM upgrade rejected: `new_version` must be greater than the stored version.
     InvalidVersion = 12,
-    /// No admin transfer is in progress, so `accept_admin` has nothing to claim.
-    NoPendingAdmin = 13,
-    /// The two-step admin transfer timelock has not yet elapsed; the pending admin
-    /// must wait before calling `accept_admin`.
-    AdminTimelockNotElapsed = 14,
-    /// No admin transfer is in progress, so `cancel_admin_transfer` has nothing to
-    /// cancel.
-    NoPendingAdminToCancel = 15,
-    /// Catch-all for an unexpected/unclassified failure. Should not occur in normal
-    /// operation; treat as an internal error.
+
     Unknown = 9999,
 }
 

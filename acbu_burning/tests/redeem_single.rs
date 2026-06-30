@@ -112,7 +112,7 @@ fn test_redeem_single_zero_amount() {
     let currency = CurrencyCode::new(&env, "NGN");
     let recipient = Address::generate(&env);
 
-    let (stoken_id, _, stoken_sac) = create_stoken(&env, &ctx.admin);
+    let (stoken_id, _, _stoken_sac) = create_stoken(&env, &ctx.admin);
     ctx.oracle.set_stoken(&currency, &stoken_id);
 
     let ts = env.ledger().timestamp();
