@@ -122,9 +122,10 @@ fn verify_source_hashes() {
             }
             Err(e) => {
                 eprintln!(
-                    "cargo:warning=Could not read {} for hash check: {}",
+                    "error[build]: Could not read {} for hash check: {}",
                     path, e
                 );
+                process::exit(1);
             }
         }
     }
