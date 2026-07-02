@@ -328,3 +328,96 @@ fn test_update_reserve_without_admin_auth_fails() {
         "update_reserve must reject callers that are not the admin"
     );
 }
+
+// ─── Currency list management tests (#333) ───────────────────────────────────
+
+#[test]
+fn test_add_currency_and_get_currencies() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let acbu_token = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
+
+    assert_eq!(client.get_currencies().len(), 0, "currencies should start empty");
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    client.add_currency(&ngn);
+    assert_eq!(client.get_currencies().len(), 1, "one currency after first add");
+
+    let kes = CurrencyCode::new(&env, "KES");
+    client.add_currency(&kes);
+    assert_eq!(client.get_currencies().len(), 2, "two currencies after second add");
+
+    let stored = client.get_currencies();
+    assert!(stored.contains(ngn.clone()), "NGN must be in list");
+    assert!(stored.contains(kes.clone()), "KES must be in list");
+}
+
+#[test]
+#[should_panic(expected = "#8008")]
+fn test_add_currency_duplicate_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let acbu_token = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    client.add_currency(&ngn);
+    // Second add of same currency must panic with DuplicateCurrency = 8008
+    client.add_currency(&ngn);
+}
+
+#[test]
+fn test_add_currency_without_admin_auth_fails() {
+    let env = Env::default();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let acbu_token = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
+
+    use soroban_sdk::testutils::MockAuth;
+    use soroban_sdk::testutils::MockAuthInvoke;
+    use soroban_sdk::IntoVal;
+    let ngn = CurrencyCode::new(&env, "NGN");
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "add_currency",
+            args: (ngn.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_add_currency(&ngn);
+    assert!(result.is_err(), "add_currency must reject non-admin callers");
+
+    env.mock_all_auths();
+    assert_eq!(
+        client.get_currencies().len(),
+        0,
+        "currency list must be unchanged after failed add"
+    );
+}

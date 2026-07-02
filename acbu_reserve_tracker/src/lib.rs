@@ -21,6 +21,7 @@ pub enum ReserveTrackerError {
     AdminTimelockNotElapsed = 8005,
     NoPendingAdminToCancel = 8006,
     Unauthorized = 8007,
+    DuplicateCurrency = 8008,
     Unknown = 8999,
 }
 
@@ -34,6 +35,7 @@ impl Display for ReserveTrackerError {
             Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
             Self::NoPendingAdminToCancel => "no pending admin to cancel",
             Self::Unauthorized => "unauthorized",
+            Self::DuplicateCurrency => "currency already tracked",
             Self::Unknown => "unknown reserve tracker error",
         };
         f.write_str(message)
@@ -52,6 +54,7 @@ pub struct DataKey {
     pub pending_admin: Symbol,
     pub pending_admin_eligible_at: Symbol,
     pub last_verify_call: Symbol,
+    pub currencies: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -64,6 +67,7 @@ const DATA_KEY: DataKey = DataKey {
     pending_admin: symbol_short!("PEND_ADM"),
     pending_admin_eligible_at: symbol_short!("PEND_ETA"),
     last_verify_call: symbol_short!("LAST_VFY"),
+    currencies: symbol_short!("CURRNCYS"),
 };
 
 /// Admin rotation timelock: the pending admin must wait this long before
@@ -300,6 +304,38 @@ impl ReserveTrackerContract {
         Self::check_admin(&env);
         let empty: Map<CurrencyCode, ReserveData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.reserves, &empty);
+    }
+
+    // -----------------------------------------------------------------------
+    // Currency list management (admin only)
+    // -----------------------------------------------------------------------
+
+    /// Add a currency to the tracked list. Panics with `DuplicateCurrency` if
+    /// the currency is already present, preventing double-counting of reserves.
+    pub fn add_currency(env: Env, currency: CurrencyCode) {
+        Self::check_admin(&env);
+        let mut currencies: Vec<CurrencyCode> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.currencies)
+            .unwrap_or(Vec::new(&env));
+        for c in currencies.iter() {
+            if c == currency {
+                env.panic_with_error(ReserveTrackerError::DuplicateCurrency);
+            }
+        }
+        currencies.push_back(currency);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.currencies, &currencies);
+    }
+
+    /// Return the list of tracked currencies.
+    pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.currencies)
+            .unwrap_or(Vec::new(&env))
     }
 
     // -----------------------------------------------------------------------

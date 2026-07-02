@@ -20,10 +20,7 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 10 | `InsufficientBalance` | The account's token balance is too low to complete the transfer/operation. |
 | 11 | `InvalidRecipient` | The recipient address is invalid for this operation (e.g. a contract address where a classic account is required). |
 | 12 | `InvalidVersion` | WASM upgrade rejected: `new_version` must be greater than the stored version. |
-| 13 | `NoPendingAdmin` | No admin transfer is in progress, so `accept_admin` has nothing to claim. |
-| 14 | `AdminTimelockNotElapsed` | The two-step admin transfer timelock has not yet elapsed; the pending admin must wait before calling `accept_admin`. |
-| 15 | `NoPendingAdminToCancel` | No admin transfer is in progress, so `cancel_admin_transfer` has nothing to cancel. |
-| 9999 | `Unknown` | Catch-all for an unexpected/unclassified failure. Should not occur in normal operation; treat as an internal error. |
+| 9999 | `Unknown` | unknown error |
 
 ## `shared / reentrancy guard` - `ReentrancyError`
 
@@ -191,4 +188,5 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 8005 | `AdminTimelockNotElapsed` | admin timelock has not elapsed |
 | 8006 | `NoPendingAdminToCancel` | no pending admin to cancel |
 | 8007 | `Unauthorized` | unauthorized |
+| 8008 | `DuplicateCurrency` | currency already tracked |
 | 8999 | `Unknown` | unknown reserve tracker error |
