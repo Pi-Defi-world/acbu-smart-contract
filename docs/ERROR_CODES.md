@@ -175,6 +175,7 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 7021 | `MaxValidatorsReached` | maximum validators reached |
 | 7022 | `TimestampRollback` | timestamp rollback |
 | 7023 | `RateNotInitialized` | rate not initialized - no submissions yet |
+| 7024 | `CurrencyNotRegistered` | currency not registered |
 | 7999 | `Unknown` | unknown oracle error |
 
 ## `acbu_reserve_tracker` - `ReserveTrackerError`

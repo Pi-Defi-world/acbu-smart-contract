@@ -38,6 +38,7 @@ pub enum OracleError {
     MaxValidatorsReached = 7021,
     TimestampRollback = 7022,
     RateNotInitialized = 7023,
+    CurrencyNotRegistered = 7024,
     Unknown = 7999,
 }
 
@@ -67,6 +68,7 @@ impl Display for OracleError {
             Self::MaxValidatorsReached => "maximum validators reached",
             Self::TimestampRollback => "timestamp rollback",
             Self::RateNotInitialized => "rate not initialized - no submissions yet",
+            Self::CurrencyNotRegistered => "currency not registered",
             Self::Unknown => "unknown oracle error",
         };
         f.write_str(message)
