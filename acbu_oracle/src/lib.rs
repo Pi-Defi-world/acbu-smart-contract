@@ -984,7 +984,7 @@ impl OracleContract {
         env.deployer().update_current_contract_wasm(wasm_hash);
         for v in current_version..new_version {
             match v {
-                0 => migrate_v0_to_v1(env.clone()),
+                0 => shared::migrate_v0_to_v1(&env),
                 _ => {}
             }
         }
@@ -1056,7 +1056,4 @@ impl OracleContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
     }
-}
-fn migrate_v0_to_v1(_env: Env) {
-    // No storage schema changes between v0 and v1.
 }

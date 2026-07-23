@@ -1,8 +1,19 @@
 #![no_std]
 
-use soroban_sdk::{contracterror, contracttype, Address, String as SorobanString, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, Env, String as SorobanString, Vec};
 
 pub mod reentrancy_guard;
+
+/// Shared no-op migration step for the v0 -> v1 storage schema transition.
+///
+/// Each contract's `upgrade` version-walk dispatches to this for the `v == 0`
+/// arm. Centralised here so the (previously identical) per-contract migration
+/// body isn't duplicated across contracts; a contract whose v0->v1 transition
+/// needs real schema changes should replace its dispatch arm with a local
+/// function instead of calling this one.
+pub fn migrate_v0_to_v1(_env: &Env) {
+    // No storage schema changes between v0 and v1.
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
