@@ -122,6 +122,7 @@ pub enum MintingError {
     NoPendingAdminToCancel = 5022,
     InvalidRecipient = 5023,
     InvalidRoleSeparation = 5024,
+    SupplyMismatch = 5025,
     Unknown = 5999,
 }
 
@@ -151,6 +152,8 @@ impl Display for MintingError {
             Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
             Self::NoPendingAdminToCancel => "no pending admin to cancel",
             Self::InvalidRecipient => "invalid recipient",
+            Self::InvalidRoleSeparation => "invalid role separation",
+            Self::SupplyMismatch => "supplied value does not match on-chain supply",
             Self::Unknown => "unknown minting error",
         };
         f.write_str(message)
@@ -1029,12 +1032,22 @@ impl MintingContract {
     /// Overwrite the tracked total ACBU supply with `new_supply` (admin only).
     ///
     /// Used to reconcile the contract's supply counter with the actual on-chain
-    /// token supply. Reverts if paused or if `new_supply` exceeds the max supply.
+    /// token supply. Reverts if paused, if `new_supply` exceeds the max supply,
+    /// or if `new_supply` does not match the ACBU token's actual on-chain
+    /// `total_supply()`.
     pub fn sync_supply(env: Env, new_supply: i128) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         Self::check_paused(&env);
         Self::check_supply_cap(&env, new_supply);
+
+        let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let token = soroban_sdk::token::Client::new(&env, &acbu_token);
+        let on_chain_supply = token.total_supply();
+        if new_supply != on_chain_supply {
+            env.panic_with_error(MintingError::SupplyMismatch);
+        }
+
         env.storage()
             .instance()
             .set(&DATA_KEY.total_supply, &new_supply);
