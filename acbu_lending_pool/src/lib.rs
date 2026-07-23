@@ -307,20 +307,17 @@ impl LendingPool {
         reentrancy_guard::release_guard(&env);
     }
 
-    /// Borrow `amount` of ACBU against `collateral_amount` from a specific
-    /// `lender`'s liquidity, creating a new loan keyed by `(borrower, loan_id)`.
+    /// Borrow `amount` of ACBU from a specific `lender`'s liquidity, creating
+    /// a new loan keyed by `(borrower, loan_id)`.
     ///
-    /// Requires `borrower`'s authorization and that the pool is not paused. The
-    /// loan must be at least 100% collateralized (`collateral_amount >= amount`)
-    /// and the lender must have enough unborrowed balance. The collateral is
-    /// pulled in before the principal is paid out. `loan_id` must be unique for
-    /// the borrower. Emits [`BorrowEvent`] and [`LoanCreatedEvent`].
+    /// Requires `borrower`'s authorization and that the pool is not paused.
+    /// The lender must have enough unborrowed balance. `loan_id` must be unique
+    /// for the borrower. Emits [`BorrowEvent`] and [`LoanCreatedEvent`].
     pub fn borrow(
         env: Env,
         borrower: Address,
         lender: Address,
         amount: i128,
-        collateral_amount: i128,
         loan_id: u64,
     ) {
         // Re-entrancy guard
@@ -329,13 +326,8 @@ impl LendingPool {
         borrower.require_auth();
         Self::check_not_paused(&env);
 
-        if amount <= 0 || collateral_amount <= 0 {
+        if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
-        }
-
-        // Collateral Validation: Must have at least 100% collateralized
-        if collateral_amount < amount {
-            env.panic_with_error(Error::InsufficientCollateral);
         }
 
         let lender_balance: i128 = env
@@ -377,8 +369,7 @@ impl LendingPool {
             .persistent()
             .set(&DataKey::Borrowed(lender.clone()), &new_borrowed);
 
-        // Pull collateral in BEFORE paying out the loan principal.
-        token.transfer(&borrower, &env.current_contract_address(), &collateral_amount);
+        // Pay out the loan principal.
         token.transfer(&env.current_contract_address(), &borrower, &amount);
 
         let fee_rate_bps: i128 = env.storage().instance().get(&DataKey::FeeRate).unwrap_or(0);
@@ -388,7 +379,7 @@ impl LendingPool {
             borrower: borrower.clone(),
             lender: lender.clone(),
             amount,
-            collateral_amount,
+            collateral_amount: 0,
             interest_rate_bps: u32::try_from(fee_rate_bps)
                 .unwrap_or_else(|_| env.panic_with_error(Error::InvalidAmount)),
             loan_start_timestamp: start_time,
@@ -477,8 +468,8 @@ impl LendingPool {
     /// Requires `borrower`'s authorization and that the pool is not paused.
     /// `amount` is applied to accrued interest first, then principal, and may not
     /// exceed the total amount due. When the principal reaches zero the loan is
-    /// marked [`LoanStatus::Repaid`] and the collateral is returned to the
-    /// borrower. Emits [`RepayEvent`], [`RepaymentEvent`] and [`LoanRepaidEvent`].
+    /// marked [`LoanStatus::Repaid`]. Emits [`RepayEvent`], [`RepaymentEvent`]
+    /// and [`LoanRepaidEvent`].
     pub fn repay(env: Env, borrower: Address, amount: i128, loan_id: u64) {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
@@ -541,14 +532,6 @@ impl LendingPool {
         token.transfer(&borrower, &env.current_contract_address(), &amount);
 
         if loan_data.amount == 0 {
-            if loan_data.collateral_amount > 0 {
-                token.transfer(
-                    &env.current_contract_address(),
-                    &borrower,
-                    &loan_data.collateral_amount,
-                );
-            }
-            loan_data.collateral_amount = 0;
             loan_data.accrued_interest = 0;
             loan_data.total_repayment_due = 0;
             loan_data.loan_start_timestamp = env.ledger().timestamp();
