@@ -214,20 +214,18 @@ fn test_borrow_creates_loan() {
     let borrower = Address::generate(&env);
     let pool_liquidity = 10_000 * DECIMALS;
     let borrow_amount = 5_000 * DECIMALS;
-    let collateral = 6_000 * DECIMALS;
     let loan_id = 1u64;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower, &collateral);
 
     client.deposit(&lender, &pool_liquidity);
-    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
+    client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
 
     let loan = client.get_loan(&borrower, &loan_id).expect("loan should exist");
     assert_eq!(loan.amount, borrow_amount, "loan.amount should equal borrow_amount");
     assert_eq!(loan.borrower, borrower, "loan.borrower should equal borrower");
-    assert_eq!(loan.collateral_amount, collateral, "loan.collateral_amount should equal collateral");
+    assert_eq!(loan.collateral_amount, 0, "loan.collateral_amount should be 0");
 }
 
 #[test]
@@ -238,15 +236,13 @@ fn test_borrow_transfers_tokens_to_borrower() {
     let borrower = Address::generate(&env);
     let pool_liquidity = 10_000 * DECIMALS;
     let borrow_amount = 3_000 * DECIMALS;
-    let collateral = 4_000 * DECIMALS;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     let token_client = TokenClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower, &collateral);
 
     client.deposit(&lender, &pool_liquidity);
-    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &1u64);
+    client.borrow(&borrower, &lender, &borrow_amount, &1u64);
 
     assert_eq!(token_client.balance(&borrower), borrow_amount, "token_client.balance(&borrower) should equal borrow_amount");
 }
@@ -265,7 +261,7 @@ fn test_borrow_exceeds_pool_liquidity_fails() {
 
     client.deposit(&lender, &pool_liquidity);
 
-    let result = client.try_borrow(&borrower, &lender, &borrow_amount, &0, &1u64);
+    let result = client.try_borrow(&borrower, &lender, &borrow_amount, &1u64);
     assert!(result.is_err());
 }
 
@@ -275,7 +271,7 @@ fn test_borrow_zero_amount_fails() {
 
     let borrower = Address::generate(&env);
     let lender = Address::generate(&env);
-    let result = client.try_borrow(&borrower, &lender, &0, &0, &1u64);
+    let result = client.try_borrow(&borrower, &lender, &0, &1u64);
 
     assert!(result.is_err());
 }
@@ -288,17 +284,15 @@ fn test_borrow_duplicate_loan_id_fails() {
     let borrower = Address::generate(&env);
     let pool_liquidity = 10_000 * DECIMALS;
     let borrow_amount = 2_000 * DECIMALS;
-    let collateral = 3_000 * DECIMALS;
     let loan_id = 42u64;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower, &(collateral * 2));
 
     client.deposit(&lender, &pool_liquidity);
-    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
+    client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
 
-    let result = client.try_borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
+    let result = client.try_borrow(&borrower, &lender, &borrow_amount, &loan_id);
     assert!(result.is_err());
 }
 
@@ -310,15 +304,13 @@ fn test_borrow_emits_event() {
     let borrower = Address::generate(&env);
     let pool_liquidity = 10_000 * DECIMALS;
     let borrow_amount = 3_000 * DECIMALS;
-    let collateral = 4_000 * DECIMALS;
     let loan_id = 7u64;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower, &collateral);
 
     client.deposit(&lender, &pool_liquidity);
-    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
+    client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
 
     let events = env.events().all();
     let borrow_event = events
@@ -357,15 +349,13 @@ fn test_repay_partial_reduces_loan_amount() {
     let pool_liquidity = 10_000 * DECIMALS;
     let borrow_amount = 5_000 * DECIMALS;
     let repay_amount = 2_000 * DECIMALS;
-    let collateral = 6_000 * DECIMALS;
     let loan_id = 1u64;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower, &collateral);
 
     client.deposit(&lender, &pool_liquidity);
-    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
+    client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
     client.repay(&borrower, &repay_amount, &loan_id);
 
     let loan = client.get_loan(&borrower, &loan_id).expect("loan should still exist");
@@ -380,15 +370,13 @@ fn test_repay_full_removes_loan() {
     let borrower = Address::generate(&env);
     let pool_liquidity = 10_000 * DECIMALS;
     let borrow_amount = 5_000 * DECIMALS;
-    let collateral = 6_000 * DECIMALS;
     let loan_id = 1u64;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower, &collateral);
 
     client.deposit(&lender, &pool_liquidity);
-    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
+    client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
     client.repay(&borrower, &borrow_amount, &loan_id);
 
     let loan = client
@@ -399,32 +387,30 @@ fn test_repay_full_removes_loan() {
 }
 
 #[test]
-fn test_repay_full_returns_collateral() {
+fn test_repay_full_clears_loan() {
     let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
     let pool_liquidity = 10_000 * DECIMALS;
     let borrow_amount = 5_000 * DECIMALS;
-    let collateral = 6_000 * DECIMALS;
     let loan_id = 1u64;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     let token_client = TokenClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower, &collateral);
 
     client.deposit(&lender, &pool_liquidity);
     
-    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
+    client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
     
-    // After borrow: borrower has borrow_amount (collateral was transferred to contract)
+    // After borrow: borrower has borrow_amount
     assert_eq!(token_client.balance(&borrower), borrow_amount, "token_client.balance(&borrower) should equal borrow_amount");
     
     client.repay(&borrower, &borrow_amount, &loan_id);
     
-    // After full repay: borrower gets collateral back
-    assert_eq!(token_client.balance(&borrower), collateral, "token_client.balance(&borrower) should equal collateral");
+    // After full repay: borrower has 0
+    assert_eq!(token_client.balance(&borrower), 0, "token_client.balance(&borrower) should equal 0");
 }
 
 #[test]
@@ -435,15 +421,13 @@ fn test_repay_more_than_loan_amount_fails() {
     let borrower = Address::generate(&env);
     let pool_liquidity = 10_000 * DECIMALS;
     let borrow_amount = 5_000 * DECIMALS;
-    let collateral = 6_000 * DECIMALS;
     let loan_id = 1u64;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower, &(collateral + borrow_amount));
 
     client.deposit(&lender, &pool_liquidity);
-    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
+    client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
 
     let result = client.try_repay(&borrower, &(borrow_amount + 1), &loan_id);
     assert!(result.is_err());
@@ -467,15 +451,13 @@ fn test_repay_zero_amount_fails() {
     let borrower = Address::generate(&env);
     let pool_liquidity = 10_000 * DECIMALS;
     let borrow_amount = 5_000 * DECIMALS;
-    let collateral = 6_000 * DECIMALS;
     let loan_id = 1u64;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower, &collateral);
 
     client.deposit(&lender, &pool_liquidity);
-    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
+    client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
 
     let result = client.try_repay(&borrower, &0, &loan_id);
     assert!(result.is_err());
@@ -490,15 +472,13 @@ fn test_repay_emits_event() {
     let pool_liquidity = 10_000 * DECIMALS;
     let borrow_amount = 5_000 * DECIMALS;
     let repay_amount = 2_000 * DECIMALS;
-    let collateral = 6_000 * DECIMALS;
     let loan_id = 3u64;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower, &collateral);
 
     client.deposit(&lender, &pool_liquidity);
-    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
+    client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
     client.repay(&borrower, &repay_amount, &loan_id);
 
     let events = env.events().all();
@@ -566,7 +546,7 @@ fn test_borrow_when_paused_fails() {
 
     let borrower = Address::generate(&env);
     let lender = Address::generate(&env);
-    let result = client.try_borrow(&borrower, &lender, &1000, &0, &1u64);
+    let result = client.try_borrow(&borrower, &lender, &1000, &1u64);
 
     assert!(result.is_err());
 }
@@ -579,15 +559,13 @@ fn test_repay_when_paused_fails() {
     let borrower = Address::generate(&env);
     let pool_liquidity = 10_000 * DECIMALS;
     let borrow_amount = 5_000 * DECIMALS;
-    let collateral = 6_000 * DECIMALS;
     let loan_id = 1u64;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower, &collateral);
 
     client.deposit(&lender, &pool_liquidity);
-    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
+    client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
     
     client.pause();
 
@@ -617,27 +595,6 @@ fn test_unpause_allows_operations() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn test_borrow_insufficient_collateral_fails() {
-    let (env, client, _contract_id, _admin, acbu_token) = setup();
-
-    let lender = Address::generate(&env);
-    let borrower = Address::generate(&env);
-    let pool_liquidity = 10_000 * DECIMALS;
-    let borrow_amount = 5_000 * DECIMALS;
-    let collateral = 4_000 * DECIMALS; // Less than borrow amount (insufficient collateral)
-    let loan_id = 1u64;
-
-    let token_admin = StellarAssetClient::new(&env, &acbu_token);
-    token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower, &collateral);
-
-    client.deposit(&lender, &pool_liquidity);
-
-    let result = client.try_borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
-    assert!(result.is_err());
-}
-
-#[test]
 fn test_multiple_borrowers_same_lender() {
     let (env, client, contract_id, _admin, acbu_token) = setup();
 
@@ -646,20 +603,17 @@ fn test_multiple_borrowers_same_lender() {
     let borrower2 = Address::generate(&env);
     let pool_liquidity = 20_000 * DECIMALS;
     let borrow_amount = 5_000 * DECIMALS;
-    let collateral = 6_000 * DECIMALS;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     let token_client = TokenClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower1, &collateral);
-    token_admin.mint(&borrower2, &collateral);
 
     client.deposit(&lender, &pool_liquidity);
 
     // First borrower
-    client.borrow(&borrower1, &lender, &borrow_amount, &collateral, &1u64);
+    client.borrow(&borrower1, &lender, &borrow_amount, &1u64);
     // Second borrower
-    client.borrow(&borrower2, &lender, &borrow_amount, &collateral, &2u64);
+    client.borrow(&borrower2, &lender, &borrow_amount, &2u64);
 
     // Both loans should exist
     let loan1 = client.get_loan(&borrower1, &1u64).expect("loan1 should exist");
@@ -670,8 +624,8 @@ fn test_multiple_borrowers_same_lender() {
     // Contract should have remaining liquidity
     assert_eq!(
         token_client.balance(&contract_id),
-        pool_liquidity - (borrow_amount * 2) + (collateral * 2)
-    , "token_client.balance(&contract_id) should equal pool_liquidity - (borrow_amount * 2) + (collateral * 2)");
+        pool_liquidity - (borrow_amount * 2)
+    , "token_client.balance(&contract_id) should equal pool_liquidity - (borrow_amount * 2)");
 }
 
 #[test]
@@ -709,15 +663,13 @@ fn test_repay_interest_accrual() {
     let borrower = Address::generate(&env);
     let pool_liquidity = 10_000 * DECIMALS;
     let borrow_amount = 5_000 * DECIMALS;
-    let collateral = 6_000 * DECIMALS;
     let loan_id = 1u64;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
-    token_admin.mint(&borrower, &collateral);
 
     client.deposit(&lender, &pool_liquidity);
-    client.borrow(&borrower, &lender, &borrow_amount, &collateral, &loan_id);
+    client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
 
     // Advance time to accrue interest
     let current_time = env.ledger().timestamp();
@@ -731,19 +683,18 @@ fn test_repay_interest_accrual() {
 }
 
 #[test]
-fn test_borrow_negative_collateral_fails() {
+fn test_borrow_negative_amount_fails() {
     let (env, client, _contract_id, _admin, acbu_token) = setup();
 
     let lender = Address::generate(&env);
     let borrower = Address::generate(&env);
     let pool_liquidity = 10_000 * DECIMALS;
-    let borrow_amount = 5_000 * DECIMALS;
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
     token_admin.mint(&lender, &pool_liquidity);
 
     client.deposit(&lender, &pool_liquidity);
 
-    let result = client.try_borrow(&borrower, &lender, &borrow_amount, &-100, &1u64);
+    let result = client.try_borrow(&borrower, &lender, &-100, &1u64);
     assert!(result.is_err());
 }
