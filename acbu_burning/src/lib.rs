@@ -452,6 +452,88 @@ impl BurningContract {
             .get(&DATA_KEY.pending_admin_eligible_at)
     }
 
+    pub fn is_paused(env: Env) -> bool {
+        let phase: ContractPhase = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.phase)
+            .unwrap_or(ContractPhase::Active);
+        matches!(phase, ContractPhase::Paused)
+    }
+
+    pub fn get_phase(env: Env) -> ContractPhase {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.phase)
+            .unwrap_or(ContractPhase::Active)
+    }
+
+    pub fn get_fee_rate(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.fee_rate)
+            .unwrap_or(0)
+    }
+
+    pub fn get_fee_single_redeem(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.fee_single_redeem)
+            .unwrap_or(0)
+    }
+
+    pub fn get_acbu_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.acbu_token)
+            .unwrap()
+    }
+
+    pub fn get_oracle(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.oracle)
+            .unwrap()
+    }
+
+    pub fn get_reserve_tracker(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.reserve_tracker)
+            .unwrap()
+    }
+
+    pub fn get_withdrawal_processor(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.withdrawal_processor)
+            .unwrap()
+    }
+
+    pub fn get_vault(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.vault)
+            .unwrap()
+    }
+
+    pub fn get_min_burn_amount(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.min_burn_amount)
+            .unwrap_or(MIN_BURN_AMOUNT)
+    }
+
+    pub fn get_version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&SharedDataKey::Version)
+            .unwrap_or(0)
+    }
+
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&DATA_KEY.admin)
+    }
 
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         Self::check_admin(&env);
