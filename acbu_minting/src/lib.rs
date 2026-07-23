@@ -1359,7 +1359,7 @@ impl MintingContract {
         // Run migrations — the match will gain new arms as versions are added.
         for v in current_version..new_version {
             match v {
-                0 => migrate_v0_to_v1(env.clone()),
+                0 => shared::migrate_v0_to_v1(&env),
                 _ => {}
             }
         }
@@ -1368,10 +1368,6 @@ impl MintingContract {
             .instance()
             .set(&SharedDataKey::Version, &new_version);
     }
-}
-
-fn migrate_v0_to_v1(_env: Env) {
-    // No storage schema changes between v0 and v1.
 }
 
 // Helper functions for proof tracking and validation

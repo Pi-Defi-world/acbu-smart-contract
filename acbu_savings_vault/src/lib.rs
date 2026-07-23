@@ -39,6 +39,7 @@ pub enum Error {
     NoPendingAdmin = 1019,
     AdminTimelockNotElapsed = 1020,
     NoPendingAdminToCancel = 1021,
+    InsufficientYieldReserve = 1022,
     Unknown = 1999,
 }
 
@@ -66,6 +67,7 @@ impl Display for Error {
             Self::NoPendingAdmin => "no pending admin",
             Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
             Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::InsufficientYieldReserve => "vault balance cannot cover principal + yield owed",
             Self::Unknown => "unknown savings vault error",
         };
         f.write_str(message)
@@ -406,6 +408,14 @@ impl SavingsVault {
         let token = soroban_sdk::token::Client::new(&env, &acbu);
         let vault_addr = env.current_contract_address();
 
+        // Yield is paid directly out of the vault's own ACBU balance — there is no
+        // external yield-generation mechanism funding it. Check the balance up front
+        // so an underfunded vault fails with a clear, specific error instead of the
+        // token contract's generic insufficient-balance panic.
+        if token.balance(&vault_addr) < payout_amount {
+            env.panic_with_error(Error::InsufficientYieldReserve);
+        }
+
         token.transfer(&vault_addr, &user, &amount);
         if yield_amount > 0 {
             token.transfer(&vault_addr, &user, &yield_amount);
@@ -686,7 +696,7 @@ impl SavingsVault {
         env.deployer().update_current_contract_wasm(wasm_hash);
         for v in current_version..new_version {
             match v {
-                0 => Self::migrate_v0_to_v1(env.clone()),
+                0 => shared::migrate_v0_to_v1(&env),
                 _ => {}
             }
         }
@@ -847,8 +857,5 @@ impl SavingsVault {
             .and_then(|v| v.checked_mul(elapsed_i128))
             .ok_or(Error::Overflow)?;
         numerator.checked_div(divisor).ok_or(Error::Overflow)
-    }
-    fn migrate_v0_to_v1(_env: Env) {
-        // No storage schema changes between v0 and v1.
     }
 }

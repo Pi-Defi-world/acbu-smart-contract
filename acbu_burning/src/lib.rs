@@ -5,6 +5,12 @@ use soroban_sdk::{
 };
 
 use shared::{
+    calculate_fee, reentrancy_guard, BurnEvent, ContractError, ContractPhase, CurrencyCode,
+    DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, MIN_BURN_AMOUNT,
+    ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_CURRENCIES,
+    ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT,
+    TOKEN_GET_TOTAL_SUPPLY, UPDATE_INTERVAL_SECONDS,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -463,7 +469,7 @@ impl BurningContract {
 
         for v in current_version..new_version {
             if v == 0 {
-                migrate_v0_to_v1(env.clone());
+                shared::migrate_v0_to_v1(&env);
             }
         }
         env.storage()
@@ -510,8 +516,4 @@ impl BurningContract {
             env.panic_with_error(ContractError::InvalidRecipient);
         }
     }
-}
-
-fn migrate_v0_to_v1(_env: Env) {
-    // No storage schema changes between v0 and v1.
 }
