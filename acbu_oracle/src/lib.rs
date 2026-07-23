@@ -75,6 +75,8 @@ impl Display for OracleError {
 
 pub const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 const MIN_ORACLE_SOURCE_FEEDS: u32 = 3;
+/// Number of decimal places used for all rates reported by this oracle.
+const RATE_DECIMALS: u32 = 7;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -865,8 +867,8 @@ impl OracleContract {
     }
 
     /// Return the number of decimal places used for all rates (always 7).
-    pub fn get_rate_decimals(env: Env) -> u32 {
-        7
+    pub fn get_rate_decimals(_env: Env) -> u32 {
+        RATE_DECIMALS
     }
 
     // ─────────────────────────────────────────────────────────────────────────

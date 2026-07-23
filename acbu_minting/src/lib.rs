@@ -1437,14 +1437,24 @@ fn next_tx_nonce(env: &Env) -> u64 {
 // C-058 — minting to a contract address that has no token-receipt logic would
 // permanently strand funds.
 //
-// NOTE: soroban-sdk 21 does not expose an `is_account()` predicate on
-// `Address`; the distinction is enforced off-chain by the client SDK and by
-// Stellar's native authorization model.  This stub preserves the call sites so
-// the intent is visible and can be filled in when the SDK gains the API.
+// soroban-sdk 21 does not expose an `is_account()` predicate on `Address`, but
+// the strkey encoding returned by `Address::to_string()` reveals the address
+// kind: standard Stellar account (ed25519 public key) strkeys start with 'G',
+// while contract strkeys start with 'C'. Both encodings are 56 characters
+// long, so any address that doesn't decode to a 56-byte 'G...' string is
+// rejected.
 // ---------------------------------------------------------------------------
-fn assert_recipient_is_account(_address: &Address) {
-    // On-chain account-vs-contract check is not available in soroban-sdk 21.
-    // Enforcement is the responsibility of the calling client.
+fn assert_recipient_is_account(address: &Address) {
+    let env = address.env();
+    let strkey = address.to_string();
+    if strkey.len() != 56 {
+        env.panic_with_error(MintingError::InvalidRecipient);
+    }
+    let mut buf = [0u8; 56];
+    strkey.copy_into_slice(&mut buf);
+    if buf[0] != b'G' {
+        env.panic_with_error(MintingError::InvalidRecipient);
+    }
 }
 
 // ---------------------------------------------------------------------------
