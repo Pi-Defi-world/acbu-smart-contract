@@ -142,7 +142,7 @@ impl BurningContract {
             .get(&DATA_KEY.reserve_tracker)
             .unwrap();
 
-
+        let current_time = env.ledger().timestamp();
         let (acbu_rate, oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
             &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
