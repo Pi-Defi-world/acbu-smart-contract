@@ -108,6 +108,22 @@ const SECONDS_PER_YEAR: i128 = 31_536_000;
 const UPGRADE_TIMELOCK_SECONDS: u64 = 86_400;
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 
+/// Mirrors acbu_reserve_tracker's instance-TTL ceiling: bumps the entry to
+/// ~300 days (at 5s/ledger) on every deposit/withdraw so admin config
+/// (acbu_token, fee_rate, yield_rate) never archives from inactivity.
+const INSTANCE_TTL_THRESHOLD: u32 = 5_184_000;
+const INSTANCE_TTL_EXTEND_TO: u32 = 5_184_000;
+
+/// Deposit lots live in *temporary* storage, which is erased entirely (not just
+/// restorable) once its TTL lapses. Unlike instance storage, a lot's required
+/// lifetime depends on the user-chosen lock term, so the extension target scales
+/// with `term_seconds` instead of using a fixed constant. `MIN_DEPOSIT_TTL_LEDGERS`
+/// mirrors acbu_escrow's temporary-entry threshold; `MAX_DEPOSIT_TTL_LEDGERS`
+/// mirrors this contract's own instance-TTL ceiling above.
+const APPROX_LEDGER_SECONDS: u64 = 5;
+const MIN_DEPOSIT_TTL_LEDGERS: u32 = 17_280;
+const MAX_DEPOSIT_TTL_LEDGERS: u32 = 5_184_000;
+
 // ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------
@@ -190,6 +206,25 @@ impl SavingsVault {
             .unwrap_or(false)
     }
 
+    fn extend_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+    }
+
+    /// Extends the temporary storage entry backing a user's deposit lots for
+    /// `term_seconds`, scaling the extension with the lock term (capped to
+    /// `MAX_DEPOSIT_TTL_LEDGERS`) so it survives at least until maturity.
+    fn extend_deposit_ttl(env: &Env, key: &(Symbol, Address, u64), term_seconds: u64) {
+        let term_ledgers = term_seconds
+            .saturating_div(APPROX_LEDGER_SECONDS)
+            .min(MAX_DEPOSIT_TTL_LEDGERS as u64) as u32;
+        let extend_to = term_ledgers.max(MIN_DEPOSIT_TTL_LEDGERS);
+        env.storage()
+            .temporary()
+            .extend_ttl(key, MIN_DEPOSIT_TTL_LEDGERS, extend_to);
+    }
+
     // -----------------------------------------------------------------------
     // Public logic
     // -----------------------------------------------------------------------
@@ -216,6 +251,7 @@ impl SavingsVault {
         env.storage().instance().set(&DATA_KEY.yield_rate, &yield_rate_bps);
         env.storage().instance().set(&DATA_KEY.paused, &false);
         env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
+        Self::extend_instance_ttl(&env);
     }
 
     /// Deposit (lock) ACBU for a term. User transfers ACBU to this contract.
@@ -284,7 +320,8 @@ impl SavingsVault {
         });
 
         env.storage().temporary().set(&key, &lots);
-
+        Self::extend_deposit_ttl(&env, &key, term_seconds);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("Deposit"), user.clone()),
@@ -390,7 +427,9 @@ impl SavingsVault {
             env.storage().temporary().remove(&key);
         } else {
             env.storage().temporary().set(&key, &updated_lots);
+            Self::extend_deposit_ttl(&env, &key, term_seconds);
         }
+        Self::extend_instance_ttl(&env);
 
         let payout_amount = amount
             .checked_add(yield_amount)
