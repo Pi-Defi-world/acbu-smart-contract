@@ -330,6 +330,51 @@ fn test_verify_reserves_errors_when_total_supply_is_zero() {
 }
 
 #[test]
+fn test_add_currency_and_get_currencies() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let acbu_token = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
+
+    assert_eq!(client.get_currencies().len(), 0);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    client.add_currency(&ngn);
+    assert_eq!(client.get_currencies().len(), 1);
+
+    let kes = CurrencyCode::new(&env, "KES");
+    client.add_currency(&kes);
+    assert_eq!(client.get_currencies().len(), 2);
+}
+
+#[test]
+#[should_panic(expected = "#8008")]
+fn test_add_currency_duplicate_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let acbu_token = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    client.add_currency(&ngn);
+    client.add_currency(&ngn); // should panic with DuplicateCurrency = 8008
+}
+
+#[test]
 fn test_update_reserve_without_admin_auth_fails() {
     let env = Env::default();
     env.ledger().with_mut(|l| l.timestamp = 1);
