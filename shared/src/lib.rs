@@ -340,7 +340,8 @@ pub fn median(mut values: soroban_sdk::Vec<i128>) -> Option<i128> {
         let val1 = values.get(mid - 1)?;
         quickselect_inplace(&mut values, 0, i32::try_from(n - 1).unwrap_or(0), i32::try_from(mid).unwrap_or(0));
         let val2 = values.get(mid)?;
-        Some((val1 + val2) / 2)
+        // SC-020: use checked arithmetic — (val1 + val2) can overflow i128 for extreme rates.
+        val1.checked_add(val2).and_then(|sum| sum.checked_div(2))
     } else {
         // For odd count, find the middle element
         quickselect_inplace(&mut values, 0, i32::try_from(n - 1).unwrap_or(0), i32::try_from(mid).unwrap_or(0));

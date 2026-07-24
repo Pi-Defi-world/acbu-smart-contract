@@ -70,6 +70,18 @@ fn test_median_two_elements() {
 }
 
 #[test]
+fn test_median_even_count_add_overflow_returns_none() {
+    let env = Env::default();
+    // Even-length path averages the two middle values; i128::MAX + i128::MAX overflows.
+    let v = make_vec(&env, &[i128::MAX, i128::MAX]);
+    assert_eq!(
+        median(v),
+        None,
+        "median of [i128::MAX, i128::MAX] must return None on checked_add overflow"
+    );
+}
+
+#[test]
 fn test_median_all_equal() {
     let env = Env::default();
     let v = make_vec(&env, &[7, 7, 7, 7, 7]);
