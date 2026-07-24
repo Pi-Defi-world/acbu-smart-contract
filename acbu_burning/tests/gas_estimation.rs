@@ -56,7 +56,7 @@ fn gas_redeem_basket_five_currency_path_stays_under_budget() {
         .burning
         .redeem_basket(&ctx.user, &recipients, &burn_amount);
 
-    assert_eq!(amounts.len(), currency_codes.len() as u32);
+    assert_eq!(amounts.len(), currency_codes.len() as u32, "amounts.len() should equal currency_codes.len() as u32");
     for i in 0..amounts.len() {
         assert_eq!(
             amounts.get(i).unwrap(),

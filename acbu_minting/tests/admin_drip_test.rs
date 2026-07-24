@@ -9,7 +9,10 @@ use soroban_sdk::{
 };
 
 mod oracle_mock {
-    use super::*;
+    use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
+
+    use shared::CurrencyCode;
+    use super::DECIMALS;
 
     #[contract]
     pub struct MockOracle;
@@ -49,7 +52,8 @@ mod oracle_mock {
 }
 
 mod reserve_mock {
-    use super::*;
+    use soroban_sdk::{contract, contractimpl, Env};
+
     #[contract]
     pub struct MockReserveTracker;
 
@@ -74,10 +78,19 @@ fn init_mint_client(
     fee_rate: i128,
     fee_single: i128,
 ) {
-    client.initialize(
-        admin, oracle, reserve_tracker, acbu_token, usdc_token,
-        vault, treasury, &fee_rate, &fee_single,
-    );
+    let config = acbu_minting::MintingConfig {
+        admin: admin.clone(),
+        oracle: oracle.clone(),
+        reserve_tracker: reserve_tracker.clone(),
+        acbu_token: acbu_token.clone(),
+        usdc_token: usdc_token.clone(),
+        vault: vault.clone(),
+        treasury: treasury.clone(),
+        fee_rate_bps: fee_rate,
+        fee_single_bps: fee_single,
+        operator: admin.clone(),
+    };
+    client.initialize(&config);
 }
 
 fn setup_drip_test(env: &Env) -> (Address, Address, MintingContractClient, Address) {
@@ -115,13 +128,13 @@ fn test_admin_drip_fiat_success() {
     let stoken_client = soroban_sdk::token::Client::new(&env, &stoken_id);
 
     stoken_sac.mint(&client.address, &amount);
-    assert_eq!(stoken_client.balance(&recipient), 0);
+    assert_eq!(stoken_client.balance(&recipient), 0, "stoken_client.balance(&recipient) should equal 0");
 
     let currency = CurrencyCode::new(&env, "NGN");
     client.admin_drip_fiat(&recipient, &currency, &amount);
 
-    assert_eq!(stoken_client.balance(&recipient), amount);
-    assert_eq!(stoken_client.balance(&client.address), 0);
+    assert_eq!(stoken_client.balance(&recipient), amount, "stoken_client.balance(&recipient) should equal amount");
+    assert_eq!(stoken_client.balance(&client.address), 0, "stoken_client.balance(&client.address) should equal 0");
 }
 
 #[test]

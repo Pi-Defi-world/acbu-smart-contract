@@ -1,0 +1,39 @@
+name: Validate JSON Schemas
+
+on:
+  push:
+    paths:
+      - 'validators.json'
+      - 'weights.json'
+      - 'scripts/oracle_basket_currencies.json'
+      - 'scripts/oracle_basket_weights_bps.json'
+      - 'schemas/**'
+  pull_request:
+    paths:
+      - 'validators.json'
+      - 'weights.json'
+      - 'scripts/oracle_basket_currencies.json'
+      - 'scripts/oracle_basket_weights_bps.json'
+      - 'schemas/**'
+
+jobs:
+  validate:
+    name: JSON Schema Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ajv-cli
+        run: npm install -g ajv-cli
+
+      - name: Validate validators.json
+        run: ajv validate -s schemas/validators.schema.json -d validators.json --spec=draft7
+
+      - name: Validate weights.json
+        run: ajv validate -s schemas/weights.schema.json -d weights.json --spec=draft7
+
+      - name: Validate oracle_basket_currencies.json
+        run: ajv validate -s schemas/oracle_basket_currencies.schema.json -d scripts/oracle_basket_currencies.json --spec=draft7
+
+      - name: Validate oracle_basket_weights_bps.json
+        run: ajv validate -s schemas/oracle_basket_weights_bps.schema.json -d scripts/oracle_basket_weights_bps.json --spec=draft7

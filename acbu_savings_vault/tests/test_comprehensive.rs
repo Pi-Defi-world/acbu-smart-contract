@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use acbu_savings_vault::{SavingsVault, SavingsVaultClient, WithdrawEvent, DepositEvent};
-use shared::DECIMALS;
+use shared::{BASIS_POINTS, DECIMALS};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger},
@@ -9,7 +9,6 @@ use soroban_sdk::{
 };
 
 const SECONDS_PER_YEAR: u64 = 31_536_000;
-const BASIS_POINTS: i128 = 10_000;
 
 // ============================================================================
 // Test Harness
@@ -133,7 +132,7 @@ impl TestEnv {
 
 fn expected_yield(principal: i128, yield_rate_bps: i128, elapsed_seconds: u64) -> i128 {
     let elapsed_i128 = i128::from(elapsed_seconds);
-    principal * yield_rate_bps * elapsed_i128 / (BASIS_POINTS * SECONDS_PER_YEAR as i128)
+    principal * yield_rate_bps * elapsed_i128 / (BASIS_POINTS * i128::from(SECONDS_PER_YEAR))
 }
 
 // ============================================================================
@@ -149,8 +148,8 @@ fn test_deposit_basic_success() {
     h.mint_to_user(amount);
     h.client.deposit(&h.user, &amount, &term);
 
-    assert_eq!(h.client.get_balance(&h.user, &term), amount);
-    assert_eq!(h.vault_balance(), amount);
+    assert_eq!(h.client.get_balance(&h.user, &term), amount, "h.client.get_balance(&h.user, &term) should equal amount");
+    assert_eq!(h.vault_balance(), amount, "h.vault_balance() should equal amount");
 }
 
 #[test]
@@ -165,9 +164,9 @@ fn test_deposit_with_fee_deduction() {
     h.mint_to_user(gross_amount);
     h.client.deposit(&h.user, &gross_amount, &term);
 
-    assert_eq!(h.client.get_balance(&h.user, &term), expected_net);
-    assert_eq!(h.admin_balance(), expected_fee);
-    assert_eq!(h.vault_balance(), expected_net);
+    assert_eq!(h.client.get_balance(&h.user, &term), expected_net, "h.client.get_balance(&h.user, &term) should equal expected_net");
+    assert_eq!(h.admin_balance(), expected_fee, "h.admin_balance() should equal expected_fee");
+    assert_eq!(h.vault_balance(), expected_net, "h.vault_balance() should equal expected_net");
 }
 
 #[test]
@@ -181,8 +180,8 @@ fn test_deposit_with_high_fee_rate() {
     h.mint_to_user(gross);
     h.client.deposit(&h.user, &gross, &term);
 
-    assert_eq!(h.admin_balance(), fee);
-    assert_eq!(h.client.get_balance(&h.user, &term), gross - fee);
+    assert_eq!(h.admin_balance(), fee, "h.admin_balance() should equal fee");
+    assert_eq!(h.client.get_balance(&h.user, &term), gross - fee, "h.client.get_balance(&h.user, &term) should equal gross - fee");
 }
 
 #[test]
@@ -194,8 +193,8 @@ fn test_deposit_zero_fee_rate() {
     h.mint_to_user(amount);
     h.client.deposit(&h.user, &amount, &term);
 
-    assert_eq!(h.client.get_balance(&h.user, &term), amount);
-    assert_eq!(h.admin_balance(), 0);
+    assert_eq!(h.client.get_balance(&h.user, &term), amount, "h.client.get_balance(&h.user, &term) should equal amount");
+    assert_eq!(h.admin_balance(), 0, "h.admin_balance() should equal 0");
 }
 
 #[test]
@@ -229,7 +228,7 @@ fn test_deposit_very_small_amount() {
     h.mint_to_user(amount);
     h.client.deposit(&h.user, &amount, &term);
 
-    assert_eq!(h.client.get_balance(&h.user, &term), amount);
+    assert_eq!(h.client.get_balance(&h.user, &term), amount, "h.client.get_balance(&h.user, &term) should equal amount");
 }
 
 #[test]
@@ -241,7 +240,7 @@ fn test_deposit_large_amount() {
     h.mint_to_user(amount);
     h.client.deposit(&h.user, &amount, &term);
 
-    assert_eq!(h.client.get_balance(&h.user, &term), amount);
+    assert_eq!(h.client.get_balance(&h.user, &term), amount, "h.client.get_balance(&h.user, &term) should equal amount");
 }
 
 #[test]
@@ -273,8 +272,8 @@ fn test_multiple_deposits_different_terms_independent() {
     h.client.deposit(&h.user, &amount, &term1);
     h.client.deposit(&h.user, &amount, &term2);
 
-    assert_eq!(h.client.get_balance(&h.user, &term1), amount);
-    assert_eq!(h.client.get_balance(&h.user, &term2), amount);
+    assert_eq!(h.client.get_balance(&h.user, &term1), amount, "h.client.get_balance(&h.user, &term1) should equal amount");
+    assert_eq!(h.client.get_balance(&h.user, &term2), amount, "h.client.get_balance(&h.user, &term2) should equal amount");
 }
 
 #[test]
@@ -286,7 +285,7 @@ fn test_deposit_very_long_term() {
     h.mint_to_user(amount);
     h.client.deposit(&h.user, &amount, &term);
 
-    assert_eq!(h.client.get_balance(&h.user, &term), amount);
+    assert_eq!(h.client.get_balance(&h.user, &term), amount, "h.client.get_balance(&h.user, &term) should equal amount");
 }
 
 #[test]
@@ -298,7 +297,7 @@ fn test_deposit_very_short_term() {
     h.mint_to_user(amount);
     h.client.deposit(&h.user, &amount, &term);
 
-    assert_eq!(h.client.get_balance(&h.user, &term), amount);
+    assert_eq!(h.client.get_balance(&h.user, &term), amount, "h.client.get_balance(&h.user, &term) should equal amount");
 }
 
 #[test]
@@ -314,12 +313,12 @@ fn test_deposit_event_correct_values() {
     h.client.deposit(&h.user, &gross, &term);
 
     let event = h.find_deposit_event().expect("Deposit event must be emitted");
-    assert_eq!(event.gross_amount, gross);
-    assert_eq!(event.fee_amount, fee);
-    assert_eq!(event.net_amount, net);
-    assert_eq!(event.term_seconds, term);
-    assert_eq!(event.timestamp, h.now());
-    assert_eq!(event.maturity_timestamp, h.now() + term);
+    assert_eq!(event.gross_amount, gross, "event.gross_amount should equal gross");
+    assert_eq!(event.fee_amount, fee, "event.fee_amount should equal fee");
+    assert_eq!(event.net_amount, net, "event.net_amount should equal net");
+    assert_eq!(event.term_seconds, term, "event.term_seconds should equal term");
+    assert_eq!(event.timestamp, h.now(), "event.timestamp should equal h.now()");
+    assert_eq!(event.maturity_timestamp, h.now() + term, "event.maturity_timestamp should equal h.now() + term");
 }
 
 #[test]
@@ -344,7 +343,7 @@ fn test_deposit_after_unpause_succeeds() {
     h.mint_to_user(amount);
     h.client.deposit(&h.user, &amount, &term);
 
-    assert_eq!(h.client.get_balance(&h.user, &term), amount);
+    assert_eq!(h.client.get_balance(&h.user, &term), amount, "h.client.get_balance(&h.user, &term) should equal amount");
 }
 
 // ============================================================================
@@ -362,8 +361,8 @@ fn test_withdraw_after_term_succeeds() {
     h.advance_time(term);
 
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount);
-    assert_eq!(h.client.get_balance(&h.user, &term), 0);
+    assert_eq!(h.user_balance(), amount, "h.user_balance() should equal amount");
+    assert_eq!(h.client.get_balance(&h.user, &term), 0, "h.client.get_balance(&h.user, &term) should equal 0");
 }
 
 #[test]
@@ -405,7 +404,7 @@ fn test_withdraw_at_exact_term_boundary_succeeds() {
     h.advance_time(term);
 
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount);
+    assert_eq!(h.user_balance(), amount, "h.user_balance() should equal amount");
 }
 
 #[test]
@@ -419,7 +418,7 @@ fn test_withdraw_after_term_plus_one_second_succeeds() {
     h.advance_time(term + 1);
 
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount);
+    assert_eq!(h.user_balance(), amount, "h.user_balance() should equal amount");
 }
 
 #[test]
@@ -481,8 +480,8 @@ fn test_partial_withdraw_leaves_remainder() {
 
     h.client.withdraw(&h.user, &term, &withdraw_amount);
 
-    assert_eq!(h.user_balance(), withdraw_amount);
-    assert_eq!(h.client.get_balance(&h.user, &term), remaining);
+    assert_eq!(h.user_balance(), withdraw_amount, "h.user_balance() should equal withdraw_amount");
+    assert_eq!(h.client.get_balance(&h.user, &term), remaining, "h.client.get_balance(&h.user, &term) should equal remaining");
 }
 
 #[test]
@@ -499,14 +498,14 @@ fn test_partial_withdraws_multiple_times() {
     h.advance_time(term);
 
     h.client.withdraw(&h.user, &term, &withdraw1);
-    assert_eq!(h.user_balance(), withdraw1);
+    assert_eq!(h.user_balance(), withdraw1, "h.user_balance() should equal withdraw1");
 
     h.client.withdraw(&h.user, &term, &withdraw2);
-    assert_eq!(h.user_balance(), withdraw1 + withdraw2);
+    assert_eq!(h.user_balance(), withdraw1 + withdraw2, "h.user_balance() should equal withdraw1 + withdraw2");
 
     h.client.withdraw(&h.user, &term, &withdraw3);
-    assert_eq!(h.user_balance(), withdraw1 + withdraw2 + withdraw3);
-    assert_eq!(h.client.get_balance(&h.user, &term), 0);
+    assert_eq!(h.user_balance(), withdraw1 + withdraw2 + withdraw3, "h.user_balance() should equal withdraw1 + withdraw2 + withdraw3");
+    assert_eq!(h.client.get_balance(&h.user, &term), 0, "h.client.get_balance(&h.user, &term) should equal 0");
 }
 
 #[test]
@@ -521,7 +520,7 @@ fn test_full_withdrawal_clears_balance() {
 
     h.client.withdraw(&h.user, &term, &amount);
 
-    assert_eq!(h.client.get_balance(&h.user, &term), 0);
+    assert_eq!(h.client.get_balance(&h.user, &term), 0, "h.client.get_balance(&h.user, &term) should equal 0");
 }
 
 #[test]
@@ -564,7 +563,7 @@ fn test_withdraw_after_unpause_succeeds() {
     h.client.unpause();
 
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount);
+    assert_eq!(h.user_balance(), amount, "h.user_balance() should equal amount");
 }
 
 #[test]
@@ -580,9 +579,9 @@ fn test_withdraw_event_correct_values_no_yield() {
     h.client.withdraw(&h.user, &term, &amount);
 
     let event = h.find_withdraw_event().expect("Withdraw event must be emitted");
-    assert_eq!(event.amount, amount);
-    assert_eq!(event.yield_amount, 0);
-    assert_eq!(event.fee_amount, 0);
+    assert_eq!(event.amount, amount, "event.amount should equal amount");
+    assert_eq!(event.yield_amount, 0, "event.yield_amount should equal 0");
+    assert_eq!(event.fee_amount, 0, "event.fee_amount should equal 0");
 }
 
 // ============================================================================
@@ -605,12 +604,12 @@ fn test_multiple_terms_are_independent_and_locked() {
 
     // Short term should be unlocked
     h.client.withdraw(&h.user, &short_term, &amount);
-    assert_eq!(h.client.get_balance(&h.user, &short_term), 0);
+    assert_eq!(h.client.get_balance(&h.user, &short_term), 0, "h.client.get_balance(&h.user, &short_term) should equal 0");
 
     // Long term should still be locked
     let result = h.client.try_withdraw(&h.user, &long_term, &amount);
     assert!(result.is_err(), "Long term must remain locked");
-    assert_eq!(h.client.get_balance(&h.user, &long_term), amount);
+    assert_eq!(h.client.get_balance(&h.user, &long_term), amount, "h.client.get_balance(&h.user, &long_term) should equal amount");
 }
 
 #[test]
@@ -637,7 +636,7 @@ fn test_different_terms_have_independent_lock_times() {
     // Advance to just past term2
     h.set_time(start_time + term2 + 1);
     h.client.withdraw(&h.user, &term2, &amount);
-    assert_eq!(h.client.get_balance(&h.user, &term2), 0);
+    assert_eq!(h.client.get_balance(&h.user, &term2), 0, "h.client.get_balance(&h.user, &term2) should equal 0");
 }
 
 #[test]
@@ -657,7 +656,7 @@ fn test_redeposit_after_withdrawal_works_correctly() {
     h.advance_time(term);
     h.client.withdraw(&h.user, &term, &amount);
 
-    assert_eq!(h.client.get_balance(&h.user, &term), 0);
+    assert_eq!(h.client.get_balance(&h.user, &term), 0, "h.client.get_balance(&h.user, &term) should equal 0");
 }
 
 #[test]
@@ -677,7 +676,7 @@ fn test_term_1_year_enforcement() {
     // Withdraw at exactly 1 year - should succeed
     h.advance_time(86_400);
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount);
+    assert_eq!(h.user_balance(), amount, "h.user_balance() should equal amount");
 }
 
 #[test]
@@ -703,7 +702,7 @@ fn test_multiple_deposits_different_times_same_term() {
 
     // Both should be unlocked now
     h.client.withdraw(&h.user, &term, &(amount1 + amount2));
-    assert_eq!(h.user_balance(), amount1 + amount2);
+    assert_eq!(h.user_balance(), amount1 + amount2, "h.user_balance() should equal amount1 + amount2");
 }
 
 // ============================================================================
@@ -721,14 +720,14 @@ fn test_yield_accrues_after_term_only() {
     h.client.deposit(&h.user, &amount, &term);
 
     // Before term - no yield
-    assert_eq!(h.client.get_pending_yield(&h.user, &term), 0);
+    assert_eq!(h.client.get_pending_yield(&h.user, &term), 0, "h.client.get_pending_yield(&h.user, &term) should equal 0");
 
     // After term - yield should accrue
     h.advance_time(term);
     let exp_yield = expected_yield(amount, yield_rate, term);
     h.mint_to_vault(exp_yield);
 
-    assert_eq!(h.client.get_pending_yield(&h.user, &term), exp_yield);
+    assert_eq!(h.client.get_pending_yield(&h.user, &term), exp_yield, "h.client.get_pending_yield(&h.user, &term) should equal exp_yield");
 }
 
 #[test]
@@ -748,10 +747,10 @@ fn test_yield_30_days_at_10_percent_apr() {
     let exp_yield = expected_yield(amount, yield_rate, elapsed);
     h.mint_to_vault(exp_yield);
 
-    assert_eq!(h.client.get_pending_yield(&h.user, &term), exp_yield);
+    assert_eq!(h.client.get_pending_yield(&h.user, &term), exp_yield, "h.client.get_pending_yield(&h.user, &term) should equal exp_yield");
 
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount + exp_yield);
+    assert_eq!(h.user_balance(), amount + exp_yield, "h.user_balance() should equal amount + exp_yield");
 }
 
 #[test]
@@ -772,7 +771,7 @@ fn test_yield_one_year_at_10_percent_apr() {
 
     h.mint_to_vault(exp_yield);
     h.client.withdraw(&h.user, &SECONDS_PER_YEAR, &amount);
-    assert_eq!(h.user_balance(), amount + 1_000_000);
+    assert_eq!(h.user_balance(), amount + 1_000_000, "h.user_balance() should equal amount + 1_000_000");
 }
 
 #[test]
@@ -794,7 +793,7 @@ fn test_yield_six_months_at_10_percent_apr() {
 
     h.mint_to_vault(exp_yield);
     h.client.withdraw(&h.user, &six_months, &amount);
-    assert_eq!(h.user_balance(), amount + 500_000);
+    assert_eq!(h.user_balance(), amount + 500_000, "h.user_balance() should equal amount + 500_000");
 }
 
 #[test]
@@ -808,10 +807,10 @@ fn test_zero_yield_rate_no_interest() {
 
     h.advance_time(term);
 
-    assert_eq!(h.client.get_pending_yield(&h.user, &term), 0);
+    assert_eq!(h.client.get_pending_yield(&h.user, &term), 0, "h.client.get_pending_yield(&h.user, &term) should equal 0");
 
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount);
+    assert_eq!(h.user_balance(), amount, "h.user_balance() should equal amount");
 }
 
 #[test]
@@ -837,8 +836,8 @@ fn test_yield_on_net_deposit_after_fee() {
     h.mint_to_vault(exp_yield);
 
     h.client.withdraw(&h.user, &term, &net);
-    assert_eq!(h.user_balance(), net + exp_yield);
-    assert_eq!(h.admin_balance(), fee);
+    assert_eq!(h.user_balance(), net + exp_yield, "h.user_balance() should equal net + exp_yield");
+    assert_eq!(h.admin_balance(), fee, "h.admin_balance() should equal fee");
 }
 
 #[test]
@@ -884,7 +883,7 @@ fn test_yield_low_rate_5_percent_annual() {
 
     h.mint_to_vault(exp_yield);
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount + exp_yield);
+    assert_eq!(h.user_balance(), amount + exp_yield, "h.user_balance() should equal amount + exp_yield");
 }
 
 #[test]
@@ -904,7 +903,7 @@ fn test_yield_high_rate_20_percent_annual() {
 
     h.mint_to_vault(exp_yield);
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount + exp_yield);
+    assert_eq!(h.user_balance(), amount + exp_yield, "h.user_balance() should equal amount + exp_yield");
 }
 
 #[test]
@@ -927,7 +926,7 @@ fn test_yield_event_carries_correct_yield_amount() {
     h.client.withdraw(&h.user, &term, &amount);
 
     let event = h.find_withdraw_event().expect("Withdraw event must be emitted");
-    assert_eq!(event.yield_amount, exp_yield);
+    assert_eq!(event.yield_amount, exp_yield, "event.yield_amount should equal exp_yield");
 }
 
 // ============================================================================
@@ -957,8 +956,8 @@ fn test_two_users_independent_deposits_and_yields() {
     h.client.withdraw(&h.user, &term, &amount);
     h.client.withdraw(&h.user2, &term, &amount);
 
-    assert_eq!(h.user_balance(), amount + exp_yield);
-    assert_eq!(h.user2_balance(), amount + exp_yield);
+    assert_eq!(h.user_balance(), amount + exp_yield, "h.user_balance() should equal amount + exp_yield");
+    assert_eq!(h.user2_balance(), amount + exp_yield, "h.user2_balance() should equal amount + exp_yield");
 }
 
 #[test]
@@ -972,21 +971,21 @@ fn test_deposit_withdraw_cycle_multiple_times() {
     h.client.deposit(&h.user, &amount, &1_000u64);
     h.advance_time(1_000);
     h.client.withdraw(&h.user, &1_000u64, &amount);
-    assert_eq!(h.user_balance(), amount);
+    assert_eq!(h.user_balance(), amount, "h.user_balance() should equal amount");
 
     // Cycle 2: deposit and withdraw with term 2000
     h.mint_to_user(amount);
     h.client.deposit(&h.user, &amount, &2_000u64);
     h.advance_time(2_000);
     h.client.withdraw(&h.user, &2_000u64, &amount);
-    assert_eq!(h.user_balance(), amount * 2);
+    assert_eq!(h.user_balance(), amount * 2, "h.user_balance() should equal amount * 2");
 
     // Cycle 3: deposit and withdraw with term 3000
     h.mint_to_user(amount);
     h.client.deposit(&h.user, &amount, &3_000u64);
     h.advance_time(3_000);
     h.client.withdraw(&h.user, &3_000u64, &amount);
-    assert_eq!(h.user_balance(), amount * 3);
+    assert_eq!(h.user_balance(), amount * 3, "h.user_balance() should equal amount * 3");
 }
 
 #[test]
@@ -1009,8 +1008,8 @@ fn test_fifo_withdrawal_from_multiple_deposits() {
     // Withdraw should consume lot1, lot2, and part of lot3
     h.client.withdraw(&h.user, &term, &withdraw);
 
-    assert_eq!(h.user_balance(), withdraw);
-    assert_eq!(h.client.get_balance(&h.user, &term), lot3);
+    assert_eq!(h.user_balance(), withdraw, "h.user_balance() should equal withdraw");
+    assert_eq!(h.client.get_balance(&h.user, &term), lot3, "h.client.get_balance(&h.user, &term) should equal lot3");
 }
 
 #[test]
@@ -1039,7 +1038,7 @@ fn test_partial_yield_when_withdrawing_before_all_lots_mature() {
 
     // Withdraw the first amount which accrued yield
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount + exp_yield1);
+    assert_eq!(h.user_balance(), amount + exp_yield1, "h.user_balance() should equal amount + exp_yield1");
 
     // Second lot still locked
     let result = h.client.try_withdraw(&h.user, &term, &amount);
@@ -1058,11 +1057,11 @@ fn test_contract_state_consistency_after_partial_withdrawals() {
 
     // Withdraw half
     h.client.withdraw(&h.user, &term, &(amount / 2));
-    assert_eq!(h.client.get_balance(&h.user, &term), amount / 2);
+    assert_eq!(h.client.get_balance(&h.user, &term), amount / 2, "h.client.get_balance(&h.user, &term) should equal amount / 2");
 
     // Withdraw remaining half
     h.client.withdraw(&h.user, &term, &(amount / 2));
-    assert_eq!(h.client.get_balance(&h.user, &term), 0);
+    assert_eq!(h.client.get_balance(&h.user, &term), 0, "h.client.get_balance(&h.user, &term) should equal 0");
 
     // Verify no deposit exists for this term
     let result = h.client.try_withdraw(&h.user, &term, &1i128);
@@ -1130,7 +1129,7 @@ fn test_precision_with_various_combinations() {
 
         h.client.withdraw(&h.user, &term, &actual_deposit);
 
-        assert_eq!(h.user_balance(), actual_deposit + exp_yield);
-        assert_eq!(h.admin_balance(), fee_deducted);
+        assert_eq!(h.user_balance(), actual_deposit + exp_yield, "h.user_balance() should equal actual_deposit + exp_yield");
+        assert_eq!(h.admin_balance(), fee_deducted, "h.admin_balance() should equal fee_deducted");
     }
 }

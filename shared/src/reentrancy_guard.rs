@@ -8,6 +8,14 @@ pub enum ReentrancyError {
     ReentrantCall = 6001,
 }
 
+impl core::fmt::Display for ReentrancyError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ReentrancyError::ReentrantCall => write!(f, "reentrant call detected"),
+        }
+    }
+}
+
 /// Storage key for re-entrancy guard status
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

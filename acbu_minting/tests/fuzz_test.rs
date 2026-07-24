@@ -60,17 +60,19 @@ fn setup_fuzz_test(env: &Env) -> (Address, Address, MintingContractClient, Addre
     let usdc_sac = soroban_sdk::token::StellarAssetClient::new(env, &usdc_token);
     let acbu_client = soroban_sdk::token::Client::new(env, &acbu_token);
     
-    client.initialize(
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token,
-        &usdc_token,
-        &admin,
-        &admin,
-        &300,
-        &100,
-    );
+    let config = acbu_minting::MintingConfig {
+        admin: admin.clone(),
+        oracle: oracle.clone(),
+        reserve_tracker: reserve_tracker.clone(),
+        acbu_token: acbu_token.clone(),
+        usdc_token: usdc_token.clone(),
+        vault: admin.clone(),
+        treasury: admin.clone(),
+        fee_rate_bps: 300,
+        fee_single_bps: 100,
+        operator: admin.clone(),
+    };
+    client.initialize(&config);
     (admin, oracle, client, usdc_token, usdc_sac, acbu_client)
 }
 
