@@ -974,10 +974,6 @@ impl MintingContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
 
-        if !Self::check_is_admin(&env, &admin) {
-            env.panic_with_error(MintingError::UnauthorizedOperator);
-        }
-
         // C-058: reject contract-type recipients to prevent stranded token transfers.
         Self::assert_recipient_is_account(&recipient);
         if amount <= 0 {
