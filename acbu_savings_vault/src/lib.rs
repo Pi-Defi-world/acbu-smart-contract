@@ -533,9 +533,8 @@ impl SavingsVault {
             .unwrap_or(Vec::new(&env));
 
         let total_lots = lots.len();
-        let offset_u32 = u32::try_from(offset).unwrap_or(0);
 
-        if offset_u32 >= total_lots {
+        if offset >= total_lots {
             return Vec::new(&env);
         }
 
@@ -545,15 +544,14 @@ impl SavingsVault {
             limit
         };
 
-        let end_idx = if offset_u32 + limit_u32 < total_lots {
-            offset_u32 + limit_u32
+        let end_idx = if offset + limit_u32 < total_lots {
+            offset + limit_u32
         } else {
             total_lots
         };
         let mut result = Vec::new(&env);
 
-        for i in offset_u32..end_idx {
-            let idx = u32::try_from(i).unwrap_or(0);
+        for idx in offset..end_idx {
             if let Some(lot) = lots.get(idx) {
                 result.push_back(lot);
             }
