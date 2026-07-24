@@ -132,7 +132,7 @@ impl ReserveTrackerContract {
         Self::is_reserve_sufficient(env, total_acbu_supply)
     }
 
-    pub fn verify_reserves_manual(env: Env, total_acbu_supply: i128) -> bool {
+    fn verify_reserves_manual(env: Env, total_acbu_supply: i128) -> bool {
         Self::is_reserve_sufficient(env, total_acbu_supply)
     }
 

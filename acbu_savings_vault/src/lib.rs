@@ -273,7 +273,7 @@ impl SavingsVault {
         let key = (DEPOSIT_KEY, user.clone(), term_seconds);
         let mut lots: Vec<DepositLot> = env
             .storage()
-            .temporary()
+            .persistent()
             .get(&key)
             .unwrap_or_else(|| Vec::new(&env));
 
@@ -283,7 +283,7 @@ impl SavingsVault {
             term_seconds,
         });
 
-        env.storage().temporary().set(&key, &lots);
+        env.storage().persistent().set(&key, &lots);
 
 
         env.events().publish(
@@ -320,7 +320,7 @@ impl SavingsVault {
         let key = (DEPOSIT_KEY, user.clone(), term_seconds);
         let lots: Vec<DepositLot> = env
             .storage()
-            .temporary()
+            .persistent()
             .get(&key)
             .unwrap_or_else(|| env.panic_with_error(Error::NoDeposit));
 
@@ -387,9 +387,9 @@ impl SavingsVault {
         }
 
         if updated_lots.is_empty() {
-            env.storage().temporary().remove(&key);
+            env.storage().persistent().remove(&key);
         } else {
-            env.storage().temporary().set(&key, &updated_lots);
+            env.storage().persistent().set(&key, &updated_lots);
         }
 
         let payout_amount = amount
@@ -425,7 +425,7 @@ impl SavingsVault {
         let key = (DEPOSIT_KEY, user, term_seconds);
         let lots: Vec<DepositLot> = env
             .storage()
-            .temporary()
+            .persistent()
             .get(&key)
             .unwrap_or_else(|| Vec::new(&env));
         Self::sum_lots(&lots)
@@ -435,7 +435,7 @@ impl SavingsVault {
         let key = (DEPOSIT_KEY, user, term_seconds);
         let lots: Vec<DepositLot> = env
             .storage()
-            .temporary()
+            .persistent()
             .get(&key)
             .unwrap_or_else(|| env.panic_with_error(Error::NoDeposit));
 
@@ -468,7 +468,7 @@ impl SavingsVault {
         let key = (DEPOSIT_KEY, user, term_seconds);
         let lots: Vec<DepositLot> = env
             .storage()
-            .temporary()
+            .persistent()
             .get(&key)
             .unwrap_or(Vec::new(&env));
 
