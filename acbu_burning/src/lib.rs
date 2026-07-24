@@ -41,7 +41,7 @@ const DATA_KEY: DataKey = DataKey {
     phase: symbol_short!("PHASE"),
     min_burn_amount: symbol_short!("MIN_BURN"),
     pending_admin: symbol_short!("PEND_ADM"),
-    pending_admin_eligible_at: symbol_short!("PEND_ETA"),
+    pending_admin_eligible_at: symbol_short!("PA_ETA"),
 };
 
 
@@ -59,6 +59,11 @@ const ADMIN_TIMELOCK_SECONDS: u64 = 3 * 24 * 60 * 60;
 
 #[contractimpl]
 impl BurningContract {
+    /// Initialize the burning contract.
+    ///
+    /// Sets up all required addresses and fee parameters. Panics if called a
+    /// second time (`admin` key already exists) or if either fee rate is
+    /// outside [0, BASIS_POINTS].
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -107,6 +112,12 @@ impl BurningContract {
             .set(&DATA_KEY.min_burn_amount, &MIN_BURN_AMOUNT);
     }
 
+    /// Redeem `acbu_amount` of ACBU for a single basket currency's S-token.
+    ///
+    /// Burns `acbu_amount` from `user`, deducts the single-redemption fee, then
+    /// transfers the equivalent S-token amount to `recipient` from the vault.
+    /// Requires that both the ACBU/USD and currency/USD oracle prices are fresh
+    /// (within `UPDATE_INTERVAL_SECONDS`) and that reserves are sufficient.
     pub fn redeem_single(
         env: Env,
         user: Address,
@@ -210,9 +221,12 @@ impl BurningContract {
         stoken_out
     }
 
-    /// Redeem ACBU for proportional Afreum S-tokens across the basket (lower fee tier).
+    /// Redeem `acbu_amount` of ACBU proportionally across all basket currencies.
     ///
-
+    /// Burns `acbu_amount` from `user` and distributes the basket-weighted S-token
+    /// amounts to each address in `recipients` (one per currency). Uses the lower
+    /// basket fee tier. `recipients` must have the same length as the oracle's
+    /// currency list and must contain no duplicate addresses.
     pub fn redeem_basket(
         env: Env,
         user: Address,
@@ -380,6 +394,9 @@ impl BurningContract {
 
 
 
+    /// Step 1 of two-step admin rotation — nominates `new_admin` and starts the
+    /// timelock. The current admin must call this; `new_admin` calls
+    /// [`Self::accept_admin`] after the timelock elapses.
     pub fn transfer_admin(env: Env, new_admin: Address) {
         Self::check_admin(&env);
         let eligible_at = env.ledger().timestamp() + ADMIN_TIMELOCK_SECONDS;
@@ -396,6 +413,9 @@ impl BurningContract {
         );
     }
 
+    /// Step 2 of two-step admin rotation — the nominated address claims ownership
+    /// after the timelock has elapsed. Panics if no transfer is pending or the
+    /// timelock is still active.
     pub fn accept_admin(env: Env) {
         let pending_admin: Address = env
             .storage()
@@ -428,6 +448,8 @@ impl BurningContract {
         );
     }
 
+    /// Cancel a pending admin transfer. Current admin only; clears the pending
+    /// admin and its timelock.
     pub fn cancel_admin_transfer(env: Env) {
         Self::check_admin(&env);
         env.storage().instance().remove(&DATA_KEY.pending_admin);
@@ -442,22 +464,26 @@ impl BurningContract {
     }
 
 
+    /// Returns the current admin address.
     pub fn get_admin(env: Env) -> Address {
         env.storage().instance().get(&DATA_KEY.admin).unwrap()
     }
 
 
+    /// Returns the pending admin address if a transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&DATA_KEY.pending_admin)
     }
 
 
+    /// Returns the timestamp after which [`Self::accept_admin`] becomes callable.
     pub fn get_pending_admin_eligible_at(env: Env) -> Option<u64> {
         env.storage()
             .instance()
             .get(&DATA_KEY.pending_admin_eligible_at)
     }
 
+    /// Returns `true` if the contract is currently paused.
     pub fn is_paused(env: Env) -> bool {
         let phase: ContractPhase = env
             .storage()
@@ -467,6 +493,7 @@ impl BurningContract {
         matches!(phase, ContractPhase::Paused)
     }
 
+    /// Returns the current contract phase (Active or Paused).
     pub fn get_phase(env: Env) -> ContractPhase {
         env.storage()
             .instance()
@@ -474,6 +501,7 @@ impl BurningContract {
             .unwrap_or(ContractPhase::Active)
     }
 
+    /// Returns the basket redemption fee rate in basis points.
     pub fn get_fee_rate(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -481,6 +509,7 @@ impl BurningContract {
             .unwrap_or(0)
     }
 
+    /// Returns the single-currency redemption fee rate in basis points.
     pub fn get_fee_single_redeem(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -488,6 +517,7 @@ impl BurningContract {
             .unwrap_or(0)
     }
 
+    /// Returns the ACBU token contract address.
     pub fn get_acbu_token(env: Env) -> Address {
         env.storage()
             .instance()
@@ -495,6 +525,7 @@ impl BurningContract {
             .unwrap()
     }
 
+    /// Returns the oracle contract address.
     pub fn get_oracle(env: Env) -> Address {
         env.storage()
             .instance()
@@ -502,6 +533,7 @@ impl BurningContract {
             .unwrap()
     }
 
+    /// Returns the reserve tracker contract address.
     pub fn get_reserve_tracker(env: Env) -> Address {
         env.storage()
             .instance()
@@ -509,6 +541,7 @@ impl BurningContract {
             .unwrap()
     }
 
+    /// Returns the withdrawal processor contract address.
     pub fn get_withdrawal_processor(env: Env) -> Address {
         env.storage()
             .instance()
@@ -516,6 +549,7 @@ impl BurningContract {
             .unwrap()
     }
 
+    /// Returns the vault contract address.
     pub fn get_vault(env: Env) -> Address {
         env.storage()
             .instance()
@@ -523,6 +557,7 @@ impl BurningContract {
             .unwrap()
     }
 
+    /// Returns the minimum ACBU amount required for a redemption.
     pub fn get_min_burn_amount(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -530,6 +565,7 @@ impl BurningContract {
             .unwrap_or(MIN_BURN_AMOUNT)
     }
 
+    /// Returns the current contract version stored in instance storage.
     pub fn get_version(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -537,10 +573,14 @@ impl BurningContract {
             .unwrap_or(0)
     }
 
+    /// Returns `true` if the contract has been initialized.
     pub fn is_initialized(env: Env) -> bool {
         env.storage().instance().has(&DATA_KEY.admin)
     }
 
+    /// Upgrade the contract WASM in one step. Admin only. `new_version` must
+    /// exceed the current stored version; any registered migration hooks are run
+    /// in order before updating the version.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         Self::check_admin(&env);
         let current_version = Self::get_version(env.clone());

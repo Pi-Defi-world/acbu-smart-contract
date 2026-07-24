@@ -62,7 +62,7 @@ const DATA_KEY: DataKey = DataKey {
     acbu_token: symbol_short!("ACBU_TKN"),
     version: symbol_short!("VERSION"),
     pending_admin: symbol_short!("PEND_ADM"),
-    pending_admin_eligible_at: symbol_short!("PEND_ETA"),
+    pending_admin_eligible_at: symbol_short!("PA_ETA"),
     last_verify_call: symbol_short!("LAST_VFY"),
 };
 
