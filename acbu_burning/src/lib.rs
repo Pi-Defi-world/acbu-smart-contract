@@ -5,11 +5,11 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_fee, reentrancy_guard, BurnEvent, ContractError, ContractPhase, CurrencyCode,
-    DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, MIN_BURN_AMOUNT,
-    ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_CURRENCIES,
-    ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT,
-    TOKEN_GET_TOTAL_SUPPLY, UPDATE_INTERVAL_SECONDS,
+    calculate_fee, check_oracle_freshness, reentrancy_guard, BurnEvent, ContractError,
+    ContractPhase, CurrencyCode, DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION,
+    MIN_BURN_AMOUNT, ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT,
+    ORACLE_GET_CURRENCIES, ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR,
+    RESERVE_IS_SUFFICIENT, TOKEN_GET_TOTAL_SUPPLY, UPDATE_INTERVAL_SECONDS,
 };
 
 #[contracttype]
@@ -148,7 +148,7 @@ impl BurningContract {
             &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
             vec![&env],
         );
-        if current_time > oracle_timestamp.saturating_add(UPDATE_INTERVAL_SECONDS) {
+        if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
             env.panic_with_error(ContractError::OracleError);
         }
 
@@ -157,7 +157,7 @@ impl BurningContract {
             &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
             vec![&env, currency.clone().into_val(&env)],
         );
-        if current_time > rate_timestamp.saturating_add(UPDATE_INTERVAL_SECONDS) {
+        if !check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS) {
             env.panic_with_error(ContractError::OracleError);
         }
 
@@ -255,13 +255,12 @@ impl BurningContract {
             .get(&DATA_KEY.reserve_tracker)
             .unwrap();
 
-        let current_time = env.ledger().timestamp();
         let (acbu_rate, oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
             &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
             vec![&env],
         );
-        if current_time > oracle_timestamp.saturating_add(UPDATE_INTERVAL_SECONDS) {
+        if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
             env.panic_with_error(ContractError::OracleError);
         }
         if acbu_rate <= 0 {
@@ -315,7 +314,7 @@ impl BurningContract {
                 &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
                 vec![&env, currency.clone().into_val(&env)],
             );
-            if current_time > rate_timestamp.saturating_add(UPDATE_INTERVAL_SECONDS) {
+            if !check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS) {
                 env.panic_with_error(ContractError::OracleError);
             }
             if rate <= 0 {

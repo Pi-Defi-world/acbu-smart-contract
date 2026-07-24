@@ -7,11 +7,11 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_amount_after_fee, calculate_fee, ContractPhase, CurrencyCode, DataKey as SharedDataKey, MintEvent,
-    reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MAX_MINT_AMOUNT, MAX_TOTAL_SUPPLY,
-    MIN_MINT_AMOUNT, ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT,
-    ORACLE_GET_CURRENCIES, ORACLE_GET_RATE, ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR,
-    RESERVE_IS_SUFFICIENT, UPDATE_INTERVAL_SECONDS,
+    calculate_amount_after_fee, calculate_fee, check_oracle_freshness, ContractPhase, CurrencyCode,
+    DataKey as SharedDataKey, MintEvent, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION, DECIMALS,
+    MAX_MINT_AMOUNT, MAX_TOTAL_SUPPLY, MIN_MINT_AMOUNT, ORACLE_GET_ACBU_RATE_WITH_TS,
+    ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_CURRENCIES, ORACLE_GET_RATE, ORACLE_GET_RATE_WITH_TS,
+    ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT, UPDATE_INTERVAL_SECONDS,
 };
 
 #[allow(dead_code)]
@@ -288,7 +288,9 @@ impl MintingContract {
             &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
             vec![&env],
         );
-        check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS);
+        if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
+            env.panic_with_error(MintingError::OracleStale);
+        }
 
         let usdc_after_fee = calculate_amount_after_fee(usdc_amount, fee_rate);
         let acbu_amount = usdc_after_fee
@@ -403,7 +405,9 @@ impl MintingContract {
             &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
             vec![&env],
         );
-        check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS);
+        if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
+            env.panic_with_error(MintingError::OracleStale);
+        }
 
         let fee_acbu = calculate_fee(acbu_amount, fee_rate);
         let net_mint = acbu_amount
@@ -573,14 +577,18 @@ impl MintingContract {
             &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
             vec![&env],
         );
-        check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS);
+        if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
+            env.panic_with_error(MintingError::OracleStale);
+        }
 
         let (rate, rate_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
             &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
             vec![&env, currency.clone().into_val(&env)],
         );
-        check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS);
+        if !check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS) {
+            env.panic_with_error(MintingError::OracleStale);
+        }
 
         if rate == 0 {
             env.panic_with_error(MintingError::InvalidOracleRate);
@@ -711,14 +719,18 @@ impl MintingContract {
             &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
             vec![&env],
         );
-        check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS);
+        if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
+            env.panic_with_error(MintingError::OracleStale);
+        }
 
         let (rate, rate_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
             &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
             vec![&env, currency.clone().into_val(&env)],
         );
-        check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS);
+        if !check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS) {
+            env.panic_with_error(MintingError::OracleStale);
+        }
 
         let usd_gross = fiat_amount
             .checked_mul(rate)
@@ -857,14 +869,18 @@ impl MintingContract {
             &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
             vec![&env],
         );
-        check_oracle_freshness(&env, acbu_oracle_timestamp, UPDATE_INTERVAL_SECONDS);
+        if !check_oracle_freshness(&env, acbu_oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
+            env.panic_with_error(MintingError::OracleStale);
+        }
 
         let (rate, rate_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
             &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
             vec![&env, currency.clone().into_val(&env)],
         );
-        check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS);
+        if !check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS) {
+            env.panic_with_error(MintingError::OracleStale);
+        }
 
         if rate == 0 {
             env.panic_with_error(MintingError::InvalidOracleRate);
@@ -1384,13 +1400,6 @@ impl MintingContract {
 }
 
 // Helper functions for proof tracking and validation
-fn check_oracle_freshness(env: &Env, oracle_timestamp: u64, max_staleness_seconds: u64) {
-    let current_time = env.ledger().timestamp();
-    if current_time > oracle_timestamp.saturating_add(max_staleness_seconds) {
-        env.panic_with_error(MintingError::OracleStale);
-    }
-}
-
 
 fn generate_unique_tx_id(env: &Env, user: &Address, amount: i128, prefix: &str) -> SorobanString {
     let nonce = next_tx_nonce(env);
