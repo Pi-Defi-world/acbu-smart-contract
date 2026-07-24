@@ -10,7 +10,8 @@ use soroban_sdk::{
 // ── Mock contracts in isolated modules to prevent symbol-name collisions ──────
 
 mod mock_oracle {
-    use soroban_sdk::{contract, contractimpl, Env};
+    use shared::CurrencyCode;
+    use soroban_sdk::{contract, contractimpl, symbol_short, Env, Map};
 
     #[contract]
     pub struct MockOracle;
@@ -19,6 +20,28 @@ mod mock_oracle {
     impl MockOracle {
         pub fn get_acbu_usd_rate(_env: Env) -> i128 {
             100_000_000 // 1 USD (8 decimals)
+        }
+
+        pub fn get_rate_with_timestamp(env: Env, currency: CurrencyCode) -> (i128, u64) {
+            let rates: Map<CurrencyCode, i128> = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("rates"))
+                .unwrap_or(Map::new(&env));
+            let rate = rates.get(currency).unwrap_or(0);
+            (rate, env.ledger().timestamp())
+        }
+
+        pub fn set_rate(env: Env, currency: CurrencyCode, rate: i128) {
+            let mut rates: Map<CurrencyCode, i128> = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("rates"))
+                .unwrap_or(Map::new(&env));
+            rates.set(currency, rate);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("rates"), &rates);
         }
     }
 }
@@ -52,7 +75,7 @@ mod mock_token_zero {
     }
 }
 
-use mock_oracle::MockOracle;
+use mock_oracle::{MockOracle, MockOracleClient};
 use mock_token::MockToken;
 use mock_token_zero::MockTokenZero;
 
@@ -66,6 +89,7 @@ fn verify_reserves_uses_passed_supply_not_contract_balance() {
 
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
     let min_ratio_bps = 10_000i128; // 100%
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
@@ -75,7 +99,9 @@ fn verify_reserves_uses_passed_supply_not_contract_balance() {
     client.initialize(&admin, &oracle, &acbu_token, &min_ratio_bps);
 
     let ngn = CurrencyCode::new(&env, "NGN");
-    client.update_reserve(&admin, &ngn, &1_000_000_000, &100_000_000); // 10 USD @ 7 decimals
+    // amount=1_000_000_000, value_usd=100_000_000 → rate = 1_000_000
+    oracle_client.set_rate(&ngn, &1_000_000);
+    client.update_reserve(&admin, &ngn, &1_000_000_000, &100_000_000);
 
     // 10 USD reserves vs 10 ACBU supply (10 * 10^7) at 100% min ratio → sufficient
     assert!(client.verify_reserves_manual(&(10 * 10_000_000)));
@@ -92,6 +118,7 @@ fn test_update_and_get_all_reserves_and_timestamp() {
 
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
@@ -100,6 +127,8 @@ fn test_update_and_get_all_reserves_and_timestamp() {
     client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
 
     let ngn = CurrencyCode::new(&env, "NGN");
+    // amount=500, value_usd=5*DECIMALS → rate = 1_000_000_000_000
+    oracle_client.set_rate(&ngn, &1_000_000_000_000);
     client.update_reserve(&admin, &ngn, &500, &(5 * DECIMALS));
 
     let reserves: soroban_sdk::Map<CurrencyCode, ReserveData> = client.get_all_reserves();
@@ -138,6 +167,7 @@ fn test_is_reserve_sufficient_multiple_currencies_and_verify_from_token() {
 
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
     let token = env.register_contract(None, MockToken);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
@@ -147,6 +177,11 @@ fn test_is_reserve_sufficient_multiple_currencies_and_verify_from_token() {
 
     let ngn = CurrencyCode::new(&env, "NGN");
     let kes = CurrencyCode::new(&env, "KES");
+
+    // amount=1000, value_usd=5*DECIMALS → rate = 500_000_000_000
+    oracle_client.set_rate(&ngn, &500_000_000_000);
+    // amount=2000, value_usd=5*DECIMALS → rate = 250_000_000_000
+    oracle_client.set_rate(&kes, &250_000_000_000);
 
     // 5 USD each -> total 10 USD
     client.update_reserve(&admin, &ngn, &1_000, &(5 * DECIMALS));
@@ -191,6 +226,7 @@ fn test_reset_reserves_by_admin_clears_all_entries() {
 
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
@@ -200,6 +236,8 @@ fn test_reset_reserves_by_admin_clears_all_entries() {
 
     let ngn = CurrencyCode::new(&env, "NGN");
     let kes = CurrencyCode::new(&env, "KES");
+    oracle_client.set_rate(&ngn, &500_000_000_000);
+    oracle_client.set_rate(&kes, &250_000_000_000);
     client.update_reserve(&admin, &ngn, &1_000, &(5 * DECIMALS));
     client.update_reserve(&admin, &kes, &2_000, &(5 * DECIMALS));
 
@@ -222,6 +260,7 @@ fn test_reset_reserves_without_admin_auth_fails() {
     let admin = Address::generate(&env);
     let attacker = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
@@ -232,6 +271,7 @@ fn test_reset_reserves_without_admin_auth_fails() {
     client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
 
     let ngn = CurrencyCode::new(&env, "NGN");
+    oracle_client.set_rate(&ngn, &500_000_000_000);
     client.update_reserve(&admin, &ngn, &1_000, &(5 * DECIMALS));
 
     // Provide only the attacker's auth — reset_reserves must reject it.
@@ -331,6 +371,10 @@ fn test_update_reserve_without_admin_auth_fails() {
 
 #[test]
 fn test_verify_reserves_caches_result_during_cooldown() {
+// ── Oracle cross-validation tests ─────────────────────────────────────────────
+
+#[test]
+fn test_update_reserve_rejects_zero_amount() {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().with_mut(|l| l.timestamp = 1);
@@ -338,6 +382,7 @@ fn test_verify_reserves_caches_result_during_cooldown() {
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
     let token = env.register_contract(None, MockToken);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
@@ -365,6 +410,41 @@ fn test_verify_reserves_caches_result_during_cooldown() {
 
 #[test]
 fn test_verify_reserves_caches_false_during_cooldown() {
+    let acbu_token = Address::generate(&env);
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    oracle_client.set_rate(&ngn, &DECIMALS);
+
+    let result = client.try_update_reserve(&admin, &ngn, &0, &DECIMALS);
+    assert!(result.is_err(), "update_reserve must reject zero amount");
+}
+
+#[test]
+fn test_update_reserve_rejects_negative_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+
+    let acbu_token = Address::generate(&env);
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    oracle_client.set_rate(&ngn, &DECIMALS);
+
+    let result = client.try_update_reserve(&admin, &ngn, &-1, &DECIMALS);
+    assert!(result.is_err(), "update_reserve must reject negative amount");
+}
+
+#[test]
+fn test_update_reserve_rejects_inconsistent_value_usd() {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().with_mut(|l| l.timestamp = 1);
@@ -372,6 +452,7 @@ fn test_verify_reserves_caches_false_during_cooldown() {
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
     let token = env.register_contract(None, MockToken);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
@@ -390,11 +471,25 @@ fn test_verify_reserves_caches_false_during_cooldown() {
     assert!(
         !client.verify_reserves(),
         "verify_reserves must return cached false during cooldown"
+    let acbu_token = Address::generate(&env);
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    // rate = DECIMALS → expected_value_usd = amount (1 NGN = 1 USD)
+    oracle_client.set_rate(&ngn, &DECIMALS);
+
+    // amount=1000, rate=DECIMALS → expected value_usd = 1000
+    // Pass 2000 instead → must fail
+    let result = client.try_update_reserve(&admin, &ngn, &1000, &2000);
+    assert!(
+        result.is_err(),
+        "update_reserve must reject value_usd inconsistent with oracle rate"
     );
 }
 
 #[test]
 fn test_verify_reserves_refreshes_after_cooldown_expires() {
+fn test_update_reserve_accepts_consistent_value_usd() {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().with_mut(|l| l.timestamp = 1);
@@ -402,6 +497,7 @@ fn test_verify_reserves_refreshes_after_cooldown_expires() {
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
     let token = env.register_contract(None, MockToken);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
@@ -431,5 +527,71 @@ fn test_verify_reserves_refreshes_after_cooldown_expires() {
     assert!(
         client.verify_reserves(),
         "must re-evaluate after cooldown expires and return true"
+    let acbu_token = Address::generate(&env);
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    // rate = DECIMALS → 1 NGN = 1 USD
+    oracle_client.set_rate(&ngn, &DECIMALS);
+
+    // amount=1000, rate=DECIMALS → expected value_usd = 1000
+    client.update_reserve(&admin, &ngn, &1000, &1000);
+
+    let reserves = client.get_all_reserves();
+    assert_eq!(reserves.len(), 1, "one reserve should be stored");
+}
+
+#[test]
+fn test_update_reserve_accepts_rounding_tolerance_of_one() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+
+    let acbu_token = Address::generate(&env);
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    // rate = 3 → expected_value_usd = amount * 3 / DECIMALS = 3000 / 10_000_000 = 0
+    // value_usd = 1 → diff = 1 → within tolerance
+    oracle_client.set_rate(&ngn, &3);
+    client.update_reserve(&admin, &ngn, &1000, &1);
+
+    let reserves = client.get_all_reserves();
+    assert_eq!(reserves.len(), 1, "rounding tolerance of 1 must be accepted");
+}
+
+#[test]
+fn test_update_reserve_rejects_inflated_value_usd() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+
+    let acbu_token = Address::generate(&env);
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    // rate = DECIMALS → expected_value_usd = amount
+    oracle_client.set_rate(&ngn, &DECIMALS);
+
+    // amount=1000 → expected value_usd = 1000
+    // Pass 1002 → diff = 2 > tolerance → must fail
+    let result = client.try_update_reserve(&admin, &ngn, &1000, &1002);
+    assert!(
+        result.is_err(),
+        "update_reserve must reject value_usd inflated beyond rounding tolerance"
     );
 }

@@ -6,8 +6,8 @@ use soroban_sdk::{
 };
 
 use shared::{
-    CurrencyCode, DataKey as SharedDataKey, ReserveData, BASIS_POINTS, CONTRACT_VERSION,
-    ORACLE_GET_ACBU_RATE, TOKEN_GET_TOTAL_SUPPLY,
+    CurrencyCode, DataKey as SharedDataKey, ReserveData, BASIS_POINTS, CONTRACT_VERSION, DECIMALS,
+    ORACLE_GET_ACBU_RATE, ORACLE_GET_RATE_WITH_TS, TOKEN_GET_TOTAL_SUPPLY,
 };
 
 #[contracterror]
@@ -21,6 +21,8 @@ pub enum ReserveTrackerError {
     AdminTimelockNotElapsed = 8005,
     NoPendingAdminToCancel = 8006,
     Unauthorized = 8007,
+    NonPositiveAmount = 8008,
+    InconsistentReserve = 8009,
     Unknown = 8999,
 }
 
@@ -34,6 +36,8 @@ impl Display for ReserveTrackerError {
             Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
             Self::NoPendingAdminToCancel => "no pending admin to cancel",
             Self::Unauthorized => "unauthorized",
+            Self::NonPositiveAmount => "amount and value_usd must be positive",
+            Self::InconsistentReserve => "value_usd inconsistent with oracle rate",
             Self::Unknown => "unknown reserve tracker error",
         };
         f.write_str(message)
@@ -168,7 +172,11 @@ impl ReserveTrackerContract {
         Self::is_reserve_sufficient(env, total_acbu_supply)
     }
 
-    /// Update reserve amount for a currency (admin or authorized address)
+    /// Update reserve amount for a currency (admin only).
+    ///
+    /// Cross-validates the caller-supplied `amount` and `value_usd` against the
+    /// oracle's live exchange rate for `currency`.  This prevents a compromised
+    /// admin key from inflating reserves to unlock arbitrary minting.
     pub fn update_reserve(
         env: Env,
         updater: Address,
@@ -176,16 +184,35 @@ impl ReserveTrackerContract {
         amount: i128,
         value_usd: i128,
     ) {
-        // Authorize updater
         updater.require_auth();
         let admin = Self::get_admin(env.clone());
         if updater != admin {
             env.panic_with_error(ReserveTrackerError::Unauthorized);
         }
 
+        if amount <= 0 || value_usd <= 0 {
+            env.panic_with_error(ReserveTrackerError::NonPositiveAmount);
+        }
+
+        let oracle_addr: Address = env.storage().instance().get(&DATA_KEY.oracle).unwrap();
+        let (rate, _rate_timestamp): (i128, u64) = env.invoke_contract(
+            &oracle_addr,
+            &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
+            vec![&env, currency.clone().into_val(&env)],
+        );
+
+        let expected_value_usd = amount
+            .checked_mul(rate)
+            .and_then(|v| v.checked_div(DECIMALS))
+            .expect("Overflow in reserve value calculation");
+
+        let diff = value_usd.abs_diff(expected_value_usd);
+        if diff > 1 {
+            env.panic_with_error(ReserveTrackerError::InconsistentReserve);
+        }
+
         let current_time = env.ledger().timestamp();
 
-        // Update reserves map
         let mut reserves: Map<CurrencyCode, ReserveData> = env
             .storage()
             .instance()
