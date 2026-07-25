@@ -53,6 +53,7 @@ pub struct DataKey {
     pub used_proofs: Symbol,
     pub processed_fintech_tx_ids: Symbol,
     pub max_supply: Symbol,
+    pub max_drip: Symbol,
     pub pending_admin: Symbol,
     pub pending_admin_eligible_at: Symbol,
     /// Prefix for persistent per-proof replay-prevention keys: `(proof_prefix, proof_id)`.
@@ -79,6 +80,7 @@ const DATA_KEY: DataKey = DataKey {
     used_proofs: symbol_short!("PROOFS"),
     processed_fintech_tx_ids: symbol_short!("FTX_IDS"),
     max_supply: symbol_short!("MAX_SUP"),
+    max_drip: symbol_short!("MAX_DRIP"),
     pending_admin: symbol_short!("PEND_ADM"),
     pending_admin_eligible_at: symbol_short!("PA_ETA"),
     proof_prefix: symbol_short!("PRF_SET"),
@@ -151,6 +153,7 @@ impl Display for MintingError {
             Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
             Self::NoPendingAdminToCancel => "no pending admin to cancel",
             Self::InvalidRecipient => "invalid recipient",
+            Self::InvalidRoleSeparation => "admin and operator must be different addresses",
             Self::Unknown => "unknown minting error",
         };
         f.write_str(message)
@@ -227,6 +230,9 @@ impl MintingContract {
             .set(&DATA_KEY.max_supply, &MAX_TOTAL_SUPPLY);
         env.storage()
             .instance()
+            .set(&DATA_KEY.max_drip, &100_000_000_000_000i128);
+        env.storage()
+            .instance()
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
     }
 
@@ -240,6 +246,7 @@ impl MintingContract {
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
         Self::assert_recipient_is_account(&recipient);
+        env.storage().instance().extend_ttl(5184000, 5184000);
 
         let min_amount: i128 = env
             .storage()
@@ -355,6 +362,7 @@ impl MintingContract {
         if !check_proof_unused(&env, &proof_id) {
             env.panic_with_error(MintingError::ProofAlreadyUsed);
         }
+        env.storage().instance().extend_ttl(5184000, 5184000);
 
         let min_amount: i128 = env
             .storage()
@@ -523,6 +531,7 @@ impl MintingContract {
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
         Self::assert_recipient_is_account(&recipient);
+        env.storage().instance().extend_ttl(5184000, 5184000);
 
         let min_amount: i128 = env
             .storage()
@@ -657,6 +666,7 @@ impl MintingContract {
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
         Self::assert_recipient_is_account(&recipient);
+        env.storage().instance().extend_ttl(5184000, 5184000);
 
         if !check_proof_unused(&env, &proof_id) {
             env.panic_with_error(MintingError::ProofAlreadyUsed);
@@ -799,6 +809,7 @@ impl MintingContract {
         // before touching any storage, so garbage IDs are rejected cheaply.
         validate_fintech_tx_id(&env, &fintech_tx_id);
         let normalized_tx_id = normalize_fintech_tx_id(&env, &fintech_tx_id);
+        env.storage().instance().extend_ttl(5184000, 5184000);
 
         // Check if fintech_tx_id has already been processed
         let mut processed_ids: soroban_sdk::Map<SorobanString, bool> = env
@@ -972,8 +983,13 @@ impl MintingContract {
         if amount <= 0 {
             env.panic_with_error(MintingError::InvalidDripAmount);
         }
-        const MAX_DRIP: i128 = 100_000_000_000_000; // 10M whole units at 7 decimals
-        if amount > MAX_DRIP {
+        env.storage().instance().extend_ttl(5184000, 5184000);
+        let max_drip: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.max_drip)
+            .unwrap_or(100_000_000_000_000i128);
+        if amount > max_drip {
             env.panic_with_error(MintingError::DripExceedsCap);
         }
 
@@ -1007,8 +1023,8 @@ impl MintingContract {
     }
 
     pub fn set_operator(env: Env, new_operator: Address) {
-        Self::check_admin(&env);
-        let admin = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
         if admin == new_operator {
             env.panic_with_error(MintingError::InvalidRoleSeparation);
         }
@@ -1048,6 +1064,25 @@ impl MintingContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.max_supply, &new_max_supply);
+    }
+
+    pub fn get_max_drip(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.max_drip)
+            .unwrap_or(100_000_000_000_000i128)
+    }
+
+    pub fn set_max_drip(env: Env, new_max_drip: i128) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+        Self::check_paused(&env);
+        if new_max_drip < 0 {
+            env.panic_with_error(MintingError::InvalidDripAmount);
+        }
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.max_drip, &new_max_drip);
     }
 
     fn check_supply_cap(env: &Env, projected_supply: i128) {
@@ -1457,5 +1492,9 @@ fn normalize_fintech_tx_id(env: &Env, id: &SorobanString) -> SorobanString {
         }
     }
 
-    SorobanString::from_slice(env, slice)
+    // C-039: Convert to &str for Soroban string creation.
+    // The input is already validated as ASCII alphanumeric / hyphen / underscore
+    // (see validate_fintech_tx_id), so from_utf8 will not fail.
+    let normalized = core::str::from_utf8(slice).unwrap_or("");
+    SorobanString::from_str(env, normalized)
 }
