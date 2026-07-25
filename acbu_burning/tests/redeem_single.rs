@@ -4,7 +4,7 @@
 mod common;
 use common::{create_stoken, setup_test};
 use shared::{CurrencyCode, BASIS_POINTS, DECIMALS};
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env};
 
 #[test]
 fn test_redeem_single_success() {
@@ -295,4 +295,43 @@ fn test_redeem_single_large_amount() {
 
     assert!(out > 0);
     assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn test_redeem_single_stale_acbu_rate() {
+    let env = Env::default();
+    let ctx = setup_test(&env);
+
+    let currency = CurrencyCode::new(&env, "NGN");
+
+    // Advance ledger past staleness threshold (UPDATE_INTERVAL_SECONDS = 21,600)
+    env.ledger().with_mut(|l| l.timestamp = 100_000);
+
+    // ACBU rate timestamp is stale (0) → first oracle staleness check fails
+    ctx.oracle.set_acbu_rate(&DECIMALS, &0);
+
+    let recipient = Address::generate(&env);
+    ctx.burning
+        .redeem_single(&ctx.user, &recipient, &(100 * DECIMALS), &currency);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn test_redeem_single_stale_currency_rate() {
+    let env = Env::default();
+    let ctx = setup_test(&env);
+
+    let currency = CurrencyCode::new(&env, "NGN");
+
+    // Advance ledger past staleness threshold
+    env.ledger().with_mut(|l| l.timestamp = 100_000);
+
+    // ACBU rate is fresh (matches ledger) so first check passes
+    ctx.oracle.set_acbu_rate(&DECIMALS, &100_000);
+
+    // Currency rate timestamp is unset → defaults to 0 in mock → stale
+    let recipient = Address::generate(&env);
+    ctx.burning
+        .redeem_single(&ctx.user, &recipient, &(100 * DECIMALS), &currency);
 }

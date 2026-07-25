@@ -6,8 +6,8 @@ use soroban_sdk::{
 };
 
 use shared::{
-    CurrencyCode, DataKey as SharedDataKey, ReserveData, BASIS_POINTS, CONTRACT_VERSION,
-    ORACLE_GET_ACBU_RATE, TOKEN_GET_TOTAL_SUPPLY,
+    CurrencyCode, DataKey as SharedDataKey, ReserveData, BASIS_POINTS, CONTRACT_VERSION, DECIMALS,
+    ORACLE_GET_ACBU_RATE, ORACLE_GET_RATE_WITH_TS, TOKEN_GET_TOTAL_SUPPLY,
 };
 
 #[contracterror]
@@ -21,6 +21,9 @@ pub enum ReserveTrackerError {
     AdminTimelockNotElapsed = 8005,
     NoPendingAdminToCancel = 8006,
     Unauthorized = 8007,
+    NonPositiveAmount = 8008,
+    InconsistentReserve = 8009,
+    DuplicateCurrency = 8010,
     Unknown = 8999,
 }
 
@@ -34,6 +37,9 @@ impl Display for ReserveTrackerError {
             Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
             Self::NoPendingAdminToCancel => "no pending admin to cancel",
             Self::Unauthorized => "unauthorized",
+            Self::NonPositiveAmount => "amount and value_usd must be positive",
+            Self::InconsistentReserve => "value_usd inconsistent with oracle rate",
+            Self::DuplicateCurrency => "currency already tracked",
             Self::Unknown => "unknown reserve tracker error",
         };
         f.write_str(message)
@@ -51,6 +57,7 @@ pub struct DataKey {
     pub version: Symbol,
     pub pending_admin: Symbol,
     pub pending_admin_eligible_at: Symbol,
+    pub currencies: Symbol,
     pub last_verify_call: Symbol,
 }
 
@@ -63,6 +70,7 @@ const DATA_KEY: DataKey = DataKey {
     version: symbol_short!("VERSION"),
     pending_admin: symbol_short!("PEND_ADM"),
     pending_admin_eligible_at: symbol_short!("PEND_ETA"),
+    currencies: symbol_short!("CURRNCYS"),
     last_verify_call: symbol_short!("LAST_VFY"),
 };
 
@@ -157,7 +165,11 @@ impl ReserveTrackerContract {
         Self::is_reserve_sufficient(env, total_acbu_supply)
     }
 
-    /// Update reserve amount for a currency (admin or authorized address)
+    /// Update reserve amount for a currency (admin only).
+    ///
+    /// Cross-validates the caller-supplied `amount` and `value_usd` against the
+    /// oracle's live exchange rate for `currency`.  This prevents a compromised
+    /// admin key from inflating reserves to unlock arbitrary minting.
     pub fn update_reserve(
         env: Env,
         updater: Address,
@@ -165,16 +177,35 @@ impl ReserveTrackerContract {
         amount: i128,
         value_usd: i128,
     ) {
-        // Authorize updater
         updater.require_auth();
         let admin = Self::get_admin(env.clone());
         if updater != admin {
             env.panic_with_error(ReserveTrackerError::Unauthorized);
         }
 
+        if amount <= 0 || value_usd <= 0 {
+            env.panic_with_error(ReserveTrackerError::NonPositiveAmount);
+        }
+
+        let oracle_addr: Address = env.storage().instance().get(&DATA_KEY.oracle).unwrap();
+        let (rate, _rate_timestamp): (i128, u64) = env.invoke_contract(
+            &oracle_addr,
+            &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
+            vec![&env, currency.clone().into_val(&env)],
+        );
+
+        let expected_value_usd = amount
+            .checked_mul(rate)
+            .and_then(|v| v.checked_div(DECIMALS))
+            .expect("Overflow in reserve value calculation");
+
+        let diff = value_usd.abs_diff(expected_value_usd);
+        if diff > 1 {
+            env.panic_with_error(ReserveTrackerError::InconsistentReserve);
+        }
+
         let current_time = env.ledger().timestamp();
 
-        // Update reserves map
         let mut reserves: Map<CurrencyCode, ReserveData> = env
             .storage()
             .instance()
@@ -300,6 +331,38 @@ impl ReserveTrackerContract {
         Self::check_admin(&env);
         let empty: Map<CurrencyCode, ReserveData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.reserves, &empty);
+    }
+
+    // -----------------------------------------------------------------------
+    // Currency list management (admin only)
+    // -----------------------------------------------------------------------
+
+    /// Add a currency to the tracked list. Panics with `DuplicateCurrency` if
+    /// the currency is already present, preventing double-counting of reserves.
+    pub fn add_currency(env: Env, currency: CurrencyCode) {
+        Self::check_admin(&env);
+        let mut currencies: Vec<CurrencyCode> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.currencies)
+            .unwrap_or(Vec::new(&env));
+        for c in currencies.iter() {
+            if c == currency {
+                env.panic_with_error(ReserveTrackerError::DuplicateCurrency);
+            }
+        }
+        currencies.push_back(currency);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.currencies, &currencies);
+    }
+
+    /// Return the list of tracked currencies.
+    pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.currencies)
+            .unwrap_or(Vec::new(&env))
     }
 
     // -----------------------------------------------------------------------

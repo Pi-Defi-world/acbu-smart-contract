@@ -183,6 +183,45 @@ pub struct FeeRateUpdatedEvent {
     pub timestamp: u64,
 }
 
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PauseEvent {
+    pub admin: Address,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OperatorUpdatedEvent {
+    pub old_operator: Address,
+    pub new_operator: Address,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SupplySyncedEvent {
+    pub old_supply: i128,
+    pub new_supply: i128,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MaxSupplyUpdatedEvent {
+    pub old_max_supply: i128,
+    pub new_max_supply: i128,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AddressUpdatedEvent {
+    pub old_address: Address,
+    pub new_address: Address,
+    pub timestamp: u64,
+}
+
 #[contract]
 pub struct MintingContract;
 
@@ -953,20 +992,6 @@ impl MintingContract {
         acbu_amount
     }
 
-    /// Helper to check if an address is authorized as operator (fintech backend).
-    /// Returns true if the address is the configured operator.
-    fn check_is_operator(env: &Env, address: &Address) -> bool {
-        let operator: Address = Self::get_operator(env.clone());
-        address == &operator
-    }
-
-    /// Helper to check if an address is authorized as admin.
-    /// Returns true if the address is the configured admin.
-    fn check_is_admin(env: &Env, address: &Address) -> bool {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        address == &admin
-    }
-
     /// Transfer a basket S-token from this contract's custodial balance to
     /// `recipient` (e.g. user faucet). Admin only; caps per call to limit abuse.
     ///
@@ -989,10 +1014,6 @@ impl MintingContract {
 
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
-
-        if !Self::check_is_admin(&env, &admin) {
-            env.panic_with_error(MintingError::UnauthorizedOperator);
-        }
 
         // C-058: reject contract-type recipients to prevent stranded token transfers.
         Self::assert_recipient_is_account(&recipient);
@@ -1040,9 +1061,20 @@ impl MintingContract {
         if admin == new_operator {
             env.panic_with_error(MintingError::InvalidRoleSeparation);
         }
+        let old_operator: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.operator)
+            .unwrap_or_else(|| admin.clone());
         env.storage()
             .instance()
             .set(&DATA_KEY.operator, &new_operator);
+        let event = OperatorUpdatedEvent {
+            old_operator,
+            new_operator,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events().publish((symbol_short!("op_upd"),), event);
     }
 
     /// Overwrite the tracked total ACBU supply with `new_supply` (admin only).
@@ -1064,9 +1096,20 @@ impl MintingContract {
             env.panic_with_error(MintingError::SupplyMismatch);
         }
 
+        let old_supply: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.total_supply)
+            .unwrap_or(0);
         env.storage()
             .instance()
             .set(&DATA_KEY.total_supply, &new_supply);
+        let event = SupplySyncedEvent {
+            old_supply,
+            new_supply,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events().publish((symbol_short!("sup_sync"),), event);
     }
 
     /// Return the current tracked total ACBU supply (7 decimals).
@@ -1090,9 +1133,20 @@ impl MintingContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         Self::check_paused(&env);
+        let old_max_supply: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.max_supply)
+            .unwrap_or(MAX_TOTAL_SUPPLY);
         env.storage()
             .instance()
             .set(&DATA_KEY.max_supply, &new_max_supply);
+        let event = MaxSupplyUpdatedEvent {
+            old_max_supply,
+            new_max_supply,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events().publish((symbol_short!("max_sup"),), event);
     }
 
     fn check_supply_cap(env: &Env, projected_supply: i128) {
@@ -1111,6 +1165,11 @@ impl MintingContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Paused);
+        let event = PauseEvent {
+            admin,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events().publish((symbol_short!("paused"),), event);
     }
 
     /// Unpause the contract, re-enabling minting operations (admin only).
@@ -1118,6 +1177,11 @@ impl MintingContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
+        let event = PauseEvent {
+            admin,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events().publish((symbol_short!("unpaused"),), event);
     }
 
     /// Set the basket/USDC mint fee in basis points (admin only).
@@ -1202,50 +1266,96 @@ impl MintingContract {
     pub fn update_oracle(env: Env, new_oracle: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        let old_oracle: Address = env.storage().instance().get(&DATA_KEY.oracle).unwrap();
         env.storage().instance().set(&DATA_KEY.oracle, &new_oracle);
+        let event = AddressUpdatedEvent {
+            old_address: old_oracle,
+            new_address: new_oracle,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events().publish((symbol_short!("upd_orcl"),), event);
     }
 
     /// Update the reserve tracker contract address (admin only).
     pub fn update_reserve_tracker(env: Env, new_reserve_tracker: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        let old_reserve_tracker: Address = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.reserve_tracker)
+            .unwrap();
         env.storage()
             .instance()
             .set(&DATA_KEY.reserve_tracker, &new_reserve_tracker);
+        let event = AddressUpdatedEvent {
+            old_address: old_reserve_tracker,
+            new_address: new_reserve_tracker,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events().publish((symbol_short!("upd_res"),), event);
     }
 
     /// Update the ACBU token contract address (admin only).
     pub fn update_acbu_token(env: Env, new_acbu_token: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        let old_acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
         env.storage()
             .instance()
             .set(&DATA_KEY.acbu_token, &new_acbu_token);
+        let event = AddressUpdatedEvent {
+            old_address: old_acbu_token,
+            new_address: new_acbu_token,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events().publish((symbol_short!("upd_acbu"),), event);
     }
 
     /// Update the vault contract address (admin only).
     pub fn update_vault(env: Env, new_vault: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        let old_vault: Address = env.storage().instance().get(&DATA_KEY.vault).unwrap();
         env.storage().instance().set(&DATA_KEY.vault, &new_vault);
+        let event = AddressUpdatedEvent {
+            old_address: old_vault,
+            new_address: new_vault,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events().publish((symbol_short!("upd_vlt"),), event);
     }
 
     /// Update the treasury address that receives collected fees (admin only).
     pub fn update_treasury(env: Env, new_treasury: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        let old_treasury: Address = env.storage().instance().get(&DATA_KEY.treasury).unwrap();
         env.storage()
             .instance()
             .set(&DATA_KEY.treasury, &new_treasury);
+        let event = AddressUpdatedEvent {
+            old_address: old_treasury,
+            new_address: new_treasury,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events().publish((symbol_short!("upd_trsy"),), event);
     }
 
     /// Update the USDC token contract address (admin only).
     pub fn update_usdc_token(env: Env, new_usdc_token: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        let old_usdc_token: Address = env.storage().instance().get(&DATA_KEY.usdc_token).unwrap();
         env.storage()
             .instance()
             .set(&DATA_KEY.usdc_token, &new_usdc_token);
+        let event = AddressUpdatedEvent {
+            old_address: old_usdc_token,
+            new_address: new_usdc_token,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events().publish((symbol_short!("upd_usdc"),), event);
     }
 
     // -----------------------------------------------------------------------
