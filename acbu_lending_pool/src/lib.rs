@@ -136,15 +136,6 @@ pub struct RepaymentEvent {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Error {
-    NotFound = 1,
-    InvalidState = 2,
-    Unauthorized = 3,
-    AlreadyInitialized = 4,
-    InvalidAmount = 5,
-    InsufficientBalance = 6,
-    InsufficientCollateral = 7,
-    InsufficientLiquidity = 8,
-    DustBalance = 9,
     Paused = 2001,
     InvalidVersion = 2002,
     TimelockNotElapsed = 2003,
@@ -152,6 +143,15 @@ pub enum Error {
     NoPendingAdmin = 2005,
     AdminTimelockNotElapsed = 2006,
     NoPendingAdminToCancel = 2007,
+    NotFound = 2008,
+    InvalidState = 2009,
+    Unauthorized = 2010,
+    AlreadyInitialized = 2011,
+    InvalidAmount = 2012,
+    InsufficientBalance = 2013,
+    InsufficientCollateral = 2014,
+    InsufficientLiquidity = 2015,
+    DustBalance = 2016,
     Unknown = 2999,
 }
 

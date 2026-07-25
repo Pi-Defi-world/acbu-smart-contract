@@ -40,10 +40,6 @@ use shared::{
     ProposalExecutedEvent, DataKey as SharedDataKey, CONTRACT_VERSION,
 };
 
-mod shared {
-    pub use shared::*;
-}
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -77,19 +73,19 @@ pub enum DataKey {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Error {
-    AlreadyInitialized = 1,
-    NotInitialized = 2,
-    Unauthorized = 3,
-    ProposalNotFound = 4,
-    AlreadyApproved = 5,
-    AlreadyExecuted = 6,
-    Expired = 7,
-    ThresholdNotMet = 8,
-    InvalidThreshold = 9,
-    TooManySigners = 10,
-    EmptySigners = 11,
-    DuplicateSigner = 12,
-    Unknown = 999,
+    AlreadyInitialized = 4001,
+    NotInitialized = 4002,
+    Unauthorized = 4003,
+    ProposalNotFound = 4004,
+    AlreadyApproved = 4005,
+    AlreadyExecuted = 4006,
+    Expired = 4007,
+    ThresholdNotMet = 4008,
+    InvalidThreshold = 4009,
+    TooManySigners = 4010,
+    EmptySigners = 4011,
+    DuplicateSigner = 4012,
+    Unknown = 4999,
 }
 
 impl Display for Error {
