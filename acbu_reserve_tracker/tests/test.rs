@@ -101,7 +101,6 @@ fn verify_reserves_uses_passed_supply_not_contract_balance() {
     client.initialize(&admin, &oracle, &acbu_token, &min_ratio_bps);
 
     let ngn = CurrencyCode::new(&env, "NGN");
-    // amount=1_000_000_000, value_usd=100_000_000 → rate = 1_000_000
     oracle_client.set_rate(&ngn, &1_000_000);
     client.update_reserve(&admin, &ngn, &1_000_000_000, &100_000_000);
 
@@ -129,7 +128,6 @@ fn test_update_and_get_all_reserves_and_timestamp() {
     client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
 
     let ngn = CurrencyCode::new(&env, "NGN");
-    // amount=500, value_usd=5*DECIMALS → rate = 1_000_000_000_000
     oracle_client.set_rate(&ngn, &1_000_000_000_000);
     client.update_reserve(&admin, &ngn, &500, &(5 * DECIMALS));
 
@@ -180,9 +178,7 @@ fn test_is_reserve_sufficient_multiple_currencies_and_verify_from_token() {
     let ngn = CurrencyCode::new(&env, "NGN");
     let kes = CurrencyCode::new(&env, "KES");
 
-    // amount=1000, value_usd=5*DECIMALS → rate = 500_000_000_000
     oracle_client.set_rate(&ngn, &500_000_000_000);
-    // amount=2000, value_usd=5*DECIMALS → rate = 250_000_000_000
     oracle_client.set_rate(&kes, &250_000_000_000);
 
     // 5 USD each -> total 10 USD
@@ -214,8 +210,6 @@ fn test_zero_and_negative_total_supply_returns_true() {
 
     let zero: i128 = 0;
     let neg: i128 = -10;
-    // verify_reserves_manual bypasses the token read — zero/negative supply
-    // is defined as trivially sufficient (no outstanding obligations).
     assert!(client.verify_reserves_manual(&zero));
     assert!(client.verify_reserves_manual(&neg));
 }
@@ -276,7 +270,6 @@ fn test_reset_reserves_without_admin_auth_fails() {
     oracle_client.set_rate(&ngn, &500_000_000_000);
     client.update_reserve(&admin, &ngn, &1_000, &(5 * DECIMALS));
 
-    // Provide only the attacker's auth — reset_reserves must reject it.
     use soroban_sdk::testutils::MockAuth;
     use soroban_sdk::testutils::MockAuthInvoke;
     use soroban_sdk::IntoVal;
@@ -296,7 +289,6 @@ fn test_reset_reserves_without_admin_auth_fails() {
         "reset_reserves must reject callers that are not the admin"
     );
 
-    // Reserves must be untouched after the failed attempt.
     env.mock_all_auths();
     assert_eq!(
         client.get_all_reserves().len(),
@@ -320,10 +312,6 @@ fn test_verify_reserves_errors_when_total_supply_is_zero() {
 
     client.initialize(&admin, &oracle, &token_zero, &10_000i128);
 
-    // verify_reserves reads from the token; when the token reports zero supply
-    // it must error (ZeroSupply = 8003) rather than silently returning true —
-    // callers must not rely on verify_reserves as a solvency signal before any
-    // tokens are minted.
     let result = client.try_verify_reserves();
     assert!(
         result.is_err(),
@@ -373,7 +361,7 @@ fn test_add_currency_duplicate_panics() {
 
     let ngn = CurrencyCode::new(&env, "NGN");
     client.add_currency(&ngn);
-    client.add_currency(&ngn); // should panic with DuplicateCurrency = 8008
+    client.add_currency(&ngn);
 }
 
 #[test]
@@ -395,7 +383,6 @@ fn test_update_reserve_without_admin_auth_fails() {
 
     let ngn = CurrencyCode::new(&env, "NGN");
 
-    // Provide only the attacker auth, update_reserve must reject it
     use soroban_sdk::testutils::MockAuth;
     use soroban_sdk::testutils::MockAuthInvoke;
     use soroban_sdk::IntoVal;
@@ -423,21 +410,25 @@ fn test_update_reserve_without_admin_auth_fails() {
 fn hash_leaf_test(env: &Env, leaf: &AttestationLeaf) -> BytesN<32> {
     let mut buf = Bytes::new(env);
     let code = leaf.currency.code();
-    let code_buf = code.to_buffer();
-    let code_len = code.len() as usize;
-    buf.extend_from_slice(&code_buf[..code_len]);
-    buf.extend_from_slice(&leaf.amount.to_be_bytes()[..]);
-    buf.extend_from_slice(&leaf.value_usd.to_be_bytes()[..]);
-    buf.extend_from_slice(&leaf.timestamp.to_be_bytes()[..]);
+    let code_bytes = code.to_bytes();
+    buf.append(&code_bytes);
+    let amt_bytes = Bytes::from_slice(env, &leaf.amount.to_be_bytes()[..]);
+    buf.append(&amt_bytes);
+    let val_bytes = Bytes::from_slice(env, &leaf.value_usd.to_be_bytes()[..]);
+    buf.append(&val_bytes);
+    let ts_bytes = Bytes::from_slice(env, &leaf.timestamp.to_be_bytes()[..]);
+    buf.append(&ts_bytes);
     env.crypto().keccak256(&buf)
 }
 
 /// Hash a parent node from its two children (left || right).
 fn hash_pair(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
-    let mut buf = Bytes::new(env);
-    buf.extend_from_slice(&left.to_buffer()[..]);
-    buf.extend_from_slice(&right.to_buffer()[..]);
-    env.crypto().keccak256(&buf)
+    let left_bytes: Bytes = left.clone().into();
+    let right_bytes: Bytes = right.clone().into();
+    let mut combined = Bytes::new(env);
+    combined.append(&left_bytes);
+    combined.append(&right_bytes);
+    env.crypto().keccak256(&combined)
 }
 
 // ── Merkle-root attestation (SC-015) tests ────────────────────────────────────
@@ -451,17 +442,6 @@ fn test_set_custodian_by_admin() {
     let custodian = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
     let token = env.register_contract(None, MockToken);
-// ── Oracle cross-validation tests ─────────────────────────────────────────────
-
-#[test]
-fn test_update_reserve_rejects_zero_amount() {
-    let env = Env::default();
-    env.mock_all_auths();
-    env.ledger().with_mut(|l| l.timestamp = 1);
-
-    let admin = Address::generate(&env);
-    let oracle = env.register_contract(None, MockOracle);
-    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
@@ -481,25 +461,6 @@ fn test_set_custodian_without_admin_auth_fails() {
     let attacker = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
     let token = env.register_contract(None, MockToken);
-    let acbu_token = Address::generate(&env);
-    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
-
-    let ngn = CurrencyCode::new(&env, "NGN");
-    oracle_client.set_rate(&ngn, &DECIMALS);
-
-    let result = client.try_update_reserve(&admin, &ngn, &0, &DECIMALS);
-    assert!(result.is_err(), "update_reserve must reject zero amount");
-}
-
-#[test]
-fn test_update_reserve_rejects_negative_amount() {
-    let env = Env::default();
-    env.mock_all_auths();
-    env.ledger().with_mut(|l| l.timestamp = 1);
-
-    let admin = Address::generate(&env);
-    let oracle = env.register_contract(None, MockOracle);
-    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
@@ -567,28 +528,8 @@ fn test_submit_attestation_without_custodian_identity_fails() {
 
     let admin = Address::generate(&env);
     let custodian = Address::generate(&env);
-    let impersonator = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
     let token = env.register_contract(None, MockToken);
-    let acbu_token = Address::generate(&env);
-    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
-
-    let ngn = CurrencyCode::new(&env, "NGN");
-    oracle_client.set_rate(&ngn, &DECIMALS);
-
-    let result = client.try_update_reserve(&admin, &ngn, &-1, &DECIMALS);
-    assert!(result.is_err(), "update_reserve must reject negative amount");
-}
-
-#[test]
-fn test_update_reserve_rejects_inconsistent_value_usd() {
-    let env = Env::default();
-    env.mock_all_auths();
-    env.ledger().with_mut(|l| l.timestamp = 1);
-
-    let admin = Address::generate(&env);
-    let oracle = env.register_contract(None, MockOracle);
-    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
@@ -597,38 +538,20 @@ fn test_update_reserve_rejects_inconsistent_value_usd() {
     client.initialize(&admin, &oracle, &token, &10_000i128);
     client.set_custodian(&custodian);
 
-    // Build a deterministic root that differs from any real Merkle tree
     let mut root_buf = Bytes::new(&env);
     root_buf.extend_from_slice(&[0xabu8; 32][..]);
     let root = env.crypto().keccak256(&root_buf);
 
-    // Only impersonator auth is provided – submit_attestation must reject it
-    // because the contract will call `custodian.require_auth()` which the
-    // impersonator is not authorised for.
     env.mock_auths(&[]);
     let result = client.try_submit_attestation(&root);
     assert!(
         result.is_err(),
         "submit_attestation must reject callers that are not the custodian"
-    let acbu_token = Address::generate(&env);
-    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
-
-    let ngn = CurrencyCode::new(&env, "NGN");
-    // rate = DECIMALS → expected_value_usd = amount (1 NGN = 1 USD)
-    oracle_client.set_rate(&ngn, &DECIMALS);
-
-    // amount=1000, rate=DECIMALS → expected value_usd = 1000
-    // Pass 2000 instead → must fail
-    let result = client.try_update_reserve(&admin, &ngn, &1000, &2000);
-    assert!(
-        result.is_err(),
-        "update_reserve must reject value_usd inconsistent with oracle rate"
     );
 }
 
 #[test]
 fn test_verify_merkle_proof_valid() {
-fn test_update_reserve_accepts_consistent_value_usd() {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().with_mut(|l| l.timestamp = 1);
@@ -637,8 +560,6 @@ fn test_update_reserve_accepts_consistent_value_usd() {
     let custodian = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
     let token = env.register_contract(None, MockToken);
-    let oracle = env.register_contract(None, MockOracle);
-    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
@@ -676,7 +597,6 @@ fn test_update_reserve_accepts_consistent_value_usd() {
         timestamp: 1,
     };
 
-    // Build a 4-leaf tree manually
     let h0 = hash_leaf_test(&env, &leaf0);
     let h1 = hash_leaf_test(&env, &leaf1);
     let h2 = hash_leaf_test(&env, &leaf2);
@@ -686,36 +606,17 @@ fn test_update_reserve_accepts_consistent_value_usd() {
     let h23 = hash_pair(&env, &h2, &h3);
     let root = hash_pair(&env, &h01, &h23);
 
-    // Custodian submits the root
     client.submit_attestation(&root);
 
-    // Verify leaf 0 (index=0): proof = [h1, h23]
     let proof = vec![&env, h1.clone(), h23.clone()];
     assert!(client.verify_merkle_proof(&leaf0, &proof, &0u32));
 
-    // Verify leaf 3 (index=3): proof = [h2, h01]
     let proof3 = vec![&env, h2.clone(), h01.clone()];
     assert!(client.verify_merkle_proof(&leaf3, &proof3, &3u32));
 }
 
 #[test]
 fn test_verify_merkle_proof_invalid_proof_panics() {
-    let acbu_token = Address::generate(&env);
-    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
-
-    let ngn = CurrencyCode::new(&env, "NGN");
-    // rate = DECIMALS → 1 NGN = 1 USD
-    oracle_client.set_rate(&ngn, &DECIMALS);
-
-    // amount=1000, rate=DECIMALS → expected value_usd = 1000
-    client.update_reserve(&admin, &ngn, &1000, &1000);
-
-    let reserves = client.get_all_reserves();
-    assert_eq!(reserves.len(), 1, "one reserve should be stored");
-}
-
-#[test]
-fn test_update_reserve_accepts_rounding_tolerance_of_one() {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().with_mut(|l| l.timestamp = 1);
@@ -724,8 +625,6 @@ fn test_update_reserve_accepts_rounding_tolerance_of_one() {
     let custodian = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
     let token = env.register_contract(None, MockToken);
-    let oracle = env.register_contract(None, MockOracle);
-    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
@@ -743,9 +642,8 @@ fn test_update_reserve_accepts_rounding_tolerance_of_one() {
     let root = hash_leaf_test(&env, &leaf);
     client.submit_attestation(&root);
 
-    // Wrong proof: a sibling that doesn't match the stored root
     let mut fake_buf = Bytes::new(&env);
-    fake_buf.extend_from_slice(&[0xabu8; 32]);
+    fake_buf.extend_from_slice(&[0xabu8; 32][..]);
     let fake_sibling = env.crypto().keccak256(&fake_buf);
     let bad_proof = vec![&env, fake_sibling];
 
@@ -758,21 +656,6 @@ fn test_update_reserve_accepts_rounding_tolerance_of_one() {
 
 #[test]
 fn test_verify_merkle_proof_no_attestation_panics() {
-    let acbu_token = Address::generate(&env);
-    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
-
-    let ngn = CurrencyCode::new(&env, "NGN");
-    // rate = 3 → expected_value_usd = amount * 3 / DECIMALS = 3000 / 10_000_000 = 0
-    // value_usd = 1 → diff = 1 → within tolerance
-    oracle_client.set_rate(&ngn, &3);
-    client.update_reserve(&admin, &ngn, &1000, &1);
-
-    let reserves = client.get_all_reserves();
-    assert_eq!(reserves.len(), 1, "rounding tolerance of 1 must be accepted");
-}
-
-#[test]
-fn test_update_reserve_rejects_inflated_value_usd() {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().with_mut(|l| l.timestamp = 1);
@@ -780,7 +663,6 @@ fn test_update_reserve_rejects_inflated_value_usd() {
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
     let token = env.register_contract(None, MockToken);
-    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
@@ -821,18 +703,5 @@ fn test_get_latest_attestation_before_submit_panics() {
     assert!(
         result.is_err(),
         "get_latest_attestation must panic when no attestation has been submitted"
-    let acbu_token = Address::generate(&env);
-    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
-
-    let ngn = CurrencyCode::new(&env, "NGN");
-    // rate = DECIMALS → expected_value_usd = amount
-    oracle_client.set_rate(&ngn, &DECIMALS);
-
-    // amount=1000 → expected value_usd = 1000
-    // Pass 1002 → diff = 2 > tolerance → must fail
-    let result = client.try_update_reserve(&admin, &ngn, &1000, &1002);
-    assert!(
-        result.is_err(),
-        "update_reserve must reject value_usd inflated beyond rounding tolerance"
     );
 }

@@ -422,12 +422,14 @@ impl ReserveTrackerContract {
     fn hash_leaf(env: &Env, leaf: &AttestationLeaf) -> BytesN<32> {
         let mut buf = Bytes::new(env);
         let code = leaf.currency.code();
-        let code_buf = code.to_buffer();
-        let code_len = code.len() as usize;
-        buf.extend_from_slice(&code_buf[..code_len]);
-        buf.extend_from_slice(&leaf.amount.to_be_bytes());
-        buf.extend_from_slice(&leaf.value_usd.to_be_bytes());
-        buf.extend_from_slice(&leaf.timestamp.to_be_bytes());
+        let code_bytes = code.to_bytes();
+        buf.append(&code_bytes);
+        let amt_bytes = Bytes::from_slice(env, &leaf.amount.to_be_bytes()[..]);
+        buf.append(&amt_bytes);
+        let val_bytes = Bytes::from_slice(env, &leaf.value_usd.to_be_bytes()[..]);
+        buf.append(&val_bytes);
+        let ts_bytes = Bytes::from_slice(env, &leaf.timestamp.to_be_bytes()[..]);
+        buf.append(&ts_bytes);
         env.crypto().keccak256(&buf)
     }
 
@@ -441,13 +443,15 @@ impl ReserveTrackerContract {
         let mut current = leaf_hash.clone();
         for i in 0..proof.len() {
             let sibling = proof.get(i).unwrap();
+            let cur_bytes: Bytes = current.clone().into();
+            let sib_bytes: Bytes = sibling.clone().into();
             let mut combined = Bytes::new(env);
             if (index >> i) & 1 == 0 {
-                combined.extend_from_slice(&current.to_buffer()[..]);
-                combined.extend_from_slice(&sibling.to_buffer()[..]);
+                combined.append(&cur_bytes);
+                combined.append(&sib_bytes);
             } else {
-                combined.extend_from_slice(&sibling.to_buffer()[..]);
-                combined.extend_from_slice(&current.to_buffer()[..]);
+                combined.append(&sib_bytes);
+                combined.append(&cur_bytes);
             }
             current = env.crypto().keccak256(&combined);
         }
