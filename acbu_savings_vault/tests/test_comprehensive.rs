@@ -1133,3 +1133,211 @@ fn test_precision_with_various_combinations() {
         assert_eq!(h.admin_balance(), fee_deducted, "h.admin_balance() should equal fee_deducted");
     }
 }
+
+// ============================================================================
+// ADDITIONAL COMPREHENSIVE TESTS
+// ============================================================================
+
+#[test]
+fn test_yield_continues_accruing_after_term_maturity() {
+    let yield_rate = 1_000i128; // 10% APR
+    let h = TestEnv::new(0, yield_rate);
+    let amount = 10_000_000i128;
+    let term = SECONDS_PER_YEAR;
+
+    h.mint_to_user(amount);
+    let deposit_ts = h.now();
+    h.client.deposit(&h.user, &amount, &term);
+
+    // Advance to term maturity
+    h.advance_time(term);
+    let yield_at_maturity = expected_yield(amount, yield_rate, term);
+    h.mint_to_vault(yield_at_maturity);
+
+    assert_eq!(h.client.get_pending_yield(&h.user, &term), yield_at_maturity, "h.client.get_pending_yield(&h.user, &term) should equal yield_at_maturity");
+
+    // Advance another year without withdrawing
+    h.advance_time(SECONDS_PER_YEAR);
+    let total_elapsed = h.now() - deposit_ts;
+    let total_yield = expected_yield(amount, yield_rate, total_elapsed);
+    let additional_yield = total_yield - yield_at_maturity;
+    h.mint_to_vault(additional_yield);
+
+    assert_eq!(h.client.get_pending_yield(&h.user, &term), total_yield, "Yield should continue accruing after maturity");
+
+    h.client.withdraw(&h.user, &term, &amount);
+    assert_eq!(h.user_balance(), amount + total_yield, "h.user_balance() should equal amount + total_yield");
+}
+
+#[test]
+fn test_multiple_users_different_terms_isolated() {
+    let yield_rate = 1_000i128; // 10% APR
+    let h = TestEnv::new(0, yield_rate);
+    let amount1 = 5_000_000i128;
+    let amount2 = 8_000_000i128;
+    let term1 = 30 * 24 * 3600u64; // 30 days
+    let term2 = 60 * 24 * 3600u64; // 60 days
+
+    h.mint_to_user(amount1);
+    h.mint_to_user2(amount2);
+
+    let deposit_ts1 = h.now();
+    h.client.deposit(&h.user, &amount1, &term1);
+
+    h.advance_time(1_000); // Advance time before second deposit
+    let deposit_ts2 = h.now();
+    h.client.deposit(&h.user2, &amount2, &term2);
+
+    // Advance to unlock user1's deposit
+    h.set_time(deposit_ts1 + term1 + 1);
+    let elapsed1 = h.now() - deposit_ts1;
+    let yield1 = expected_yield(amount1, yield_rate, elapsed1);
+    h.mint_to_vault(yield1);
+
+    h.client.withdraw(&h.user, &term1, &amount1);
+    assert_eq!(h.user_balance(), amount1 + yield1, "h.user_balance() should equal amount1 + yield1");
+
+    // User2's deposit should still be locked
+    let result = h.client.try_withdraw(&h.user2, &term2, &amount2);
+    assert!(result.is_err(), "User2's deposit should still be locked");
+
+    // Advance to unlock user2's deposit
+    h.set_time(deposit_ts2 + term2 + 1);
+    let elapsed2 = h.now() - deposit_ts2;
+    let yield2 = expected_yield(amount2, yield_rate, elapsed2);
+    h.mint_to_vault(yield2);
+
+    h.client.withdraw(&h.user2, &term2, &amount2);
+    assert_eq!(h.user2_balance(), amount2 + yield2, "h.user2_balance() should equal amount2 + yield2");
+}
+
+#[test]
+fn test_fee_and_yield_with_multiple_partial_withdrawals() {
+    let fee_rate = 500i128; // 5% fee
+    let yield_rate = 1_200i128; // 12% APR
+    let h = TestEnv::new(fee_rate, yield_rate);
+    let gross_amount = 20_000_000i128;
+    let term = SECONDS_PER_YEAR;
+
+    let fee = gross_amount * fee_rate / BASIS_POINTS;
+    let net = gross_amount - fee;
+
+    h.mint_to_user(gross_amount);
+    let deposit_ts = h.now();
+    h.client.deposit(&h.user, &gross_amount, &term);
+
+    assert_eq!(h.client.get_balance(&h.user, &term), net, "h.client.get_balance(&h.user, &term) should equal net");
+    assert_eq!(h.admin_balance(), fee, "h.admin_balance() should equal fee");
+
+    h.advance_time(term);
+    let elapsed = h.now() - deposit_ts;
+    let total_yield = expected_yield(net, yield_rate, elapsed);
+    h.mint_to_vault(total_yield);
+
+    // Partial withdrawal 1: 25%
+    let withdraw1 = net / 4;
+    h.client.withdraw(&h.user, &term, &withdraw1);
+    let yield1 = h.user_balance() - withdraw1;
+
+    // Partial withdrawal 2: 25%
+    let withdraw2 = net / 4;
+    h.client.withdraw(&h.user, &term, &withdraw2);
+    let yield2 = h.user_balance() - withdraw1 - withdraw2 - yield1;
+
+    // Final withdrawal: remaining 50%
+    let withdraw3 = net - withdraw1 - withdraw2;
+    h.client.withdraw(&h.user, &term, &withdraw3);
+
+    assert_eq!(h.client.get_balance(&h.user, &term), 0, "h.client.get_balance(&h.user, &term) should equal 0");
+    assert_eq!(h.user_balance(), net + total_yield, "Total withdrawn should equal net + total_yield");
+}
+
+#[test]
+fn test_deposit_after_full_withdrawal_resets_term_lock() {
+    let h = TestEnv::new(0, 0);
+    let amount = 10_000_000i128;
+    let term = 10_000u64;
+
+    h.mint_to_user(amount * 2);
+
+    // First deposit-withdraw cycle
+    let first_deposit_ts = h.now();
+    h.client.deposit(&h.user, &amount, &term);
+    h.advance_time(term);
+    h.client.withdraw(&h.user, &term, &amount);
+
+    // Verify balance is cleared
+    assert_eq!(h.client.get_balance(&h.user, &term), 0, "h.client.get_balance(&h.user, &term) should equal 0");
+
+    // Second deposit with same term
+    let second_deposit_ts = h.now();
+    h.client.deposit(&h.user, &amount, &term);
+
+    // Try to withdraw immediately - should fail
+    let result = h.client.try_withdraw(&h.user, &term, &amount);
+    assert!(result.is_err(), "New deposit should enforce term lock");
+
+    // Advance to unlock second deposit
+    h.set_time(second_deposit_ts + term + 1);
+    h.client.withdraw(&h.user, &term, &amount);
+
+    assert_eq!(h.user_balance(), amount * 2, "h.user_balance() should equal amount * 2");
+}
+
+#[test]
+fn test_concurrent_deposits_and_withdrawals_multiple_terms() {
+    let yield_rate = 1_000i128; // 10% APR
+    let h = TestEnv::new(0, yield_rate);
+    
+    let short_term = 7 * 24 * 3600u64; // 1 week
+    let medium_term = 30 * 24 * 3600u64; // 1 month
+    let long_term = 90 * 24 * 3600u64; // 3 months
+    
+    let amount_short = 3_000_000i128;
+    let amount_medium = 5_000_000i128;
+    let amount_long = 10_000_000i128;
+
+    h.mint_to_user(amount_short + amount_medium + amount_long);
+
+    // Make all deposits at the same time
+    let deposit_ts = h.now();
+    h.client.deposit(&h.user, &amount_short, &short_term);
+    h.client.deposit(&h.user, &amount_medium, &medium_term);
+    h.client.deposit(&h.user, &amount_long, &long_term);
+
+    // Advance to unlock short term
+    h.set_time(deposit_ts + short_term + 1);
+    let elapsed_short = h.now() - deposit_ts;
+    let yield_short = expected_yield(amount_short, yield_rate, elapsed_short);
+    h.mint_to_vault(yield_short);
+
+    h.client.withdraw(&h.user, &short_term, &amount_short);
+    assert_eq!(h.user_balance(), amount_short + yield_short, "h.user_balance() should equal amount_short + yield_short");
+
+    // Medium and long should still be locked
+    assert!(h.client.try_withdraw(&h.user, &medium_term, &amount_medium).is_err());
+    assert!(h.client.try_withdraw(&h.user, &long_term, &amount_long).is_err());
+
+    // Advance to unlock medium term
+    h.set_time(deposit_ts + medium_term + 1);
+    let elapsed_medium = h.now() - deposit_ts;
+    let yield_medium = expected_yield(amount_medium, yield_rate, elapsed_medium);
+    h.mint_to_vault(yield_medium);
+
+    h.client.withdraw(&h.user, &medium_term, &amount_medium);
+    assert_eq!(h.user_balance(), amount_short + yield_short + amount_medium + yield_medium, "h.user_balance() should equal amount_short + yield_short + amount_medium + yield_medium");
+
+    // Long should still be locked
+    assert!(h.client.try_withdraw(&h.user, &long_term, &amount_long).is_err());
+
+    // Advance to unlock long term
+    h.set_time(deposit_ts + long_term + 1);
+    let elapsed_long = h.now() - deposit_ts;
+    let yield_long = expected_yield(amount_long, yield_rate, elapsed_long);
+    h.mint_to_vault(yield_long);
+
+    h.client.withdraw(&h.user, &long_term, &amount_long);
+    
+    let total = amount_short + yield_short + amount_medium + yield_medium + amount_long + yield_long;
+    assert_eq!(h.user_balance(), total, "All withdrawals complete with correct yields");
+}

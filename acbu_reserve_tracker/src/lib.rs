@@ -67,18 +67,7 @@ pub struct DataKey {
     pub pending_admin_eligible_at: Symbol,
     pub currencies: Symbol,
     pub last_verify_call: Symbol,
-    pub custodian: Symbol,
-    pub attested_root: Symbol,
-    pub attestation_ts: Symbol,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AttestationLeaf {
-    pub currency: CurrencyCode,
-    pub amount: i128,
-    pub value_usd: i128,
-    pub timestamp: u64,
+    pub last_verify_result: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -92,9 +81,7 @@ const DATA_KEY: DataKey = DataKey {
     pending_admin_eligible_at: symbol_short!("PEND_ETA"),
     currencies: symbol_short!("CURRNCYS"),
     last_verify_call: symbol_short!("LAST_VFY"),
-    custodian: symbol_short!("CUSTODN"),
-    attested_root: symbol_short!("ATST_RT"),
-    attestation_ts: symbol_short!("ATST_TS"),
+    last_verify_result: symbol_short!("LAST_RES"),
 };
 
 /// Admin rotation timelock: the pending admin must wait this long before
@@ -173,7 +160,12 @@ impl ReserveTrackerContract {
         let last_call: Option<u64> = env.storage().instance().get(&DATA_KEY.last_verify_call);
         if let Some(last) = last_call {
             if now.saturating_sub(last) < VERIFY_RESERVES_COOLDOWN_SECONDS {
-                return false;
+                let cached: bool = env
+                    .storage()
+                    .instance()
+                    .get(&DATA_KEY.last_verify_result)
+                    .unwrap_or(true);
+                return cached;
             }
         }
 
@@ -183,7 +175,11 @@ impl ReserveTrackerContract {
         if total_acbu_supply == 0 {
             env.panic_with_error(ReserveTrackerError::ZeroSupply);
         }
-        Self::is_reserve_sufficient(env, total_acbu_supply)
+        let result = Self::is_reserve_sufficient(env.clone(), total_acbu_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.last_verify_result, &result);
+        result
     }
 
     /// Like [`Self::verify_reserves`] but uses the caller-supplied

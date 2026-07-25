@@ -293,3 +293,27 @@ fn test_is_signer_false_for_outsider() {
     let outsider = Address::generate(&env);
     assert!(!client.is_signer(&outsider));
 }
+
+// ── Regression: signer removal after approval ───────────────────────────────
+
+/// Approvals from a signer who was later removed must not count toward the
+/// threshold at execution time.
+#[test]
+#[should_panic]
+fn test_execute_after_signer_removed_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (signers, client) = setup(&env, 3, 2);
+    let pid = client.propose(&signers[0], &SorobanString::from_str(&env, "pause"));
+    client.approve(&signers[1], &pid);
+
+    // Rotate signer set: remove signers[0], keep signers[1], add a new signer.
+    let mut new_signers = soroban_sdk::Vec::new(&env);
+    new_signers.push_back(signers[1].clone());
+    new_signers.push_back(signers[2].clone());
+    new_signers.push_back(Address::generate(&env));
+    client.update_config(&new_signers, &2);
+
+    // signers[0] approved but is no longer a signer — execute must panic.
+    client.execute(&signers[2], &pid);
+}

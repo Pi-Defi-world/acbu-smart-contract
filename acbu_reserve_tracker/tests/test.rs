@@ -403,35 +403,9 @@ fn test_update_reserve_without_admin_auth_fails() {
     );
 }
 
-// ── Merkle-root attestation (SC-015) helpers ──────────────────────────────────
-
-/// Mirror of the contract's `hash_leaf` – serialises and keccak256-hashes
-/// an `AttestationLeaf` in the same deterministic format.
-fn hash_leaf_test(env: &Env, leaf: &AttestationLeaf) -> BytesN<32> {
-    let mut buf = Bytes::new(env);
-    let code = leaf.currency.code();
-    let code_bytes = code.to_bytes();
-    buf.append(&code_bytes);
-    let amt_bytes = Bytes::from_slice(env, &leaf.amount.to_be_bytes()[..]);
-    buf.append(&amt_bytes);
-    let val_bytes = Bytes::from_slice(env, &leaf.value_usd.to_be_bytes()[..]);
-    buf.append(&val_bytes);
-    let ts_bytes = Bytes::from_slice(env, &leaf.timestamp.to_be_bytes()[..]);
-    buf.append(&ts_bytes);
-    env.crypto().keccak256(&buf)
-}
-
-/// Hash a parent node from its two children (left || right).
-fn hash_pair(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
-    let left_bytes: Bytes = left.clone().into();
-    let right_bytes: Bytes = right.clone().into();
-    let mut combined = Bytes::new(env);
-    combined.append(&left_bytes);
-    combined.append(&right_bytes);
-    env.crypto().keccak256(&combined)
-}
-
-// ── Merkle-root attestation (SC-015) tests ────────────────────────────────────
+#[test]
+fn test_verify_reserves_caches_result_during_cooldown() {
+// ── Oracle cross-validation tests ─────────────────────────────────────────────
 
 #[test]
 fn test_set_custodian_by_admin() {
@@ -442,12 +416,36 @@ fn test_set_custodian_by_admin() {
     let custodian = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
     let token = env.register_contract(None, MockToken);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
 
     client.initialize(&admin, &oracle, &token, &10_000i128);
-    client.set_custodian(&custodian);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    // 10 USD reserve
+    client.update_reserve(&admin, &ngn, &1_000_000_000, &100_000_000);
+
+    // First call at t=1: token returns 10*DECIMALS, reserves=10 USD → sufficient (true)
+    assert!(client.verify_reserves());
+
+    // Call again at t=10 (within 60s cooldown): must return cached result, not false
+    env.ledger().with_mut(|l| l.timestamp = 10);
+    assert!(
+        client.verify_reserves(),
+        "verify_reserves must return cached true during cooldown, not false"
+    );
+
+    // After cooldown expires at t=61, re-checks fresh
+    env.ledger().with_mut(|l| l.timestamp = 61);
+    assert!(client.verify_reserves());
+}
+
+#[test]
+fn test_verify_reserves_caches_false_during_cooldown() {
+    let acbu_token = Address::generate(&env);
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
 
     assert_eq!(client.get_custodian(), custodian);
 }
@@ -530,13 +528,27 @@ fn test_submit_attestation_without_custodian_identity_fails() {
     let custodian = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
     let token = env.register_contract(None, MockToken);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
 
-    env.mock_all_auths();
     client.initialize(&admin, &oracle, &token, &10_000i128);
-    client.set_custodian(&custodian);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    // Tiny reserve (0.1 USD) vs 10 ACBU supply → insufficient
+    client.update_reserve(&admin, &ngn, &1, &10_000_000);
+
+    // First call: insufficient (false)
+    assert!(!client.verify_reserves());
+
+    // Within cooldown: returns cached false (not a stale true)
+    env.ledger().with_mut(|l| l.timestamp = 30);
+    assert!(
+        !client.verify_reserves(),
+        "verify_reserves must return cached false during cooldown"
+    let acbu_token = Address::generate(&env);
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
 
     let mut root_buf = Bytes::new(&env);
     root_buf.extend_from_slice(&[0xabu8; 32][..]);
@@ -551,7 +563,8 @@ fn test_submit_attestation_without_custodian_identity_fails() {
 }
 
 #[test]
-fn test_verify_merkle_proof_valid() {
+fn test_verify_reserves_refreshes_after_cooldown_expires() {
+fn test_update_reserve_accepts_consistent_value_usd() {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().with_mut(|l| l.timestamp = 1);
@@ -560,12 +573,38 @@ fn test_verify_merkle_proof_valid() {
     let custodian = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
     let token = env.register_contract(None, MockToken);
+    let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
 
     client.initialize(&admin, &oracle, &token, &10_000i128);
-    client.set_custodian(&custodian);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    // Tiny reserve → insufficient
+    client.update_reserve(&admin, &ngn, &1, &10_000_000);
+
+    // First call: false
+    assert!(!client.verify_reserves());
+
+    // Add real reserves
+    env.ledger().with_mut(|l| l.timestamp = 2);
+    client.update_reserve(&admin, &ngn, &1_000_000_000, &100_000_000);
+
+    // Still within cooldown of first call → returns cached false
+    env.ledger().with_mut(|l| l.timestamp = 30);
+    assert!(
+        !client.verify_reserves(),
+        "must still return cached false within cooldown of first call"
+    );
+
+    // After cooldown (t=61 > 1+60): fresh check sees new reserves → true
+    env.ledger().with_mut(|l| l.timestamp = 61);
+    assert!(
+        client.verify_reserves(),
+        "must re-evaluate after cooldown expires and return true"
+    let acbu_token = Address::generate(&env);
+    client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
 
     let ngn = CurrencyCode::new(&env, "NGN");
     let kes = CurrencyCode::new(&env, "KES");

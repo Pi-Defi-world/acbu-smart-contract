@@ -272,6 +272,18 @@ impl core::fmt::Display for ContractError {
     }
 }
 
+/// Returns `true` if `oracle_timestamp` is within `max_staleness_seconds` of the
+/// current ledger time. Centralises the `current_time` binding so that no consumer
+/// can omit it — structurally prevents the class of bug reported in SC-001 / #507.
+pub fn check_oracle_freshness(
+    env: &Env,
+    oracle_timestamp: u64,
+    max_staleness_seconds: u64,
+) -> bool {
+    let current_time = env.ledger().timestamp();
+    current_time <= oracle_timestamp.saturating_add(max_staleness_seconds)
+}
+
 /// Cross-contract method name constants — prevents silent logic splits from typos
 /// when the same string is used in multiple contracts to call shared interfaces.
 pub const ORACLE_GET_ACBU_RATE: &str = "get_acbu_usd_rate";
@@ -340,7 +352,8 @@ pub fn median(mut values: soroban_sdk::Vec<i128>) -> Option<i128> {
         let val1 = values.get(mid - 1)?;
         quickselect_inplace(&mut values, 0, i32::try_from(n - 1).unwrap_or(0), i32::try_from(mid).unwrap_or(0));
         let val2 = values.get(mid)?;
-        Some((val1 + val2) / 2)
+        // SC-020: use checked arithmetic — (val1 + val2) can overflow i128 for extreme rates.
+        val1.checked_add(val2).and_then(|sum| sum.checked_div(2))
     } else {
         // For odd count, find the middle element
         quickselect_inplace(&mut values, 0, i32::try_from(n - 1).unwrap_or(0), i32::try_from(mid).unwrap_or(0));
