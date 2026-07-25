@@ -60,8 +60,8 @@ fn test_initialize() {
     );
 
     let stored_validators = client.get_validators();
-    assert_eq!(stored_validators.len(), 3);
-    assert_eq!(client.get_min_signatures(), min_signatures);
+    assert_eq!(stored_validators.len(), 3, "stored_validators.len() should equal 3");
+    assert_eq!(client.get_min_signatures(), min_signatures, "client.get_min_signatures() should equal min_signatures");
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn test_update_rate() {
     client.update_rate(&validator, &ngn, &rate, &sources, &env.ledger().timestamp());
 
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1235000); // median of sources, not rate parameter (1234567)
+    assert_eq!(stored_rate, 1235000, "stored_rate should equal 1235000"); // median of sources, not rate parameter (1234567)
 
     let events = env.events().all();
     let mut found = false;
@@ -121,9 +121,9 @@ fn test_update_rate() {
             && Symbol::from_val(&env, &topics.get(0).unwrap()) == symbol_short!("rate_upd")
         {
             let event_data: RateUpdateEvent = event.2.into_val(&env);
-            assert_eq!(event_data.currency, ngn.clone());
-            assert_eq!(event_data.rate, 1235000);
-            assert_eq!(event_data.validator, validator);
+            assert_eq!(event_data.currency, ngn.clone(), "event_data.currency should equal ngn.clone()");
+            assert_eq!(event_data.rate, 1235000, "event_data.rate should equal 1235000");
+            assert_eq!(event_data.validator, validator, "event_data.validator should equal validator");
             found = true;
             break;
         }
@@ -156,7 +156,7 @@ fn test_admin_set_rate_emits_rate_update_event() {
     client.set_rate_admin(&ngn, &admin_rate);
 
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, admin_rate);
+    assert_eq!(stored_rate, admin_rate, "stored_rate should equal admin_rate");
 
     let events = env.events().all();
     let mut found = false;
@@ -169,9 +169,9 @@ fn test_admin_set_rate_emits_rate_update_event() {
             && Symbol::from_val(&env, &topics.get(0).unwrap()) == symbol_short!("rate_upd")
         {
             let event_data: RateUpdateEvent = event.2.into_val(&env);
-            assert_eq!(event_data.currency, ngn.clone());
-            assert_eq!(event_data.rate, admin_rate);
-            assert_eq!(event_data.validator, admin);
+            assert_eq!(event_data.currency, ngn.clone(), "event_data.currency should equal ngn.clone()");
+            assert_eq!(event_data.rate, admin_rate, "event_data.rate should equal admin_rate");
+            assert_eq!(event_data.validator, admin, "event_data.validator should equal admin");
             found = true;
             break;
         }
@@ -228,7 +228,7 @@ fn test_outlier_detection() {
     // 1350000 deviates ~3432 bps > 300 bps → quarantined
     // clean_sources = [1000000, 1005000], median = (1000000 + 1005000) / 2 = 1002500
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1002500);
+    assert_eq!(stored_rate, 1002500, "stored_rate should equal 1002500");
 
     let events = env.events().all();
     let mut outlier_found = false;
@@ -246,10 +246,10 @@ fn test_outlier_detection() {
                 rate_update_found = true;
             } else if event_symbol == symbol_short!("outlier") {
                 let event_data: OutlierDetectionEvent = event.2.into_val(&env);
-                assert_eq!(event_data.currency, ngn.clone());
+                assert_eq!(event_data.currency, ngn.clone(), "event_data.currency should equal ngn.clone()");
                 // median_rate in the event is the raw_median used as reference
-                assert_eq!(event_data.median_rate, 1005000);
-                assert_eq!(event_data.outlier_rate, 1350000);
+                assert_eq!(event_data.median_rate, 1005000, "event_data.median_rate should equal 1005000");
+                assert_eq!(event_data.outlier_rate, 1350000, "event_data.outlier_rate should equal 1350000");
                 assert!(event_data.deviation_bps > 300);
                 outlier_found = true;
             }
@@ -319,7 +319,7 @@ fn test_outlier_source_cannot_move_median() {
             && Symbol::from_val(&env, &topics.get(0).unwrap()) == symbol_short!("outlier")
         {
             let event_data: OutlierDetectionEvent = event.2.into_val(&env);
-            assert_eq!(event_data.outlier_rate, 5_000_000);
+            assert_eq!(event_data.outlier_rate, 5_000_000, "event_data.outlier_rate should equal 5_000_000");
             outlier_count += 1;
         }
     }
@@ -371,7 +371,7 @@ fn test_all_sources_outlier_falls_back_to_raw_median() {
 
     // Must not trap; fallback value is the raw median
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1_250_000);
+    assert_eq!(stored_rate, 1_250_000, "stored_rate should equal 1_250_000");
 }
 
 #[test]
@@ -410,7 +410,7 @@ fn test_update_rate_uses_even_source_median_average() {
     );
     let stored_rate = client.get_rate(&ngn);
     // Sorted = [980000, 1000000, 1020000, 1040000], median = (1000000 + 1020000) / 2
-    assert_eq!(stored_rate, 1010000);
+    assert_eq!(stored_rate, 1010000, "stored_rate should equal 1010000");
 }
 
 #[test]
@@ -443,7 +443,7 @@ fn test_update_rate_falls_back_to_provided_rate_when_sources_empty() {
         &sources,
         &env.ledger().timestamp(),
     );
-    assert_eq!(client.get_rate(&ngn), submitted_rate);
+    assert_eq!(client.get_rate(&ngn), submitted_rate, "client.get_rate(&ngn) should equal submitted_rate");
 }
 
 // ─── Staleness tests ──────────────────────────────────────────────────────────
@@ -656,4 +656,46 @@ fn test_stale_basket_component_blocks_acbu_rate() {
         result.is_err(),
         "stale basket component must block acbu rate"
     );
+}
+
+/// Oracle must return RateNotInitialized error before any rate submissions.
+/// This prevents division by zero or 0-rate mints/burns before the first epoch.
+#[test]
+fn test_rate_not_initialized_before_first_submission() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let kes = CurrencyCode::new(&env, "KES");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+    currencies.push_back(kes.clone());
+
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn.clone(), 5000i128);
+    basket_weights.set(kes.clone(), 5000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
+
+    // get_rate should fail before first submission
+    let result = client.try_get_rate(&ngn);
+    assert!(result.is_err(), "get_rate should fail before first submission");
+
+    // get_rate_with_timestamp should fail before first submission
+    let result = client.try_get_rate_with_timestamp(&ngn);
+    assert!(result.is_err(), "get_rate_with_timestamp should fail before first submission");
+
+    // get_acbu_usd_rate should fail before first submission
+    let result = client.try_get_acbu_usd_rate();
+    assert!(result.is_err(), "get_acbu_usd_rate should fail before first submission");
+
+    // get_acbu_usd_rate_with_timestamp should fail before first submission
+    let result = client.try_get_acbu_usd_rate_with_timestamp();
+    assert!(result.is_err(), "get_acbu_usd_rate_with_timestamp should fail before first submission");
 }

@@ -42,7 +42,7 @@ fn test_happy_path_create_fund_release() {
     client.release(&escrow_id, &payer);
 
     let token = soroban_sdk::token::Client::new(&env, &acbu_token);
-    assert_eq!(token.balance(&payee), amount);
+    assert_eq!(token.balance(&payee), amount, "token.balance(&payee) should equal amount");
 
     // after release the escrow must no longer exist
     let result = client.try_release(&escrow_id, &payer);
@@ -85,7 +85,7 @@ fn test_admin_refund_on_dispute() {
     client.refund(&escrow_id, &payer);
 
     let token = soroban_sdk::token::Client::new(&env, &acbu_token);
-    assert_eq!(token.balance(&payer), amount);
+    assert_eq!(token.balance(&payer), amount, "token.balance(&payer) should equal amount");
 
     // after refund the escrow must no longer exist
     let result = client.try_refund(&escrow_id, &payer);
