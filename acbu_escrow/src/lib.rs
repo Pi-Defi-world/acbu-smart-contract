@@ -88,6 +88,20 @@ const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 const MIN_ESCROW_AMOUNT: i128 = 10_000_000; // 10 ACBU (7 decimals)
 const MAX_ESCROW_LIFETIME: u64 = 30 * 86_400; // 30 days
 
+// ---------------------------------------------------------------------------
+// Temporary-storage TTL thresholds (unit: ledgers; ~5 seconds per ledger)
+// ---------------------------------------------------------------------------
+
+/// Minimum TTL bump threshold for escrow temporary storage entries.
+/// If the remaining TTL is below this value the entry is extended.
+/// 17 280 ledgers × 5 s ≈ 86 400 s = 24 hours.
+const ESCROW_TTL_THRESHOLD_MIN_LEDGERS: u32 = 17_280;
+
+/// Target TTL for escrow temporary storage entries after an extension.
+/// 518 400 ledgers × 5 s ≈ 2 592 000 s = 30 days.
+/// Matches MAX_ESCROW_LIFETIME so entries are kept alive for the full escrow window.
+const ESCROW_TTL_THRESHOLD_MAX_LEDGERS: u32 = 518_400;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EscrowId(pub Address, pub u64);
@@ -226,8 +240,12 @@ impl Escrow {
             .set(&key, &(payer.clone(), payee.clone(), amount, expiry));
 
         // Extend entry TTL to match the maximum lifetime: 30 days.
-        // At 5 seconds per ledger, 30 days ≈ 518,400 ledgers.
-        env.storage().temporary().extend_ttl(&key, 17280, 518400);
+        // See ESCROW_TTL_THRESHOLD_MIN_LEDGERS / ESCROW_TTL_THRESHOLD_MAX_LEDGERS.
+        env.storage().temporary().extend_ttl(
+            &key,
+            ESCROW_TTL_THRESHOLD_MIN_LEDGERS,
+            ESCROW_TTL_THRESHOLD_MAX_LEDGERS,
+        );
 
         client.transfer(&payer, &env.current_contract_address(), &amount);
 
