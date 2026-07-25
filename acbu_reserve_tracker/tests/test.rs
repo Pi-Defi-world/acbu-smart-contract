@@ -1,10 +1,12 @@
 #![cfg(test)]
 
-use acbu_reserve_tracker::{ReserveTrackerContract, ReserveTrackerContractClient};
+use acbu_reserve_tracker::{
+    AttestationLeaf, ReserveTrackerContract, ReserveTrackerContractClient,
+};
 use shared::{CurrencyCode, ReserveData, DECIMALS};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
-    Address, Env,
+    vec, Address, Bytes, BytesN, Env,
 };
 
 // ── Mock contracts in isolated modules to prevent symbol-name collisions ──────
@@ -326,5 +328,311 @@ fn test_update_reserve_without_admin_auth_fails() {
     assert!(
         result.is_err(),
         "update_reserve must reject callers that are not the admin"
+    );
+}
+
+// ── Merkle-root attestation (SC-015) helpers ──────────────────────────────────
+
+/// Mirror of the contract's `hash_leaf` – serialises and keccak256-hashes
+/// an `AttestationLeaf` in the same deterministic format.
+fn hash_leaf_test(env: &Env, leaf: &AttestationLeaf) -> BytesN<32> {
+    let mut buf = Bytes::new(env);
+    let code = leaf.currency.code();
+    let code_buf = code.to_buffer();
+    let code_len = code.len() as usize;
+    buf.extend_from_slice(&code_buf[..code_len]);
+    buf.extend_from_slice(&leaf.amount.to_be_bytes()[..]);
+    buf.extend_from_slice(&leaf.value_usd.to_be_bytes()[..]);
+    buf.extend_from_slice(&leaf.timestamp.to_be_bytes()[..]);
+    env.crypto().keccak256(&buf)
+}
+
+/// Hash a parent node from its two children (left || right).
+fn hash_pair(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
+    let mut buf = Bytes::new(env);
+    buf.extend_from_slice(&left.to_buffer()[..]);
+    buf.extend_from_slice(&right.to_buffer()[..]);
+    env.crypto().keccak256(&buf)
+}
+
+// ── Merkle-root attestation (SC-015) tests ────────────────────────────────────
+
+#[test]
+fn test_set_custodian_by_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let custodian = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let token = env.register_contract(None, MockToken);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &oracle, &token, &10_000i128);
+    client.set_custodian(&custodian);
+
+    assert_eq!(client.get_custodian(), custodian);
+}
+
+#[test]
+fn test_set_custodian_without_admin_auth_fails() {
+    let env = Env::default();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let token = env.register_contract(None, MockToken);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle, &token, &10_000i128);
+
+    let custodian = Address::generate(&env);
+
+    use soroban_sdk::testutils::MockAuth;
+    use soroban_sdk::testutils::MockAuthInvoke;
+    use soroban_sdk::IntoVal;
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "set_custodian",
+            args: (custodian.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_set_custodian(&custodian);
+    assert!(
+        result.is_err(),
+        "set_custodian must reject callers that are not the admin"
+    );
+}
+
+#[test]
+fn test_submit_attestation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 42);
+
+    let admin = Address::generate(&env);
+    let custodian = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let token = env.register_contract(None, MockToken);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &oracle, &token, &10_000i128);
+    client.set_custodian(&custodian);
+
+    let leaf = AttestationLeaf {
+        currency: CurrencyCode::new(&env, "NGN"),
+        amount: 1000,
+        value_usd: 5 * DECIMALS,
+        timestamp: 1,
+    };
+    let root = hash_leaf_test(&env, &leaf);
+    client.submit_attestation(&root);
+
+    let (stored_root, stored_ts) = client.get_latest_attestation();
+    assert_eq!(stored_root, root);
+    assert_eq!(stored_ts, 42);
+}
+
+#[test]
+fn test_submit_attestation_without_custodian_identity_fails() {
+    let env = Env::default();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let custodian = Address::generate(&env);
+    let impersonator = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let token = env.register_contract(None, MockToken);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &oracle, &token, &10_000i128);
+    client.set_custodian(&custodian);
+
+    let root = BytesN::from_array(&env, &[0u8; 32]);
+
+    // Only impersonator auth is provided – submit_attestation must reject it
+    // because the contract will call `custodian.require_auth()` which the
+    // impersonator is not authorised for.
+    env.mock_auths(&[]);
+    let result = client.try_submit_attestation(&root);
+    assert!(
+        result.is_err(),
+        "submit_attestation must reject callers that are not the custodian"
+    );
+}
+
+#[test]
+fn test_verify_merkle_proof_valid() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let custodian = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let token = env.register_contract(None, MockToken);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &oracle, &token, &10_000i128);
+    client.set_custodian(&custodian);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let kes = CurrencyCode::new(&env, "KES");
+    let eur = CurrencyCode::new(&env, "EUR");
+    let gbp = CurrencyCode::new(&env, "GBP");
+
+    let leaf0 = AttestationLeaf {
+        currency: ngn,
+        amount: 1000,
+        value_usd: 5 * DECIMALS,
+        timestamp: 1,
+    };
+    let leaf1 = AttestationLeaf {
+        currency: kes,
+        amount: 2000,
+        value_usd: 5 * DECIMALS,
+        timestamp: 1,
+    };
+    let leaf2 = AttestationLeaf {
+        currency: eur,
+        amount: 1500,
+        value_usd: 3 * DECIMALS,
+        timestamp: 1,
+    };
+    let leaf3 = AttestationLeaf {
+        currency: gbp,
+        amount: 800,
+        value_usd: 2 * DECIMALS,
+        timestamp: 1,
+    };
+
+    // Build a 4-leaf tree manually
+    let h0 = hash_leaf_test(&env, &leaf0);
+    let h1 = hash_leaf_test(&env, &leaf1);
+    let h2 = hash_leaf_test(&env, &leaf2);
+    let h3 = hash_leaf_test(&env, &leaf3);
+
+    let h01 = hash_pair(&env, &h0, &h1);
+    let h23 = hash_pair(&env, &h2, &h3);
+    let root = hash_pair(&env, &h01, &h23);
+
+    // Custodian submits the root
+    client.submit_attestation(&root);
+
+    // Verify leaf 0 (index=0): proof = [h1, h23]
+    let proof = vec![&env, h1.clone(), h23.clone()];
+    assert!(client.verify_merkle_proof(&leaf0, &proof, &0u32));
+
+    // Verify leaf 3 (index=3): proof = [h2, h01]
+    let proof3 = vec![&env, h2.clone(), h01.clone()];
+    assert!(client.verify_merkle_proof(&leaf3, &proof3, &3u32));
+}
+
+#[test]
+fn test_verify_merkle_proof_invalid_proof_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let custodian = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let token = env.register_contract(None, MockToken);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &oracle, &token, &10_000i128);
+    client.set_custodian(&custodian);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let leaf = AttestationLeaf {
+        currency: ngn,
+        amount: 1000,
+        value_usd: 5 * DECIMALS,
+        timestamp: 1,
+    };
+    let root = hash_leaf_test(&env, &leaf);
+    client.submit_attestation(&root);
+
+    // Wrong proof: a sibling that doesn't match the stored root
+    let mut fake_buf = Bytes::new(&env);
+    fake_buf.extend_from_slice(&[0xabu8; 32]);
+    let fake_sibling = env.crypto().keccak256(&fake_buf);
+    let bad_proof = vec![&env, fake_sibling];
+
+    let result = client.try_verify_merkle_proof(&leaf, &bad_proof, &0u32);
+    assert!(
+        result.is_err(),
+        "verify_merkle_proof must panic with InvalidMerkleProof for a bad proof"
+    );
+}
+
+#[test]
+fn test_verify_merkle_proof_no_attestation_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    let admin = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let token = env.register_contract(None, MockToken);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &oracle, &token, &10_000i128);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let leaf = AttestationLeaf {
+        currency: ngn,
+        amount: 1000,
+        value_usd: 5 * DECIMALS,
+        timestamp: 1,
+    };
+    let proof = vec![&env];
+
+    let result = client.try_verify_merkle_proof(&leaf, &proof, &0u32);
+    assert!(
+        result.is_err(),
+        "verify_merkle_proof must panic with AttestationNotFound when no root exists"
+    );
+}
+
+#[test]
+fn test_get_latest_attestation_before_submit_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = env.register_contract(None, MockOracle);
+    let token = env.register_contract(None, MockToken);
+
+    let contract_id = env.register_contract(None, ReserveTrackerContract);
+    let client = ReserveTrackerContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &oracle, &token, &10_000i128);
+
+    let result = client.try_get_latest_attestation();
+    assert!(
+        result.is_err(),
+        "get_latest_attestation must panic when no attestation has been submitted"
     );
 }
