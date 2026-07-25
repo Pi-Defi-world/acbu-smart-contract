@@ -267,9 +267,6 @@ impl core::fmt::Display for ContractError {
             ContractError::InsufficientBalance => write!(f, "insufficient balance"),
             ContractError::InvalidRecipient => write!(f, "invalid recipient"),
             ContractError::InvalidVersion => write!(f, "invalid version"),
-            ContractError::NoPendingAdmin => write!(f, "no pending admin"),
-            ContractError::AdminTimelockNotElapsed => write!(f, "admin timelock not elapsed"),
-            ContractError::NoPendingAdminToCancel => write!(f, "no pending admin to cancel"),
             ContractError::Unknown => write!(f, "unknown error"),
         }
     }
