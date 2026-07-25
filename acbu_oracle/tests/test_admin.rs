@@ -5,7 +5,7 @@ use soroban_sdk::{
     Address, Env, IntoVal, Map, Vec,
 };
 
-use crate::{OracleContract, OracleContractClient, ADMIN_TIMELOCK_SECONDS};
+use acbu_oracle::{OracleContract, OracleContractClient, ADMIN_TIMELOCK_SECONDS};
 use shared::CurrencyCode;
 
 fn make_env() -> Env {
@@ -21,7 +21,6 @@ fn dummy_currencies(env: &Env) -> (Vec<CurrencyCode>, Map<CurrencyCode, i128>) {
     (currencies, weights)
 }
 
-/// Advance the ledger timestamp by `delta` seconds.
 fn advance_time(env: &Env, delta: u64) {
     let now = env.ledger().timestamp();
     env.ledger().set(LedgerInfo {
@@ -54,8 +53,6 @@ fn setup() -> (Env, Address, OracleContractClient<'static>) {
     (env, admin, client)
 }
 
-// ─── happy path ──────────────────────────────────────────────────────────────
-
 #[test]
 fn test_transfer_and_accept_after_timelock() {
     let (env, _admin, client) = setup();
@@ -63,18 +60,16 @@ fn test_transfer_and_accept_after_timelock() {
 
     env.mock_all_auths();
 
-    // Step 1 – initiate
     client.transfer_admin(&new_admin);
-    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()), "client.get_pending_admin() should equal Some(new_admin.clone())");
 
     let eta = client.get_pending_admin_eligible_at().unwrap();
-    assert_eq!(eta, env.ledger().timestamp() + ADMIN_TIMELOCK_SECONDS);
+    assert_eq!(eta, env.ledger().timestamp() + ADMIN_TIMELOCK_SECONDS, "eta should equal env.ledger().timestamp() + ADMIN_TIMELOCK_SECONDS");
 
-    // Step 2 – advance past timelock and accept
     advance_time(&env, ADMIN_TIMELOCK_SECONDS + 1);
     client.accept_admin();
 
-    assert_eq!(client.get_admin(), new_admin);
+    assert_eq!(client.get_admin(), new_admin, "client.get_admin() should equal new_admin");
     assert!(client.get_pending_admin().is_none());
     assert!(client.get_pending_admin_eligible_at().is_none());
 }
@@ -89,7 +84,6 @@ fn test_cancel_clears_pending_state() {
     client.cancel_admin_transfer();
 
     assert!(client.get_pending_admin().is_none());
-    // Original admin unchanged
     assert_ne!(client.get_admin(), new_admin);
 }
 
@@ -101,16 +95,13 @@ fn test_replace_pending_nomination() {
 
     env.mock_all_auths();
     client.transfer_admin(&wrong_addr);
-    // Correct the mistake before timelock expires
     client.transfer_admin(&correct_addr);
-    assert_eq!(client.get_pending_admin(), Some(correct_addr.clone()));
+    assert_eq!(client.get_pending_admin(), Some(correct_addr.clone()), "client.get_pending_admin() should equal Some(correct_addr.clone())");
 
     advance_time(&env, ADMIN_TIMELOCK_SECONDS + 1);
     client.accept_admin();
-    assert_eq!(client.get_admin(), correct_addr);
+    assert_eq!(client.get_admin(), correct_addr, "client.get_admin() should equal correct_addr");
 }
-
-// ─── sad paths ───────────────────────────────────────────────────────────────
 
 #[test]
 #[should_panic(expected = "#7009")]
@@ -182,7 +173,6 @@ fn test_accept_before_timelock_panics() {
 
     env.mock_all_auths();
     client.transfer_admin(&new_admin);
-    // Do NOT advance time → should panic
     client.accept_admin();
 }
 
@@ -208,7 +198,6 @@ fn test_transfer_admin_requires_current_admin_auth() {
     let attacker = Address::generate(&env);
     let victim = Address::generate(&env);
 
-    // Only mock auth for the attacker (not the real admin) → should panic
     env.mock_auths(&[soroban_sdk::testutils::MockAuth {
         address: &attacker,
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
@@ -221,7 +210,6 @@ fn test_transfer_admin_requires_current_admin_auth() {
     client.transfer_admin(&victim);
 }
 
-// Single vs multiple submission optimization
 #[test]
 fn test_update_rate_single_submission() {
     let (env, _admin, client) = setup();

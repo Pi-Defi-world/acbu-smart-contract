@@ -27,6 +27,45 @@ fn mint(env: &Env, token: &Address, recipient: &Address, amount: i128) {
     soroban_sdk::token::StellarAssetClient::new(env, token).mint(recipient, &amount);
 }
 
+#[test]
+#[should_panic(expected = "Error(Contract, #3002)")]
+fn test_create_zero_amount_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, _token, _cid, client) = setup(&env);
+    let payer = Address::generate(&env);
+    let payee = Address::generate(&env);
+
+    client.create(&payer, &payee, &0i128, &1u64);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3017)")]
+fn test_create_self_escrow_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, acbu_token, _cid, client) = setup(&env);
+    let payer = Address::generate(&env);
+    let amount = 10_000_000i128;
+
+    mint(&env, &acbu_token, &payer, amount);
+    client.create(&payer, &payer, &amount, &2u64);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3003)")]
+fn test_release_missing_escrow_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, _token, _cid, client) = setup(&env);
+    let payer = Address::generate(&env);
+
+    client.release(&7u64, &payer);
+}
+
 // ── Create edge cases ─────────────────────────────────────────────────────────
 
 #[test]
@@ -149,10 +188,10 @@ fn test_same_payer_different_ids_are_independent() {
     let token = soroban_sdk::token::Client::new(&env, &acbu_token);
 
     client.release(&1u64, &payer);
-    assert_eq!(token.balance(&payee), amount);
+    assert_eq!(token.balance(&payee), amount, "token.balance(&payee) should equal amount");
 
     client.release(&2u64, &payer);
-    assert_eq!(token.balance(&payee), amount * 2);
+    assert_eq!(token.balance(&payee), amount * 2, "token.balance(&payee) should equal amount * 2");
 }
 
 // ── Non-admin refund must fail ────────────────────────────────────────────────
@@ -216,7 +255,7 @@ fn test_unpause_restores_create_and_release() {
     client.release(&escrow_id, &payer);
 
     let token = soroban_sdk::token::Client::new(&env, &acbu_token);
-    assert_eq!(token.balance(&payee), amount);
+    assert_eq!(token.balance(&payee), amount, "token.balance(&payee) should equal amount");
 }
 
 // ── Payer receives full amount after refund ───────────────────────────────────
@@ -306,9 +345,9 @@ fn test_escrow_expiration_and_self_refund() {
 
     // Payer can self-refund after expiry
     let token = soroban_sdk::token::Client::new(&env, &acbu_token);
-    assert_eq!(token.balance(&payer), 0);
+    assert_eq!(token.balance(&payer), 0, "token.balance(&payer) should equal 0");
 
     // Refund can be executed now
     client.refund(&escrow_id, &payer);
-    assert_eq!(token.balance(&payer), amount);
+    assert_eq!(token.balance(&payer), amount, "token.balance(&payer) should equal amount");
 }

@@ -175,7 +175,7 @@ fn test_mint_usdc_verify_reserves_burn_to_fiat() {
     // Verify user received ACBU
     let acbu_client = TokenClient::new(&env, &acbu_token);
     let user_acbu_balance = acbu_client.balance(&user);
-    assert_eq!(user_acbu_balance, acbu_minted);
+    assert_eq!(user_acbu_balance, acbu_minted, "user_acbu_balance should equal acbu_minted");
 
     // ═══════════════════════════════════════════════════════════════════════
     // STEP 2: Verify reserves are sufficient
@@ -250,7 +250,7 @@ fn test_mint_from_basket_burn_to_basket() {
     let proof_id = soroban_sdk::String::from_str(&env, "proof_123");
 
     let minted = minting_client.mint_from_basket(&user, &user, &acbu_amount, &proof_id);
-    assert_eq!(minted, acbu_amount);
+    assert_eq!(minted, acbu_amount, "minted should equal acbu_amount");
 
     // Verify S-tokens were transferred to vault
     let ngn_client = TokenClient::new(&env, &ngn_token);

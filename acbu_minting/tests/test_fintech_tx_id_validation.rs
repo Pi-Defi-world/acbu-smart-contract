@@ -31,7 +31,10 @@ use soroban_sdk::{
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
 mod oracle_mock {
-    use super::*;
+    use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
+
+    use shared::CurrencyCode;
+    use super::DECIMALS;
 
     #[contract]
     pub struct MockOracle;
@@ -60,7 +63,7 @@ mod oracle_mock {
 }
 
 mod reserve_mock {
-    use super::*;
+    use soroban_sdk::{contract, contractimpl, Env};
 
     #[contract]
     pub struct MockReserveTracker;
@@ -108,17 +111,19 @@ impl Harness {
             &contract_id,
         );
 
-        client.initialize(
-            &admin,
-            &oracle,
-            &reserve_tracker,
-            &acbu_token,
-            &usdc_token,
-            &admin, // vault
-            &admin, // treasury
-            &50i128,
-            &100i128,
-        );
+        let config = acbu_minting::MintingConfig {
+            admin: admin.clone(),
+            oracle: oracle.clone(),
+            reserve_tracker: reserve_tracker.clone(),
+            acbu_token: acbu_token.clone(),
+            usdc_token: usdc_token.clone(),
+            vault: admin.clone(),
+            treasury: admin.clone(),
+            fee_rate_bps: 50,
+            fee_single_bps: 100,
+            operator: admin.clone(),
+        };
+        client.initialize(&config);
 
         client.set_operator(&operator);
 
@@ -585,11 +590,11 @@ fn test_length_boundary_64_vs_65() {
     let h = Harness::new();
 
     let id_64 = "A234567890123456789012345678901234567890123456789012345678901234";
-    assert_eq!(id_64.len(), 64);
+    assert_eq!(id_64.len(), 64, "id_64.len() should equal 64");
     assert!(h.try_mint(id_64), "64-char ID must be accepted");
 
     let id_65 = "A2345678901234567890123456789012345678901234567890123456789012345";
-    assert_eq!(id_65.len(), 65);
+    assert_eq!(id_65.len(), 65, "id_65.len() should equal 65");
     assert!(!h.try_mint(id_65), "65-char ID must be rejected");
 }
 

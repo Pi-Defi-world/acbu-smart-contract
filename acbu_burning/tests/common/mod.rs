@@ -222,6 +222,7 @@ impl MockACBUToken {
     }
 }
 
+#[allow(dead_code)]
 pub struct TestContext {
     pub env: Env,
     pub admin: Address,

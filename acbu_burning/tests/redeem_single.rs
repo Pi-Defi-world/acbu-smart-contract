@@ -4,7 +4,7 @@
 mod common;
 use common::{create_stoken, setup_test};
 use shared::{CurrencyCode, BASIS_POINTS, DECIMALS};
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env};
 
 #[test]
 fn test_redeem_single_success() {
@@ -38,9 +38,9 @@ fn test_redeem_single_success() {
     let net_acbu = burn_amount - expected_fee;
     let expected_out = (net_acbu * acbu_rate) / ngn_rate;
 
-    assert_eq!(out, expected_out);
-    assert_eq!(stoken_client.balance(&recipient), expected_out);
-    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0);
+    assert_eq!(out, expected_out, "out should equal expected_out");
+    assert_eq!(stoken_client.balance(&recipient), expected_out, "stoken_client.balance(&recipient) should equal expected_out");
+    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
 }
 
 #[test]
@@ -71,8 +71,8 @@ fn test_redeem_single_fee_calculation() {
 
     // Verify fee: 2% of 100 * DECIMALS = 2 * DECIMALS
     let expected_out = 98 * DECIMALS;
-    assert_eq!(out, expected_out);
-    assert_eq!(stoken_client.balance(&recipient), expected_out);
+    assert_eq!(out, expected_out, "out should equal expected_out");
+    assert_eq!(stoken_client.balance(&recipient), expected_out, "stoken_client.balance(&recipient) should equal expected_out");
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn test_redeem_single_self_redeem() {
         .burning
         .redeem_single(&ctx.user, &ctx.user, &burn_amount, &currency);
     assert!(out > 0);
-    assert_eq!(stoken_client.balance(&ctx.user), out);
+    assert_eq!(stoken_client.balance(&ctx.user), out, "stoken_client.balance(&ctx.user) should equal out");
 }
 
 #[test]
@@ -112,7 +112,7 @@ fn test_redeem_single_zero_amount() {
     let currency = CurrencyCode::new(&env, "NGN");
     let recipient = Address::generate(&env);
 
-    let (stoken_id, _, stoken_sac) = create_stoken(&env, &ctx.admin);
+    let (stoken_id, _, _stoken_sac) = create_stoken(&env, &ctx.admin);
     ctx.oracle.set_stoken(&currency, &stoken_id);
 
     let ts = env.ledger().timestamp();
@@ -230,10 +230,10 @@ fn test_redeem_single_multiple_calls() {
     assert!(out2 > 0);
 
     // Total stoken received
-    assert_eq!(stoken_client.balance(&recipient), out1 + out2);
+    assert_eq!(stoken_client.balance(&recipient), out1 + out2, "stoken_client.balance(&recipient) should equal out1 + out2");
 
     // User balance should be 0
-    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0);
+    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
 }
 
 #[test]
@@ -263,7 +263,7 @@ fn test_redeem_single_exact_min_amount() {
         .redeem_single(&ctx.user, &recipient, &min_amount, &currency);
 
     assert!(out > 0);
-    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0);
+    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
 }
 
 #[test]
@@ -294,5 +294,44 @@ fn test_redeem_single_large_amount() {
         .redeem_single(&ctx.user, &recipient, &burn_amount, &currency);
 
     assert!(out > 0);
-    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0);
+    assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn test_redeem_single_stale_acbu_rate() {
+    let env = Env::default();
+    let ctx = setup_test(&env);
+
+    let currency = CurrencyCode::new(&env, "NGN");
+
+    // Advance ledger past staleness threshold (UPDATE_INTERVAL_SECONDS = 21,600)
+    env.ledger().with_mut(|l| l.timestamp = 100_000);
+
+    // ACBU rate timestamp is stale (0) → first oracle staleness check fails
+    ctx.oracle.set_acbu_rate(&DECIMALS, &0);
+
+    let recipient = Address::generate(&env);
+    ctx.burning
+        .redeem_single(&ctx.user, &recipient, &(100 * DECIMALS), &currency);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn test_redeem_single_stale_currency_rate() {
+    let env = Env::default();
+    let ctx = setup_test(&env);
+
+    let currency = CurrencyCode::new(&env, "NGN");
+
+    // Advance ledger past staleness threshold
+    env.ledger().with_mut(|l| l.timestamp = 100_000);
+
+    // ACBU rate is fresh (matches ledger) so first check passes
+    ctx.oracle.set_acbu_rate(&DECIMALS, &100_000);
+
+    // Currency rate timestamp is unset → defaults to 0 in mock → stale
+    let recipient = Address::generate(&env);
+    ctx.burning
+        .redeem_single(&ctx.user, &recipient, &(100 * DECIMALS), &currency);
 }

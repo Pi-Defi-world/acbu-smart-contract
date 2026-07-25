@@ -17,24 +17,24 @@ Soroban (Stellar) smart contracts for the ACBU (African Currency Basket Unit) st
 
 ## Building
 
+You can use the new `Makefile` for common commands.
+
 ```bash
 # Build all contracts in the workspace
-cargo build --target wasm32-unknown-unknown --release
+make build
 
-# Build specific contract
-cd acbu_minting
-cargo build --target wasm32-unknown-unknown --release
+# Build a specific contract
+make build-minting
 ```
 
 ## Testing
 
 ```bash
 # Run all tests in the workspace
-cargo test
+make test
 
-# Run tests for specific contract
-cd acbu_minting
-cargo test
+# Run tests for a specific contract
+make test-minting
 ```
 
 ## Deployment
@@ -43,20 +43,22 @@ cargo test
 
 ```bash
 export STELLAR_SECRET_KEY="your-secret-key"
-./scripts/deploy_testnet.sh
+make deploy-testnet
 ```
 
 ### Mainnet
 
 ```bash
 export STELLAR_SECRET_KEY="your-secret-key"
-./scripts/deploy_mainnet.sh
+make deploy-mainnet
 ```
 
-**Warning:** Only deploy to mainnet after:
-1. Testing on testnet
-2. Security audit completion
-3. Backup of secret keys
+## Git Hooks Setup
+
+After cloning, run:
+```bash
+make setup-hooks
+```
 
 ## Contract Addresses
 
