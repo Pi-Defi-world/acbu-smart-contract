@@ -157,7 +157,7 @@ impl BurningContract {
             &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
             vec![&env],
         );
-        if current_time > oracle_timestamp.saturating_add(UPDATE_INTERVAL_SECONDS) {
+        if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
             env.panic_with_error(ContractError::OracleError);
         }
 
@@ -166,7 +166,7 @@ impl BurningContract {
             &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
             vec![&env, currency.clone().into_val(&env)],
         );
-        if current_time > rate_timestamp.saturating_add(UPDATE_INTERVAL_SECONDS) {
+        if !check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS) {
             env.panic_with_error(ContractError::OracleError);
         }
 
@@ -260,13 +260,12 @@ impl BurningContract {
             .get(&DATA_KEY.reserve_tracker)
             .unwrap();
 
-        let current_time = env.ledger().timestamp();
         let (acbu_rate, oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
             &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
             vec![&env],
         );
-        if current_time > oracle_timestamp.saturating_add(UPDATE_INTERVAL_SECONDS) {
+        if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
             env.panic_with_error(ContractError::OracleError);
         }
         if acbu_rate <= 0 {
@@ -346,7 +345,7 @@ impl BurningContract {
                 &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
                 vec![&env, currency.clone().into_val(&env)],
             );
-            if current_time > rate_timestamp.saturating_add(UPDATE_INTERVAL_SECONDS) {
+            if !check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS) {
                 env.panic_with_error(ContractError::OracleError);
             }
             if rate <= 0 {
