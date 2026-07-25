@@ -860,6 +860,10 @@ impl MintingContract {
         }
         operator.require_auth();
 
+        // C-058: reject contract-type recipients — minting to a contract address
+        // that has no token-receipt logic would permanently strand the funds.
+        assert_recipient_is_account(&recipient);
+
         // C-039: Strict input validation — enforce length bounds and charset
         // before touching any storage, so garbage IDs are rejected cheaply.
         validate_fintech_tx_id(&env, &fintech_tx_id);
