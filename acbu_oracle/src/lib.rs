@@ -665,7 +665,7 @@ impl OracleContract {
             if let Some(weight) = basket_weights.get(currency.clone()) {
                 if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
                     Self::assert_rate_fresh(&env, &rate_data, &currency);
-                    let contribution = (rate_data.rate_usd * weight) / 10_000;
+                    let contribution = (rate_data.rate_usd * weight) / BASIS_POINTS;
                     weighted_sum += contribution;
                     total_weight += weight;
                 }
@@ -676,7 +676,7 @@ impl OracleContract {
             env.panic_with_error(OracleError::RateNotInitialized);
         }
 
-        (weighted_sum * 10_000) / total_weight
+        (weighted_sum * BASIS_POINTS) / total_weight
     }
 
     // ─────────────────────────────────────────────────────────────────────────
