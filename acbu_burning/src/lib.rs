@@ -52,6 +52,13 @@ contractmeta!(key = "version", val = "1");
 /// or malicious transfer.
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PauseEvent {
+    pub admin: Address,
+    pub timestamp: u64,
+}
+
 #[contract]
 pub struct BurningContract;
 
@@ -500,6 +507,29 @@ impl BurningContract {
         env.storage().instance().get(&DATA_KEY.admin).unwrap()
     }
 
+    /// Pause the contract, disabling all redemption operations (admin only).
+    pub fn pause(env: Env) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Paused);
+        let event = PauseEvent {
+            admin,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events().publish((symbol_short!("paused"),), event);
+    }
+
+    /// Unpause the contract, re-enabling redemption operations (admin only).
+    pub fn unpause(env: Env) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
+        let event = PauseEvent {
+            admin,
+            timestamp: env.ledger().timestamp(),
+        };
+        env.events().publish((symbol_short!("unpaused"),), event);
+    }
 
     /// Returns the pending admin address if a transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
