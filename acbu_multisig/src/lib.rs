@@ -267,6 +267,9 @@ impl MultisigContract {
         if env.ledger().timestamp() > proposal.expires_at {
             env.panic_with_error(Error::Expired);
         }
+        for addr in proposal.approvals.iter() {
+            Self::assert_is_signer(&env, &addr, &config);
+        }
         if proposal.approvals.len() < config.threshold {
             env.panic_with_error(Error::ThresholdNotMet);
         }
