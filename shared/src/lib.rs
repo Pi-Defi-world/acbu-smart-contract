@@ -210,6 +210,55 @@ pub struct OutlierDetectionEvent {
     pub timestamp: u64,
 }
 
+/// A single validator's emergency-bypass vote for a currency pair.
+///
+/// When a validator submits a rate that exceeds the per-currency emergency
+/// threshold it is recorded here.  Once `min_signatures` validators have cast
+/// votes, the time-lock bypass is granted and the pending votes are cleared.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EmergencyVote {
+    /// The validator who submitted the candidate rate.
+    pub validator: Address,
+    /// The proposed rate (7 decimals).
+    pub rate: i128,
+    /// Ledger timestamp of the submission (used to expire stale votes).
+    pub timestamp: u64,
+}
+
+/// Per-currency emergency bypass configuration stored in oracle instance storage.
+///
+/// Allows operators to tune the threshold per currency pair so that naturally
+/// more-volatile currencies (e.g. ZWL, SSP) do not trigger false-positive
+/// emergency bypasses while still catching genuine crises in stable pairs.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EmergencyConfig {
+    /// Deviation in basis points that triggers an emergency vote.
+    /// Defaults to [`EMERGENCY_THRESHOLD_BPS`] (500 bps = 5 %).
+    pub threshold_bps: i128,
+}
+
+/// Event emitted when an emergency vote is cast (validator requests bypass).
+#[contracttype]
+pub struct EmergencyVoteCastEvent {
+    pub currency: CurrencyCode,
+    pub validator: Address,
+    pub rate: i128,
+    pub vote_count: u32,
+    pub required: u32,
+    pub timestamp: u64,
+}
+
+/// Event emitted when enough emergency votes accumulate and the bypass fires.
+#[contracttype]
+pub struct EmergencyBypassEvent {
+    pub currency: CurrencyCode,
+    pub new_rate: i128,
+    pub vote_count: u32,
+    pub timestamp: u64,
+}
+
 /// Error types for the **burning** contract (and any crate that re-uses this enum).
 ///
 /// Numeric codes are stable for client UX; see `docs/ERROR_CODES.md` in the workspace root.
