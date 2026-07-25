@@ -7,10 +7,6 @@ use soroban_sdk::{
 
 use shared::{calculate_fee, ContractPhase, DataKey as SharedDataKey, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION};
 
-mod shared {
-    pub use shared::*;
-}
-
 // ---------------------------------------------------------------------------
 // Error codes
 // ---------------------------------------------------------------------------
