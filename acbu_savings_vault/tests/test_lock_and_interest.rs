@@ -21,6 +21,7 @@
 #![cfg(test)]
 
 use acbu_savings_vault::{SavingsVault, SavingsVaultClient, WithdrawEvent};
+use shared::BASIS_POINTS;
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger},
@@ -30,13 +31,12 @@ use soroban_sdk::{
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 const SECONDS_PER_YEAR: u64 = 31_536_000;
-const BASIS_POINTS: i128 = 10_000;
 
 /// Compute the expected yield using the same formula as the contract:
 ///   principal * yield_rate_bps * elapsed_seconds / (BASIS_POINTS * SECONDS_PER_YEAR)
 fn expected_yield(principal: i128, yield_rate_bps: i128, elapsed_seconds: u64) -> i128 {
-    let elapsed = elapsed_seconds as i128;
-    principal * yield_rate_bps * elapsed / (BASIS_POINTS * SECONDS_PER_YEAR as i128)
+    let elapsed = i128::from(elapsed_seconds);
+    principal * yield_rate_bps * elapsed / (BASIS_POINTS * i128::from(SECONDS_PER_YEAR))
 }
 
 struct Harness {
@@ -142,7 +142,7 @@ fn test_withdraw_before_term_fails() {
     );
 
     // Principal must still be intact.
-    assert_eq!(h.client.get_balance(&h.user, &term), amount);
+    assert_eq!(h.client.get_balance(&h.user, &term), amount, "h.client.get_balance(&h.user, &term) should equal amount");
 }
 
 // ── 2. Withdraw at exact term boundary succeeds ───────────────────────────────
@@ -160,8 +160,8 @@ fn test_withdraw_at_exact_term_boundary_succeeds() {
     h.advance_time(term);
 
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount);
-    assert_eq!(h.client.get_balance(&h.user, &term), 0);
+    assert_eq!(h.user_balance(), amount, "h.user_balance() should equal amount");
+    assert_eq!(h.client.get_balance(&h.user, &term), 0, "h.client.get_balance(&h.user, &term) should equal 0");
 }
 
 // ── 3. Withdraw 1 second before term boundary fails ───────────────────────────
@@ -205,10 +205,10 @@ fn test_interest_accrues_proportionally_to_elapsed_time() {
     let exp_yield = expected_yield(principal, yield_rate_bps, elapsed);
     h.mint_to_vault(exp_yield); // vault needs balance to pay yield
 
-    assert_eq!(h.client.get_pending_yield(&h.user, &term), exp_yield);
+    assert_eq!(h.client.get_pending_yield(&h.user, &term), exp_yield, "h.client.get_pending_yield(&h.user, &term) should equal exp_yield");
 
     h.client.withdraw(&h.user, &term, &principal);
-    assert_eq!(h.user_balance(), principal + exp_yield);
+    assert_eq!(h.user_balance(), principal + exp_yield, "h.user_balance() should equal principal + exp_yield");
 }
 
 /// Deposit for 6 months at 10% APR; verify yield is half of annual.
@@ -230,7 +230,7 @@ fn test_interest_at_six_months_is_half_annual() {
     h.mint_to_vault(exp_yield);
 
     h.client.withdraw(&h.user, &term, &principal);
-    assert_eq!(h.user_balance(), principal + exp_yield);
+    assert_eq!(h.user_balance(), principal + exp_yield, "h.user_balance() should equal principal + exp_yield");
 }
 
 // ── 5. Zero yield rate → no interest paid ────────────────────────────────────
@@ -246,10 +246,10 @@ fn test_zero_yield_rate_pays_no_interest() {
 
     h.advance_time(term);
 
-    assert_eq!(h.client.get_pending_yield(&h.user, &term), 0);
+    assert_eq!(h.client.get_pending_yield(&h.user, &term), 0, "h.client.get_pending_yield(&h.user, &term) should equal 0");
 
     h.client.withdraw(&h.user, &term, &principal);
-    assert_eq!(h.user_balance(), principal); // exactly principal, no yield
+    assert_eq!(h.user_balance(), principal, "h.user_balance() should equal principal"); // exactly principal, no yield
 }
 
 // ── 6. Multiple terms are independent ────────────────────────────────────────
@@ -273,7 +273,7 @@ fn test_multiple_terms_are_independent() {
 
     // Short term is unlocked.
     h.client.withdraw(&h.user, &short_term, &short_amount);
-    assert_eq!(h.client.get_balance(&h.user, &short_term), 0);
+    assert_eq!(h.client.get_balance(&h.user, &short_term), 0, "h.client.get_balance(&h.user, &short_term) should equal 0");
 
     // Long term is still locked.
     let result = h.client.try_withdraw(&h.user, &long_term, &long_amount);
@@ -281,7 +281,7 @@ fn test_multiple_terms_are_independent() {
         result.is_err(),
         "Long-term deposit must still be locked after short term elapses"
     );
-    assert_eq!(h.client.get_balance(&h.user, &long_term), long_amount);
+    assert_eq!(h.client.get_balance(&h.user, &long_term), long_amount, "h.client.get_balance(&h.user, &long_term) should equal long_amount");
 }
 
 // ── 7. Paused contract rejects deposit and withdraw ──────────────────────────
@@ -327,7 +327,7 @@ fn test_unpause_restores_withdraw() {
 
     // Should succeed after unpause.
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount);
+    assert_eq!(h.user_balance(), amount, "h.user_balance() should equal amount");
 }
 
 // ── 8. Deposit with zero amount is rejected ───────────────────────────────────
@@ -364,7 +364,7 @@ fn test_full_withdrawal_clears_lots() {
     h.client.withdraw(&h.user, &term, &amount);
 
     // Balance must be zero after full withdrawal.
-    assert_eq!(h.client.get_balance(&h.user, &term), 0);
+    assert_eq!(h.client.get_balance(&h.user, &term), 0, "h.client.get_balance(&h.user, &term) should equal 0");
 }
 
 // ── 11. Partial withdrawal leaves correct remainder ───────────────────────────
@@ -391,8 +391,8 @@ fn test_partial_withdrawal_leaves_correct_remainder() {
 
     h.client.withdraw(&h.user, &term, &withdraw_amount);
 
-    assert_eq!(h.user_balance(), withdraw_amount + exp_yield);
-    assert_eq!(h.client.get_balance(&h.user, &term), remaining);
+    assert_eq!(h.user_balance(), withdraw_amount + exp_yield, "h.user_balance() should equal withdraw_amount + exp_yield");
+    assert_eq!(h.client.get_balance(&h.user, &term), remaining, "h.client.get_balance(&h.user, &term) should equal remaining");
 }
 
 // ── 12. Two users are fully isolated ─────────────────────────────────────────
@@ -417,12 +417,12 @@ fn test_two_users_are_isolated() {
     assert_eq!(
         soroban_sdk::token::Client::new(&h.env, &h.acbu_token).balance(&user2),
         amount
-    );
+    , "soroban_sdk::token::Client::new(&h.env, &h.acbu_token).balance(&user2) should equal amount");
 
     // user1's balance is unaffected.
-    assert_eq!(h.client.get_balance(&h.user, &term), amount);
+    assert_eq!(h.client.get_balance(&h.user, &term), amount, "h.client.get_balance(&h.user, &term) should equal amount");
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount);
+    assert_eq!(h.user_balance(), amount, "h.user_balance() should equal amount");
 }
 
 // ── 13. Re-deposit after full withdrawal works correctly ──────────────────────
@@ -438,13 +438,13 @@ fn test_redeposit_after_full_withdrawal() {
     h.client.deposit(&h.user, &amount, &term);
     h.advance_time(term);
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount);
+    assert_eq!(h.user_balance(), amount, "h.user_balance() should equal amount");
 
     // Second cycle — re-deposit the same tokens.
     h.client.deposit(&h.user, &amount, &term);
     h.advance_time(term);
     h.client.withdraw(&h.user, &term, &amount);
-    assert_eq!(h.user_balance(), amount);
+    assert_eq!(h.user_balance(), amount, "h.user_balance() should equal amount");
 }
 
 // ── 14. Fee deducted from gross; net amount earns yield ───────────────────────
@@ -464,7 +464,7 @@ fn test_fee_deducted_and_net_earns_yield() {
     h.client.deposit(&h.user, &gross, &term);
 
     // Admin received the fee immediately.
-    assert_eq!(h.admin_balance(), fee);
+    assert_eq!(h.admin_balance(), fee, "h.admin_balance() should equal fee");
 
     h.advance_time(term);
     let elapsed = h.now() - deposit_ts;
@@ -474,7 +474,7 @@ fn test_fee_deducted_and_net_earns_yield() {
     h.mint_to_vault(exp_yield);
 
     h.client.withdraw(&h.user, &term, &net);
-    assert_eq!(h.user_balance(), net + exp_yield);
+    assert_eq!(h.user_balance(), net + exp_yield, "h.user_balance() should equal net + exp_yield");
 }
 
 // ── 15. WithdrawEvent carries correct yield_amount ────────────────────────────
@@ -516,8 +516,8 @@ fn test_withdraw_event_carries_correct_yield_amount() {
         ev.yield_amount, exp_yield,
         "WithdrawEvent.yield_amount must equal the computed yield (C-051 acceptance check)"
     );
-    assert_eq!(ev.amount, principal);
-    assert_eq!(ev.fee_amount, 0); // no withdraw fee
+    assert_eq!(ev.amount, principal, "ev.amount should equal principal");
+    assert_eq!(ev.fee_amount, 0, "ev.fee_amount should equal 0"); // no withdraw fee
 }
 
 // ── 16. Withdraw more than deposited is rejected ──────────────────────────────
@@ -573,7 +573,7 @@ fn test_one_year_lock_accumulates_full_annual_yield() {
 
     h.mint_to_vault(exp_yield);
     h.client.withdraw(&h.user, &term, &principal);
-    assert_eq!(h.user_balance(), principal + exp_yield);
+    assert_eq!(h.user_balance(), principal + exp_yield, "h.user_balance() should equal principal + exp_yield");
 }
 
 // ── 19. Deposit immediately after term expiry still earns yield ───────────────
@@ -624,7 +624,7 @@ fn test_second_deposit_after_first_term_earns_independent_yield() {
     // Final balance: user started with amount*2, deposited amount twice, got
     // back amount twice, plus yield1 and yield2.
     // = amount*2 + yield1 + yield2
-    assert_eq!(h.user_balance(), amount * 2 + exp_yield1 + exp_yield2);
+    assert_eq!(h.user_balance(), amount * 2 + exp_yield1 + exp_yield2, "h.user_balance() should equal amount * 2 + exp_yield1 + exp_yield2");
 }
 
 // ── 20. get_pending_yield returns 0 before term elapses ───────────────────────
@@ -640,5 +640,5 @@ fn test_pending_yield_is_zero_before_term() {
     h.client.deposit(&h.user, &principal, &term);
 
     // No time has passed — yield should be 0.
-    assert_eq!(h.client.get_pending_yield(&h.user, &term), 0);
+    assert_eq!(h.client.get_pending_yield(&h.user, &term), 0, "h.client.get_pending_yield(&h.user, &term) should equal 0");
 }

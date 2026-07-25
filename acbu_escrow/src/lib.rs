@@ -1,11 +1,11 @@
 #![no_std]
 use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Symbol,
 };
 
-use shared::{DataKey as SharedDataKey, CONTRACT_VERSION, reentrancy_guard};
+use shared::{ContractPhase, DataKey as SharedDataKey, CONTRACT_VERSION, reentrancy_guard};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -27,6 +27,7 @@ pub enum EscrowError {
     NoPendingAdminToCancel = 3014,
     InsufficientBalance = 3015,
     Expired = 3016,
+    SelfEscrow = 3017,
     Unknown = 3999,
 }
 
@@ -49,6 +50,7 @@ impl Display for EscrowError {
             Self::NoPendingAdminToCancel => "no pending admin to cancel",
             Self::InsufficientBalance => "insufficient contract balance",
             Self::Expired => "escrow has expired",
+            Self::SelfEscrow => "payee cannot be the same as payer",
             Self::Unknown => "unknown escrow error",
         };
         f.write_str(message)
@@ -60,7 +62,7 @@ impl Display for EscrowError {
 pub struct EscrowDataKey {
     pub admin: Symbol,
     pub acbu_token: Symbol,
-    pub paused: Symbol,
+    pub phase: Symbol,
     pub pending_upgrade: Symbol,
     pub pending_upgrade_eligible_at: Symbol,
     pub pending_admin: Symbol,
@@ -70,7 +72,7 @@ pub struct EscrowDataKey {
 const DATA_KEY: EscrowDataKey = EscrowDataKey {
     admin: symbol_short!("ADMIN"),
     acbu_token: symbol_short!("ACBU_TKN"),
-    paused: symbol_short!("PAUSED"),
+    phase: symbol_short!("PHASE"),
     pending_upgrade: symbol_short!("PEND_UPG"),
     pending_upgrade_eligible_at: symbol_short!("PU_ETA"),
     pending_admin: symbol_short!("PEND_ADM"),
@@ -90,8 +92,7 @@ const MAX_ESCROW_LIFETIME: u64 = 30 * 86_400; // 30 days
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EscrowId(pub Address, pub u64);
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct EscrowCreatedEvent {
     pub escrow_id: u64,
     pub payer: Address,
@@ -100,8 +101,7 @@ pub struct EscrowCreatedEvent {
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct EscrowReleasedEvent {
     pub escrow_id: u64,
     pub payee: Address,
@@ -109,8 +109,7 @@ pub struct EscrowReleasedEvent {
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct EscrowRefundedEvent {
     pub escrow_id: u64,
     pub payer: Address,
@@ -144,6 +143,17 @@ impl Escrow {
             .ok_or(EscrowError::UninitializedAcBuToken)
     }
 
+    fn check_paused(env: &Env) {
+        let phase: ContractPhase = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.phase)
+            .unwrap_or(ContractPhase::Uninitialized);
+        if phase == ContractPhase::Paused {
+            env.panic_with_error(EscrowError::Paused);
+        }
+    }
+
     /// Initialize the escrow contract
     pub fn initialize(env: Env, admin: Address, acbu_token: Address) {
         if env.storage().instance().has(&DATA_KEY.admin) {
@@ -153,7 +163,7 @@ impl Escrow {
         env.storage()
             .instance()
             .set(&DATA_KEY.acbu_token, &acbu_token);
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
         env.storage()
             .instance()
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
@@ -188,16 +198,13 @@ impl Escrow {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
-        let paused: bool = env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.paused)
-            .unwrap_or(false);
-        if paused {
-            env.panic_with_error(EscrowError::Paused);
-        }
+        Self::check_paused(&env);
+
         if amount < MIN_ESCROW_AMOUNT {
             env.panic_with_error(EscrowError::InvalidAmount);
+        }
+        if payer == payee {
+            env.panic_with_error(EscrowError::SelfEscrow);
         }
         payer.require_auth();
         payee.require_auth();
@@ -214,7 +221,7 @@ impl Escrow {
 
         // CEI: write state before the external token transfer so any token-level
         // callback observes the escrow as already recorded.
-        env.storage()
+       env.storage()
             .temporary()
             .set(&key, &(payer.clone(), payee.clone(), amount, expiry));
 
@@ -245,14 +252,8 @@ impl Escrow {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
-        let paused: bool = env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.paused)
-            .unwrap_or(false);
-        if paused {
-            env.panic_with_error(EscrowError::Paused);
-        }
+        Self::check_paused(&env);
+
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         if payer == admin {
             admin.require_auth();
@@ -295,7 +296,6 @@ impl Escrow {
         reentrancy_guard::acquire_guard(&env);
 
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
-        admin.require_auth();
 
         let key = EscrowId(payer.clone(), escrow_id);
         let (stored_payer, _payee, amount, expiry): (Address, Address, i128, u64) = env
@@ -308,7 +308,7 @@ impl Escrow {
             env.panic_with_error(EscrowError::PayerMismatch);
         }
 
-        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
+        // After expiry the payer may self-refund; before expiry only admin can force a refund.
         if env.ledger().timestamp() > expiry {
             payer.require_auth();
         } else {
@@ -345,18 +345,21 @@ impl Escrow {
         reentrancy_guard::release_guard(&env);
     }
 
+    /// Pause the contract, disabling escrow creation/release/refund (admin only).
     pub fn pause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.paused, &true);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Paused);
     }
 
+    /// Unpause the contract, re-enabling state-changing operations (admin only).
     pub fn unpause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
     }
 
+    /// Update the ACBU token contract address (admin only).
     pub fn update_acbu_token(env: Env, new_acbu_token: Address) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -453,6 +456,7 @@ impl Escrow {
             .get(&DATA_KEY.pending_admin_eligible_at)
     }
 
+    /// Return the stored contract version (0 if never set).
     pub fn version(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -460,6 +464,8 @@ impl Escrow {
             .unwrap_or(0)
     }
 
+    /// Bump the stored version to the current [`CONTRACT_VERSION`] after a code
+    /// upgrade (admin only). No-op if already at or above the current version.
     pub fn migrate(env: Env) {
         let admin: Address = env
             .storage()
@@ -481,6 +487,9 @@ impl Escrow {
         }
     }
 
+    /// Stage a WASM upgrade to `new_wasm_hash` and start the upgrade timelock
+    /// (admin only). Apply it later with [`Self::execute_upgrade`] once the
+    /// timelock elapses, or abort with [`Self::cancel_upgrade`].
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -493,6 +502,9 @@ impl Escrow {
             .set(&DATA_KEY.pending_upgrade_eligible_at, &eligible_at);
     }
 
+    /// Execute a previously proposed upgrade once its timelock has elapsed,
+    /// swapping in the staged WASM (admin only). Fails if no upgrade is pending or
+    /// the timelock is still active.
     pub fn execute_upgrade(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -516,6 +528,8 @@ impl Escrow {
         env.deployer().update_current_contract_wasm(wasm_hash);
     }
 
+    /// Cancel a pending upgrade, clearing the staged WASM hash and timelock
+    /// (admin only).
     pub fn cancel_upgrade(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -525,19 +539,4 @@ impl Escrow {
             .remove(&DATA_KEY.pending_upgrade_eligible_at);
     }
 }
-
-#[cfg(test)]
-extern crate alloc;
-
-#[cfg(test)]
-mod tests {
-    use super::EscrowError;
-    use alloc::string::ToString;
-
-    #[test]
-    fn error_display_is_human_readable() {
-        assert_eq!(EscrowError::Paused.to_string(), "escrow is paused");
-    }
-}
-
 

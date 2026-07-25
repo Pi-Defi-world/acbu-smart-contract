@@ -2,9 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [ main, develop, dev ]
+    branches: [main, develop, dev]
   pull_request:
-    branches: [ main, develop, dev ]
+    branches: [main, develop, dev]
 
 jobs:
   test:
@@ -14,6 +14,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Verify error-code docs are generated
+        run: python scripts/generate_error_codes.py --check
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
@@ -94,7 +97,7 @@ jobs:
 
       - name: Run changed contract tests
         if: github.event_name == 'pull_request' && steps.changed.outputs.workspace != 'true' && steps.changed.outputs.packages != ''
-        run: cargo test ${{ steps.changed.outputs.packages }}
+        run: cargo test ${{ steps.changed.outputs.packages }} -- --nocapture
 
       - name: Skip tests for docs-only PR
         if: github.event_name == 'pull_request' && steps.changed.outputs.workspace != 'true' && steps.changed.outputs.packages == ''
@@ -102,4 +105,4 @@ jobs:
 
       - name: Run all tests
         if: github.event_name != 'pull_request' || steps.changed.outputs.workspace == 'true'
-        run: cargo test --workspace
+        run: cargo test --workspace -- --nocapture
