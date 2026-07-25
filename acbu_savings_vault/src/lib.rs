@@ -789,7 +789,7 @@ impl SavingsVault {
             .storage()
             .instance()
             .get(&DATA_KEY.pending_admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::NoAdmin));
+            .unwrap_or_else(|| env.panic_with_error(Error::NoPendingAdmin));
         pending_admin.require_auth();
 
         let eligible_at: u64 = env
@@ -798,7 +798,7 @@ impl SavingsVault {
             .get(&DATA_KEY.pending_admin_eligible_at)
             .unwrap_or(u64::MAX);
         if env.ledger().timestamp() < eligible_at {
-            env.panic_with_error(Error::TimelockNotElapsed);
+            env.panic_with_error(Error::AdminTimelockNotElapsed);
         }
 
         let old_admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
@@ -823,7 +823,7 @@ impl SavingsVault {
             .storage()
             .instance()
             .get(&DATA_KEY.pending_admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::NoAdmin));
+            .unwrap_or_else(|| env.panic_with_error(Error::NoPendingAdminToCancel));
         env.storage().instance().remove(&DATA_KEY.pending_admin);
         env.storage()
             .instance()
