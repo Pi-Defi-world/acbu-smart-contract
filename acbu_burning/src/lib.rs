@@ -5,11 +5,11 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_fee, reentrancy_guard, BurnEvent, ContractError, ContractPhase, CurrencyCode,
-    DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MIN_BURN_AMOUNT,
-    ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_CURRENCIES,
-    ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT,
-    TOKEN_GET_TOTAL_SUPPLY, UPDATE_INTERVAL_SECONDS,
+    calculate_fee, check_oracle_freshness, reentrancy_guard, BurnEvent, ContractError,
+    ContractPhase, CurrencyCode, DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION,
+    DECIMALS, MIN_BURN_AMOUNT, ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT,
+    ORACLE_GET_CURRENCIES, ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR,
+    RESERVE_IS_SUFFICIENT, TOKEN_GET_TOTAL_SUPPLY, UPDATE_INTERVAL_SECONDS,
 };
 
 #[contracttype]
@@ -318,7 +318,7 @@ impl BurningContract {
         let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token);
         acbu_client.burn(&user, &acbu_amount);
 
-        let mut last_positive_weight_index: Option<usize> = None;
+        let mut last_positive_weight_index: Option<u32> = None;
         for i in 0..weights.len() {
             if weights.get(i).unwrap() > 0 {
                 last_positive_weight_index = Some(i);
