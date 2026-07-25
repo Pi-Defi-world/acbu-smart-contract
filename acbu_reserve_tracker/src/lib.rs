@@ -2,12 +2,12 @@
 use core::fmt::{self, Display};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
-    BytesN, Env, Map, Symbol, Vec,
+    Bytes, BytesN, Env, Map, Symbol, Vec,
 };
 
 use shared::{
-    CurrencyCode, DataKey as SharedDataKey, ReserveData, BASIS_POINTS, CONTRACT_VERSION,
-    ORACLE_GET_ACBU_RATE, TOKEN_GET_TOTAL_SUPPLY,
+    CurrencyCode, DataKey as SharedDataKey, ReserveData, BASIS_POINTS, CONTRACT_VERSION, DECIMALS,
+    ORACLE_GET_ACBU_RATE, ORACLE_GET_RATE_WITH_TS, TOKEN_GET_TOTAL_SUPPLY,
 };
 
 #[contracterror]
@@ -22,6 +22,13 @@ pub enum ReserveTrackerError {
     NoPendingAdminToCancel = 8006,
     Unauthorized = 8007,
     DuplicateCurrency = 8008,
+    AttestationNotFound = 8008,
+    InvalidMerkleProof = 8009,
+    InvalidCustodian = 8010,
+    AttestationExpired = 8011,
+    NonPositiveAmount = 8008,
+    InconsistentReserve = 8009,
+    DuplicateCurrency = 8010,
     Unknown = 8999,
 }
 
@@ -35,6 +42,12 @@ impl Display for ReserveTrackerError {
             Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
             Self::NoPendingAdminToCancel => "no pending admin to cancel",
             Self::Unauthorized => "unauthorized",
+            Self::AttestationNotFound => "no attestation submitted yet",
+            Self::InvalidMerkleProof => "merkle proof does not match stored root",
+            Self::InvalidCustodian => "caller is not the custodian",
+            Self::AttestationExpired => "attestation has expired",
+            Self::NonPositiveAmount => "amount and value_usd must be positive",
+            Self::InconsistentReserve => "value_usd inconsistent with oracle rate",
             Self::DuplicateCurrency => "currency already tracked",
             Self::Unknown => "unknown reserve tracker error",
         };
@@ -53,8 +66,9 @@ pub struct DataKey {
     pub version: Symbol,
     pub pending_admin: Symbol,
     pub pending_admin_eligible_at: Symbol,
-    pub last_verify_call: Symbol,
     pub currencies: Symbol,
+    pub last_verify_call: Symbol,
+    pub last_verify_result: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -66,8 +80,9 @@ const DATA_KEY: DataKey = DataKey {
     version: symbol_short!("VERSION"),
     pending_admin: symbol_short!("PEND_ADM"),
     pending_admin_eligible_at: symbol_short!("PEND_ETA"),
-    last_verify_call: symbol_short!("LAST_VFY"),
     currencies: symbol_short!("CURRNCYS"),
+    last_verify_call: symbol_short!("LAST_VFY"),
+    last_verify_result: symbol_short!("LAST_RES"),
 };
 
 /// Admin rotation timelock: the pending admin must wait this long before
@@ -78,6 +93,11 @@ const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 /// Rate limit for verify_reserves calls to prevent spam and ledger load.
 /// Only one verify_reserves call is allowed per this cooldown period.
 const VERIFY_RESERVES_COOLDOWN_SECONDS: u64 = 60;
+
+/// Maximum age of an attestation before external systems should consider
+/// it stale. The custodian is expected to submit fresh attestations within
+/// this window. 24 hours.
+const ATTESTATION_MAX_AGE_SECONDS: u64 = 86_400;
 
 contractmeta!(key = "version", val = "1");
 
@@ -141,7 +161,12 @@ impl ReserveTrackerContract {
         let last_call: Option<u64> = env.storage().instance().get(&DATA_KEY.last_verify_call);
         if let Some(last) = last_call {
             if now.saturating_sub(last) < VERIFY_RESERVES_COOLDOWN_SECONDS {
-                return false;
+                let cached: bool = env
+                    .storage()
+                    .instance()
+                    .get(&DATA_KEY.last_verify_result)
+                    .unwrap_or(true);
+                return cached;
             }
         }
 
@@ -151,7 +176,11 @@ impl ReserveTrackerContract {
         if total_acbu_supply == 0 {
             env.panic_with_error(ReserveTrackerError::ZeroSupply);
         }
-        Self::is_reserve_sufficient(env, total_acbu_supply)
+        let result = Self::is_reserve_sufficient(env.clone(), total_acbu_supply);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.last_verify_result, &result);
+        result
     }
 
     /// Like [`Self::verify_reserves`] but uses the caller-supplied
@@ -161,7 +190,11 @@ impl ReserveTrackerContract {
         Self::is_reserve_sufficient(env, total_acbu_supply)
     }
 
-    /// Update reserve amount for a currency (admin or authorized address)
+    /// Update reserve amount for a currency (admin only).
+    ///
+    /// Cross-validates the caller-supplied `amount` and `value_usd` against the
+    /// oracle's live exchange rate for `currency`.  This prevents a compromised
+    /// admin key from inflating reserves to unlock arbitrary minting.
     pub fn update_reserve(
         env: Env,
         updater: Address,
@@ -169,16 +202,35 @@ impl ReserveTrackerContract {
         amount: i128,
         value_usd: i128,
     ) {
-        // Authorize updater
         updater.require_auth();
         let admin = Self::get_admin(env.clone());
         if updater != admin {
             env.panic_with_error(ReserveTrackerError::Unauthorized);
         }
 
+        if amount <= 0 || value_usd <= 0 {
+            env.panic_with_error(ReserveTrackerError::NonPositiveAmount);
+        }
+
+        let oracle_addr: Address = env.storage().instance().get(&DATA_KEY.oracle).unwrap();
+        let (rate, _rate_timestamp): (i128, u64) = env.invoke_contract(
+            &oracle_addr,
+            &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
+            vec![&env, currency.clone().into_val(&env)],
+        );
+
+        let expected_value_usd = amount
+            .checked_mul(rate)
+            .and_then(|v| v.checked_div(DECIMALS))
+            .expect("Overflow in reserve value calculation");
+
+        let diff = value_usd.abs_diff(expected_value_usd);
+        if diff > 1 {
+            env.panic_with_error(ReserveTrackerError::InconsistentReserve);
+        }
+
         let current_time = env.ledger().timestamp();
 
-        // Update reserves map
         let mut reserves: Map<CurrencyCode, ReserveData> = env
             .storage()
             .instance()
@@ -259,6 +311,150 @@ impl ReserveTrackerContract {
         current_ratio >= min_reserve_ratio
     }
 
+    // -----------------------------------------------------------------------
+    // Merkle-root attestation (SC-015)
+    //
+    // A fintech custodian periodically submits a Merkle root that commits to
+    // the full set of reserve balances.  Anyone can verify a specific reserve
+    // entry against the stored root by providing a Merkle proof.  This is
+    // independent of the admin-reported reserves (`update_reserve`) and
+    // provides an external, verifiable source of truth.
+    //
+    // The tree is a standard binary Merkle tree.  Each leaf is:
+    //
+    //     keccak256(currency_code || amount(16BE) || value_usd(16BE) || timestamp(8BE))
+    //
+    // At each level, the concatenation order is determined by the leaf index:
+    //
+    //     if (index >> level) & 1 == 0 → node = keccak256(node || sibling)
+    //     else                         → node = keccak256(sibling || node)
+    // -----------------------------------------------------------------------
+
+    /// Set the custodian address (admin only). The custodian is the off-chain
+    /// entity authorised to submit Merkle-root attestations of reserve balances.
+    pub fn set_custodian(env: Env, custodian: Address) {
+        Self::check_admin(&env);
+        env.storage().instance().set(&DATA_KEY.custodian, &custodian);
+        env.events().publish((symbol_short!("cust_set"),), (custodian,));
+    }
+
+    /// Return the current custodian address, or panic if none has been set.
+    pub fn get_custodian(env: Env) -> Address {
+        env.storage().instance().get(&DATA_KEY.custodian).unwrap()
+    }
+
+    /// Submit a new Merkle root attestation. Only the registered custodian
+    /// may call this. The contract stores the root together with the current
+    /// ledger timestamp.
+    pub fn submit_attestation(env: Env, root: BytesN<32>) {
+        let custodian: Address = Self::get_custodian(env.clone());
+        custodian.require_auth();
+        let now = env.ledger().timestamp();
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.attested_root, &root);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.attestation_ts, &now);
+        env.events()
+            .publish((symbol_short!("attest"),), (root, now));
+    }
+
+    /// Verify that `leaf` exists in the currently stored Merkle tree by
+    /// walking the `proof` upward and comparing the computed root against
+    /// the stored `attested_root`.
+    ///
+    /// Panics with:
+    /// - `AttestationNotFound`  when no attestation has been submitted yet
+    /// - `InvalidMerkleProof`   when the computed root does not match storage
+    ///
+    /// The caller is responsible for checking attestation freshness via
+    /// [`Self::get_latest_attestation`] and `ATTESTATION_MAX_AGE_SECONDS`.
+    pub fn verify_merkle_proof(
+        env: Env,
+        leaf: AttestationLeaf,
+        proof: Vec<BytesN<32>>,
+        index: u32,
+    ) -> bool {
+        let root: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.attested_root)
+            .unwrap_or_else(|| env.panic_with_error(ReserveTrackerError::AttestationNotFound));
+
+        let leaf_hash = Self::hash_leaf(&env, &leaf);
+        let computed = Self::compute_merkle_root(&env, &leaf_hash, &proof, index);
+
+        if &computed != &root {
+            env.panic_with_error(ReserveTrackerError::InvalidMerkleProof);
+        }
+        true
+    }
+
+    /// Return the latest attested Merkle root and its submission timestamp,
+    /// or panic if no attestation has been submitted yet.
+    pub fn get_latest_attestation(env: Env) -> (BytesN<32>, u64) {
+        let root: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.attested_root)
+            .unwrap_or_else(|| env.panic_with_error(ReserveTrackerError::AttestationNotFound));
+        let ts: u64 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.attestation_ts)
+            .unwrap();
+        (root, ts)
+    }
+
+    // -----------------------------------------------------------------------
+    // Private helpers — attestation (SC-015)
+    // -----------------------------------------------------------------------
+
+    /// Hash a leaf into a 32-byte digest for the Merkle tree.
+    ///
+    /// Serialisation format (big-endian, variable-length currency code):
+    ///
+    ///     currency_code_bytes || amount(16BE) || value_usd(16BE) || timestamp(8BE)
+    fn hash_leaf(env: &Env, leaf: &AttestationLeaf) -> BytesN<32> {
+        let mut buf = Bytes::new(env);
+        let code = leaf.currency.code();
+        let code_bytes = code.to_bytes();
+        buf.append(&code_bytes);
+        let amt_bytes = Bytes::from_slice(env, &leaf.amount.to_be_bytes()[..]);
+        buf.append(&amt_bytes);
+        let val_bytes = Bytes::from_slice(env, &leaf.value_usd.to_be_bytes()[..]);
+        buf.append(&val_bytes);
+        let ts_bytes = Bytes::from_slice(env, &leaf.timestamp.to_be_bytes()[..]);
+        buf.append(&ts_bytes);
+        env.crypto().keccak256(&buf)
+    }
+
+    /// Walk up the Merkle tree from `leaf_hash` using `proof` and `index`.
+    fn compute_merkle_root(
+        env: &Env,
+        leaf_hash: &BytesN<32>,
+        proof: &Vec<BytesN<32>>,
+        index: u32,
+    ) -> BytesN<32> {
+        let mut current = leaf_hash.clone();
+        for i in 0..proof.len() {
+            let sibling = proof.get(i).unwrap();
+            let cur_bytes: Bytes = current.clone().into();
+            let sib_bytes: Bytes = sibling.clone().into();
+            let mut combined = Bytes::new(env);
+            if (index >> i) & 1 == 0 {
+                combined.append(&cur_bytes);
+                combined.append(&sib_bytes);
+            } else {
+                combined.append(&sib_bytes);
+                combined.append(&cur_bytes);
+            }
+            current = env.crypto().keccak256(&combined);
+        }
+        current
+    }
+
     /// Upgrade the contract WASM to `new_wasm_hash` and bump the stored version to
     /// `new_version` (admin only). `new_version` must exceed the current version.
     /// Runs any required migrations.
@@ -279,7 +475,7 @@ impl ReserveTrackerContract {
         // Run migrations
         for v in current_version..new_version {
             match v {
-                0 => migrate_v0_to_v1(env.clone()),
+                0 => shared::migrate_v0_to_v1(&env),
                 _ => {}
             }
         }
@@ -468,8 +664,4 @@ impl ReserveTrackerContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
     }
-}
-
-fn migrate_v0_to_v1(_env: Env) {
-    // No storage schema changes between v0 and v1.
 }

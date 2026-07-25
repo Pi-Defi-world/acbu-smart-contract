@@ -30,3 +30,9 @@ target/
 .soroban/
 .stellar/
 test_snapshots/
+
+# Sensitive architecture and security docs — kept local only, matching the
+# backend repo's policy (SC-031). These enumerate unpatched/patched attack
+# surface and should not be committed to source control.
+/ISSUES.md
+/SECURITY_FIX_SUMMARY.md

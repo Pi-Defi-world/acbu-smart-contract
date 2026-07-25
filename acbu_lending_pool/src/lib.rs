@@ -28,6 +28,18 @@ pub enum DataKey {
 
 const VERSION: u32 = CONTRACT_VERSION;
 const UPGRADE_TIMELOCK_SECONDS: u64 = 86_400;
+/// TTL extension applied to instance storage on every public entry-point call
+/// (≈60 days at ~5-second ledger close time).
+const INSTANCE_TTL_BUMP: u32 = 1_036_800;
+/// Minimum remaining TTL below which the extension kicks in; using the same
+/// value as the bump means the lease is always reset to 60 days.
+const INSTANCE_TTL_THRESHOLD: u32 = 1_036_800;
+/// TTL extension applied to persistent storage entries (lender balances, loan
+/// records) — extended to ≈120 days to survive a period of user inactivity.
+const PERSISTENT_TTL_BUMP: u32 = 2_073_600;
+/// Threshold for persistent TTL extension — extended when less than 60 days
+/// of TTL remain, keeping the entry alive for another 120 days.
+const PERSISTENT_TTL_THRESHOLD: u32 = 1_036_800;
 /// Minimum balance a lender may leave in the pool after a partial withdrawal.
 /// A withdrawal must either drain the balance to zero or leave at least this
 /// amount. This prevents dust balances (e.g. 1 stroop) that waste a storage
@@ -198,6 +210,9 @@ impl LendingPool {
         env.storage()
             .instance()
             .set(&SharedDataKey::Version, &VERSION);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP);
     }
 
     /// Deposit `amount` of ACBU into the pool as the caller's lendable liquidity.
@@ -210,7 +225,7 @@ impl LendingPool {
         reentrancy_guard::acquire_guard(&env);
 
         lender.require_auth();
-        Self::check_not_paused(&env);
+        Self::check_paused(&env);
 
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
@@ -230,6 +245,12 @@ impl LendingPool {
         env.storage()
             .persistent()
             .set(&DataKey::Balance(lender.clone()), &new_balance);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Balance(lender.clone()), PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_BUMP);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP);
 
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
         token.transfer(&lender, &env.current_contract_address(), &amount);
@@ -258,7 +279,7 @@ impl LendingPool {
         reentrancy_guard::acquire_guard(&env);
 
         lender.require_auth();
-        Self::check_not_paused(&env);
+        Self::check_paused(&env);
 
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
@@ -295,6 +316,12 @@ impl LendingPool {
         env.storage()
             .persistent()
             .set(&DataKey::Balance(lender.clone()), &new_balance);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Balance(lender.clone()), PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_BUMP);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP);
 
         let acbu_token: Address = env.storage().instance().get(&DataKey::AcbuToken).unwrap();
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
@@ -307,35 +334,27 @@ impl LendingPool {
         reentrancy_guard::release_guard(&env);
     }
 
-    /// Borrow `amount` of ACBU against `collateral_amount` from a specific
-    /// `lender`'s liquidity, creating a new loan keyed by `(borrower, loan_id)`.
+    /// Borrow `amount` of ACBU from a specific `lender`'s liquidity, creating
+    /// a new loan keyed by `(borrower, loan_id)`.
     ///
-    /// Requires `borrower`'s authorization and that the pool is not paused. The
-    /// loan must be at least 100% collateralized (`collateral_amount >= amount`)
-    /// and the lender must have enough unborrowed balance. The collateral is
-    /// pulled in before the principal is paid out. `loan_id` must be unique for
-    /// the borrower. Emits [`BorrowEvent`] and [`LoanCreatedEvent`].
+    /// Requires `borrower`'s authorization and that the pool is not paused.
+    /// The lender must have enough unborrowed balance. `loan_id` must be unique
+    /// for the borrower. Emits [`BorrowEvent`] and [`LoanCreatedEvent`].
     pub fn borrow(
         env: Env,
         borrower: Address,
         lender: Address,
         amount: i128,
-        collateral_amount: i128,
         loan_id: u64,
     ) {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
         borrower.require_auth();
-        Self::check_not_paused(&env);
+        Self::check_paused(&env);
 
-        if amount <= 0 || collateral_amount <= 0 {
+        if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
-        }
-
-        // Collateral Validation: Must have at least 100% collateralized
-        if collateral_amount < amount {
-            env.panic_with_error(Error::InsufficientCollateral);
         }
 
         let lender_balance: i128 = env
@@ -377,8 +396,7 @@ impl LendingPool {
             .persistent()
             .set(&DataKey::Borrowed(lender.clone()), &new_borrowed);
 
-        // Pull collateral in BEFORE paying out the loan principal.
-        token.transfer(&borrower, &env.current_contract_address(), &collateral_amount);
+        // Pay out the loan principal.
         token.transfer(&env.current_contract_address(), &borrower, &amount);
 
         let fee_rate_bps: i128 = env.storage().instance().get(&DataKey::FeeRate).unwrap_or(0);
@@ -388,7 +406,7 @@ impl LendingPool {
             borrower: borrower.clone(),
             lender: lender.clone(),
             amount,
-            collateral_amount,
+            collateral_amount: 0,
             interest_rate_bps: u32::try_from(fee_rate_bps)
                 .unwrap_or_else(|_| env.panic_with_error(Error::InvalidAmount)),
             loan_start_timestamp: start_time,
@@ -400,7 +418,13 @@ impl LendingPool {
 
         env.storage()
             .persistent()
-            .set(&DataKey::Loan(loan_key), &loan_data);
+            .set(&DataKey::Loan(loan_key.clone()), &loan_data);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Loan(loan_key), PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_BUMP);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP);
 
         let timestamp = env.ledger().timestamp();
         let fee_rate: i128 = env
@@ -477,14 +501,14 @@ impl LendingPool {
     /// Requires `borrower`'s authorization and that the pool is not paused.
     /// `amount` is applied to accrued interest first, then principal, and may not
     /// exceed the total amount due. When the principal reaches zero the loan is
-    /// marked [`LoanStatus::Repaid`] and the collateral is returned to the
-    /// borrower. Emits [`RepayEvent`], [`RepaymentEvent`] and [`LoanRepaidEvent`].
+    /// marked [`LoanStatus::Repaid`]. Emits [`RepayEvent`], [`RepaymentEvent`]
+    /// and [`LoanRepaidEvent`].
     pub fn repay(env: Env, borrower: Address, amount: i128, loan_id: u64) {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
         borrower.require_auth();
-        Self::check_not_paused(&env);
+        Self::check_paused(&env);
 
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
@@ -541,14 +565,6 @@ impl LendingPool {
         token.transfer(&borrower, &env.current_contract_address(), &amount);
 
         if loan_data.amount == 0 {
-            if loan_data.collateral_amount > 0 {
-                token.transfer(
-                    &env.current_contract_address(),
-                    &borrower,
-                    &loan_data.collateral_amount,
-                );
-            }
-            loan_data.collateral_amount = 0;
             loan_data.accrued_interest = 0;
             loan_data.total_repayment_due = 0;
             loan_data.loan_start_timestamp = env.ledger().timestamp();
@@ -556,7 +572,7 @@ impl LendingPool {
 
             env.storage()
                 .persistent()
-                .set(&DataKey::Loan(loan_key), &loan_data);
+                .set(&DataKey::Loan(loan_key.clone()), &loan_data);
         } else {
             loan_data.loan_start_timestamp = env.ledger().timestamp();
             let remaining_interest = if amount < loan_data.accrued_interest {
@@ -572,8 +588,14 @@ impl LendingPool {
 
             env.storage()
                 .persistent()
-                .set(&DataKey::Loan(loan_key), &loan_data);
+                .set(&DataKey::Loan(loan_key.clone()), &loan_data);
         }
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Loan(loan_key), PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_BUMP);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP);
 
         let timestamp = env.ledger().timestamp();
         env.events().publish(
@@ -687,7 +709,7 @@ impl LendingPool {
         env.deployer().update_current_contract_wasm(wasm_hash);
         for v in current_version..new_version {
             match v {
-                0 => migrate_v0_to_v1(env.clone()),
+                0 => shared::migrate_v0_to_v1(&env),
                 _ => {}
             }
         }
@@ -857,7 +879,7 @@ impl LendingPool {
         admin.require_auth();
     }
 
-    fn check_not_paused(env: &Env) {
+    fn check_paused(env: &Env) {
         let phase: ContractPhase = env
             .storage()
             .instance()
@@ -897,8 +919,4 @@ impl LendingPool {
             .and_then(|v| v.checked_div(divisor))
             .unwrap_or_else(|| env.panic_with_error(Error::InvalidAmount))
     }
-}
-
-fn migrate_v0_to_v1(_env: Env) {
-    // No storage schema changes between v0 and v1.
 }

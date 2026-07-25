@@ -7,10 +7,6 @@ use soroban_sdk::{
 
 use shared::{calculate_fee, ContractPhase, DataKey as SharedDataKey, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION};
 
-mod shared {
-    pub use shared::*;
-}
-
 // ---------------------------------------------------------------------------
 // Error codes
 // ---------------------------------------------------------------------------
@@ -39,6 +35,7 @@ pub enum Error {
     NoPendingAdmin = 1019,
     AdminTimelockNotElapsed = 1020,
     NoPendingAdminToCancel = 1021,
+    InsufficientYieldReserve = 1022,
     Unknown = 1999,
 }
 
@@ -66,6 +63,7 @@ impl Display for Error {
             Self::NoPendingAdmin => "no pending admin",
             Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
             Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::InsufficientYieldReserve => "vault balance cannot cover principal + yield owed",
             Self::Unknown => "unknown savings vault error",
         };
         f.write_str(message)
@@ -107,6 +105,22 @@ const DEPOSIT_KEY: Symbol = symbol_short!("DEPOSITS");
 const SECONDS_PER_YEAR: i128 = 31_536_000;
 const UPGRADE_TIMELOCK_SECONDS: u64 = 86_400;
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
+
+/// Mirrors acbu_reserve_tracker's instance-TTL ceiling: bumps the entry to
+/// ~300 days (at 5s/ledger) on every deposit/withdraw so admin config
+/// (acbu_token, fee_rate, yield_rate) never archives from inactivity.
+const INSTANCE_TTL_THRESHOLD: u32 = 5_184_000;
+const INSTANCE_TTL_EXTEND_TO: u32 = 5_184_000;
+
+/// Deposit lots live in *temporary* storage, which is erased entirely (not just
+/// restorable) once its TTL lapses. Unlike instance storage, a lot's required
+/// lifetime depends on the user-chosen lock term, so the extension target scales
+/// with `term_seconds` instead of using a fixed constant. `MIN_DEPOSIT_TTL_LEDGERS`
+/// mirrors acbu_escrow's temporary-entry threshold; `MAX_DEPOSIT_TTL_LEDGERS`
+/// mirrors this contract's own instance-TTL ceiling above.
+const APPROX_LEDGER_SECONDS: u64 = 5;
+const MIN_DEPOSIT_TTL_LEDGERS: u32 = 17_280;
+const MAX_DEPOSIT_TTL_LEDGERS: u32 = 5_184_000;
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -181,13 +195,34 @@ impl SavingsVault {
             .ok_or(Error::NoYieldRate)
     }
 
-    fn is_paused(env: &Env) -> bool {
+    fn check_paused(env: &Env) {
         let phase: ContractPhase = env
             .storage()
             .instance()
             .get(&DATA_KEY.phase)
             .unwrap_or(ContractPhase::Uninitialized);
-        phase == ContractPhase::Paused
+        if phase == ContractPhase::Paused {
+            env.panic_with_error(Error::Paused);
+        }
+    }
+
+    fn extend_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+    }
+
+    /// Extends the temporary storage entry backing a user's deposit lots for
+    /// `term_seconds`, scaling the extension with the lock term (capped to
+    /// `MAX_DEPOSIT_TTL_LEDGERS`) so it survives at least until maturity.
+    fn extend_deposit_ttl(env: &Env, key: &(Symbol, Address, u64), term_seconds: u64) {
+        let term_ledgers = term_seconds
+            .saturating_div(APPROX_LEDGER_SECONDS)
+            .min(MAX_DEPOSIT_TTL_LEDGERS as u64) as u32;
+        let extend_to = term_ledgers.max(MIN_DEPOSIT_TTL_LEDGERS);
+        env.storage()
+            .temporary()
+            .extend_ttl(key, MIN_DEPOSIT_TTL_LEDGERS, extend_to);
     }
 
     // -----------------------------------------------------------------------
@@ -222,6 +257,7 @@ impl SavingsVault {
         env.storage().instance().set(&DATA_KEY.yield_rate, &yield_rate_bps);
         env.storage().instance().set(&DATA_KEY.paused, &false);
         env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
+        Self::extend_instance_ttl(&env);
     }
 
     /// Deposit (lock) ACBU for a term. User transfers ACBU to this contract.
@@ -230,9 +266,8 @@ impl SavingsVault {
 
         user.require_auth();
 
-        if Self::is_paused(&env) {
-            env.panic_with_error(Error::Paused);
-        }
+        Self::check_paused(&env);
+
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
         }
@@ -290,7 +325,8 @@ impl SavingsVault {
         });
 
         env.storage().temporary().set(&key, &lots);
-
+        Self::extend_deposit_ttl(&env, &key, term_seconds);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("Deposit"), user.clone()),
@@ -316,9 +352,8 @@ impl SavingsVault {
 
         user.require_auth();
 
-        if Self::is_paused(&env) {
-            env.panic_with_error(Error::Paused);
-        }
+        Self::check_paused(&env);
+
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
         }
@@ -396,7 +431,9 @@ impl SavingsVault {
             env.storage().temporary().remove(&key);
         } else {
             env.storage().temporary().set(&key, &updated_lots);
+            Self::extend_deposit_ttl(&env, &key, term_seconds);
         }
+        Self::extend_instance_ttl(&env);
 
         let payout_amount = amount
             .checked_add(yield_amount)
@@ -405,6 +442,14 @@ impl SavingsVault {
         let acbu = Self::load_acbu_token(&env).unwrap_or_else(|e| env.panic_with_error(e));
         let token = soroban_sdk::token::Client::new(&env, &acbu);
         let vault_addr = env.current_contract_address();
+
+        // Yield is paid directly out of the vault's own ACBU balance — there is no
+        // external yield-generation mechanism funding it. Check the balance up front
+        // so an underfunded vault fails with a clear, specific error instead of the
+        // token contract's generic insufficient-balance panic.
+        if token.balance(&vault_addr) < payout_amount {
+            env.panic_with_error(Error::InsufficientYieldReserve);
+        }
 
         token.transfer(&vault_addr, &user, &amount);
         if yield_amount > 0 {
@@ -523,9 +568,8 @@ impl SavingsVault {
             .unwrap_or(Vec::new(&env));
 
         let total_lots = lots.len();
-        let offset_u32 = u32::try_from(offset).unwrap_or(0);
 
-        if offset_u32 >= total_lots {
+        if offset >= total_lots {
             return Vec::new(&env);
         }
 
@@ -535,15 +579,14 @@ impl SavingsVault {
             limit
         };
 
-        let end_idx = if offset_u32 + limit_u32 < total_lots {
-            offset_u32 + limit_u32
+        let end_idx = if offset + limit_u32 < total_lots {
+            offset + limit_u32
         } else {
             total_lots
         };
         let mut result = Vec::new(&env);
 
-        for i in offset_u32..end_idx {
-            let idx = u32::try_from(i).unwrap_or(0);
+        for idx in offset..end_idx {
             if let Some(lot) = lots.get(idx) {
                 result.push_back(lot);
             }
@@ -686,7 +729,7 @@ impl SavingsVault {
         env.deployer().update_current_contract_wasm(wasm_hash);
         for v in current_version..new_version {
             match v {
-                0 => Self::migrate_v0_to_v1(env.clone()),
+                0 => shared::migrate_v0_to_v1(&env),
                 _ => {}
             }
         }
@@ -847,8 +890,5 @@ impl SavingsVault {
             .and_then(|v| v.checked_mul(elapsed_i128))
             .ok_or(Error::Overflow)?;
         numerator.checked_div(divisor).ok_or(Error::Overflow)
-    }
-    fn migrate_v0_to_v1(_env: Env) {
-        // No storage schema changes between v0 and v1.
     }
 }

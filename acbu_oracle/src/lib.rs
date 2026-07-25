@@ -77,6 +77,15 @@ impl Display for OracleError {
 
 pub const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 const MIN_ORACLE_SOURCE_FEEDS: u32 = 3;
+/// Number of decimal places used for all rates reported by this oracle.
+const RATE_DECIMALS: u32 = 7;
+
+/// Mirrors acbu_reserve_tracker's instance-TTL ceiling: bumps the entry to
+/// ~300 days (at 5s/ledger) on every rate write and read. Every mint, burn,
+/// and reserve check reads through this contract's instance storage, so it
+/// must never be allowed to archive from inactivity.
+const INSTANCE_TTL_THRESHOLD: u32 = 5_184_000;
+const INSTANCE_TTL_EXTEND_TO: u32 = 5_184_000;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,24 +113,24 @@ pub struct DataKey {
 
 const DATA_KEY: DataKey = DataKey {
     admin: symbol_short!("ADMIN"),
-    validators: symbol_short!("VALIDTRS"),
-    validator_set: symbol_short!("VAL_SET"),
-    min_signatures: symbol_short!("MIN_SIG"),
-    currencies: symbol_short!("CURRNCYS"),
+    validators: symbol_short!("VALID_LST"),
+    validator_set: symbol_short!("VALID_SET"),
+    min_signatures: symbol_short!("MIN_SIGS"),
+    currencies: symbol_short!("CURRENCY"),
     rates: symbol_short!("RATES"),
     last_update: symbol_short!("LAST_UPD"),
-    update_interval: symbol_short!("UPD_INT"),
-    basket_weights: symbol_short!("BSK_WTS"),
-    s_tokens: symbol_short!("S_TOKNS"),
+    update_interval: symbol_short!("UPD_INTVL"),
+    basket_weights: symbol_short!("BASKET_WT"),
+    s_tokens: symbol_short!("S_TOKENS"),
     version: symbol_short!("VERSION"),
     pending_admin: symbol_short!("PEND_ADM"),
-    pending_admin_eligible_at: symbol_short!("PEND_ETA"),
+    pending_admin_eligible_at: symbol_short!("PA_ETA"),
     pending_upgrade_wasm: symbol_short!("PEND_UPG"),
-    pending_upgrade_version: symbol_short!("PU_VER"),
-    pending_upgrade_eligible_at: symbol_short!("PU_ETA"),
+    pending_upgrade_version: symbol_short!("PEND_UVER"),
+    pending_upgrade_eligible_at: symbol_short!("PEND_UETA"),
     pending_validator: symbol_short!("PEND_VAL"),
-    pending_validator_is_add: symbol_short!("PV_ADD"),
-    pending_validator_eligible_at: symbol_short!("PV_ETA"),
+    pending_validator_is_add: symbol_short!("PEND_VADD"),
+    pending_validator_eligible_at: symbol_short!("PEND_VETA"),
 };
 
 const VERSION: u32 = 9;
@@ -237,6 +246,7 @@ impl OracleContract {
         env.storage()
             .instance()
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
+        Self::extend_instance_ttl(&env);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -431,6 +441,17 @@ impl OracleContract {
             if sources.len() < required {
                 env.panic_with_error(OracleError::InsufficientOracleSources);
             }
+        let min_sigs: u32 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.min_signatures)
+            .unwrap();
+        let required = min_sigs.max(MIN_ORACLE_SOURCE_FEEDS);
+        // The 0/1-source path below intentionally bypasses median/outlier
+        // aggregation, so the multi-source quorum floor only applies once
+        // there's more than one source to aggregate.
+        if sources.len() > 1 && sources.len() < required {
+            env.panic_with_error(OracleError::InsufficientOracleSources);
         }
 
         // Bypass median and outlier calculation workflows if 0 or 1 submissions exist
@@ -488,6 +509,7 @@ impl OracleContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.last_update, &current_time);
+        Self::extend_instance_ttl(&env);
 
         let event = RateUpdateEvent {
             currency: currency.clone(),
@@ -533,6 +555,7 @@ impl OracleContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.last_update, &current_time);
+        Self::extend_instance_ttl(&env);
 
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         let event = RateUpdateEvent {
@@ -875,8 +898,8 @@ impl OracleContract {
     }
 
     /// Return the number of decimal places used for all rates (always 7).
-    pub fn get_rate_decimals(env: Env) -> u32 {
-        7
+    pub fn get_rate_decimals(_env: Env) -> u32 {
+        RATE_DECIMALS
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -992,7 +1015,7 @@ impl OracleContract {
         env.deployer().update_current_contract_wasm(wasm_hash);
         for v in current_version..new_version {
             match v {
-                0 => migrate_v0_to_v1(env.clone()),
+                0 => shared::migrate_v0_to_v1(&env),
                 _ => {}
             }
         }
@@ -1021,12 +1044,19 @@ impl OracleContract {
     // ─────────────────────────────────────────────────────────────────────────
 
     fn get_rate_internal(env: &Env, currency: &CurrencyCode) -> Option<RateData> {
+        Self::extend_instance_ttl(env);
         let rates: Map<CurrencyCode, RateData> = env
             .storage()
             .instance()
             .get(&DATA_KEY.rates)
             .unwrap_or(Map::new(env));
         rates.get(currency.clone())
+    }
+
+    fn extend_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
     }
 
     fn assert_rate_fresh(env: &Env, rate_data: &RateData, currency: &CurrencyCode) {
@@ -1064,7 +1094,4 @@ impl OracleContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
     }
-}
-fn migrate_v0_to_v1(_env: Env) {
-    // No storage schema changes between v0 and v1.
 }
