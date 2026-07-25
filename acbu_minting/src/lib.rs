@@ -1275,19 +1275,28 @@ impl MintingContract {
         Self::check_paused(&env);
 
         let current_version = Self::get_version(env.clone());
-        if new_version <= current_version {
+
+        // SC-034: enforce single-step increments only.
+        // Allowing new_version > current_version + 1 would silently skip any
+        // migrations registered for the intermediate versions (the `_ => {}`
+        // arms). Each deployment must advance exactly one version so every
+        // migration function is guaranteed to run.
+        if new_version != current_version + 1 {
             env.panic_with_error(MintingError::InvalidVersion);
         }
 
         env.deployer().update_current_contract_wasm(new_wasm_hash);
 
-        // Run migrations — the match will gain new arms as versions are added.
-        #[allow(clippy::single_match)]
-        for v in current_version..new_version {
-            match v {
-                0 => migrate_v0_to_v1(env.clone()),
-                _ => {}
-            }
+        // Run the single migration step for this version transition.
+        // Add a new match arm here whenever a new version is introduced;
+        // the exhaustive guard above ensures this arm will always be reached.
+        match current_version {
+            0 => migrate_v0_to_v1(env.clone()),
+            // When v2, v3, … are introduced, add:
+            //   1 => migrate_v1_to_v2(env.clone()),
+            //   2 => migrate_v2_to_v3(env.clone()),
+            // etc.
+            _ => {}
         }
 
         env.storage()
