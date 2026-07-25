@@ -122,6 +122,10 @@ pub enum MintingError {
     NoPendingAdminToCancel = 5022,
     InvalidRecipient = 5023,
     InvalidRoleSeparation = 5024,
+    /// sync_supply was called with a value less than zero.
+    NegativeSupply = 5025,
+    /// sync_supply value disagrees with the token contract's on-chain total_supply().
+    SupplyMismatch = 5026,
     Unknown = 5999,
 }
 
@@ -151,6 +155,11 @@ impl Display for MintingError {
             Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
             Self::NoPendingAdminToCancel => "no pending admin to cancel",
             Self::InvalidRecipient => "invalid recipient",
+            Self::InvalidRoleSeparation => "admin and operator must be different accounts",
+            Self::NegativeSupply => "sync_supply: new_supply must be >= 0",
+            Self::SupplyMismatch => {
+                "sync_supply: new_supply does not match the token contract's on-chain total_supply"
+            }
             Self::Unknown => "unknown minting error",
         };
         f.write_str(message)
@@ -1021,6 +1030,22 @@ impl MintingContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         Self::check_paused(&env);
+
+        // SC-035 (1): reject negative values — supply can never be below zero.
+        if new_supply < 0 {
+            env.panic_with_error(MintingError::NegativeSupply);
+        }
+
+        // SC-035 (2): cross-check against the token contract's on-chain
+        // total_supply so the minting contract's internal counter stays in sync
+        // with the actual circulating supply.
+        let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let token_client = soroban_sdk::token::Client::new(&env, &acbu_token);
+        let on_chain_supply = token_client.total_supply();
+        if new_supply != on_chain_supply {
+            env.panic_with_error(MintingError::SupplyMismatch);
+        }
+
         Self::check_supply_cap(&env, new_supply);
         env.storage()
             .instance()
