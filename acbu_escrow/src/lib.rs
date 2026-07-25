@@ -143,6 +143,17 @@ impl Escrow {
             .ok_or(EscrowError::UninitializedAcBuToken)
     }
 
+    fn check_paused(env: &Env) {
+        let phase: ContractPhase = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.phase)
+            .unwrap_or(ContractPhase::Uninitialized);
+        if phase == ContractPhase::Paused {
+            env.panic_with_error(EscrowError::Paused);
+        }
+    }
+
     /// Initialize the escrow contract
     pub fn initialize(env: Env, admin: Address, acbu_token: Address) {
         if env.storage().instance().has(&DATA_KEY.admin) {
@@ -187,14 +198,8 @@ impl Escrow {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
-        let phase: ContractPhase = env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.phase)
-            .unwrap_or(ContractPhase::Uninitialized);
-        if phase == ContractPhase::Paused {
-            env.panic_with_error(EscrowError::Paused);
-        }
+        Self::check_paused(&env);
+
         if amount < MIN_ESCROW_AMOUNT {
             env.panic_with_error(EscrowError::InvalidAmount);
         }
@@ -247,14 +252,8 @@ impl Escrow {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
-        let phase: ContractPhase = env
-            .storage()
-            .instance()
-            .get(&DATA_KEY.phase)
-            .unwrap_or(ContractPhase::Uninitialized);
-        if phase == ContractPhase::Paused {
-            env.panic_with_error(EscrowError::Paused);
-        }
+        Self::check_paused(&env);
+
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         if payer == admin {
             admin.require_auth();
@@ -297,7 +296,6 @@ impl Escrow {
         reentrancy_guard::acquire_guard(&env);
 
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
-        admin.require_auth();
 
         let key = EscrowId(payer.clone(), escrow_id);
         let (stored_payer, _payee, amount, expiry): (Address, Address, i128, u64) = env
@@ -310,7 +308,7 @@ impl Escrow {
             env.panic_with_error(EscrowError::PayerMismatch);
         }
 
-        let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
+        // After expiry the payer may self-refund; before expiry only admin can force a refund.
         if env.ledger().timestamp() > expiry {
             payer.require_auth();
         } else {

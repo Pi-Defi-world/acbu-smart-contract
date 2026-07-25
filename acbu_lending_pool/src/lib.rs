@@ -210,7 +210,7 @@ impl LendingPool {
         reentrancy_guard::acquire_guard(&env);
 
         lender.require_auth();
-        Self::check_not_paused(&env);
+        Self::check_paused(&env);
 
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
@@ -258,7 +258,7 @@ impl LendingPool {
         reentrancy_guard::acquire_guard(&env);
 
         lender.require_auth();
-        Self::check_not_paused(&env);
+        Self::check_paused(&env);
 
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
@@ -324,7 +324,7 @@ impl LendingPool {
         reentrancy_guard::acquire_guard(&env);
 
         borrower.require_auth();
-        Self::check_not_paused(&env);
+        Self::check_paused(&env);
 
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
@@ -475,7 +475,7 @@ impl LendingPool {
         reentrancy_guard::acquire_guard(&env);
 
         borrower.require_auth();
-        Self::check_not_paused(&env);
+        Self::check_paused(&env);
 
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
@@ -840,7 +840,7 @@ impl LendingPool {
         admin.require_auth();
     }
 
-    fn check_not_paused(env: &Env) {
+    fn check_paused(env: &Env) {
         let phase: ContractPhase = env
             .storage()
             .instance()
