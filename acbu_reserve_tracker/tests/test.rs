@@ -414,6 +414,8 @@ fn test_update_reserve_without_admin_auth_fails() {
     );
 }
 
+#[test]
+fn test_verify_reserves_caches_result_during_cooldown() {
 // ── Oracle cross-validation tests ─────────────────────────────────────────────
 
 #[test]
@@ -424,11 +426,35 @@ fn test_update_reserve_rejects_zero_amount() {
 
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
+    let token = env.register_contract(None, MockToken);
     let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
 
+    client.initialize(&admin, &oracle, &token, &10_000i128);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    // 10 USD reserve
+    client.update_reserve(&admin, &ngn, &1_000_000_000, &100_000_000);
+
+    // First call at t=1: token returns 10*DECIMALS, reserves=10 USD → sufficient (true)
+    assert!(client.verify_reserves());
+
+    // Call again at t=10 (within 60s cooldown): must return cached result, not false
+    env.ledger().with_mut(|l| l.timestamp = 10);
+    assert!(
+        client.verify_reserves(),
+        "verify_reserves must return cached true during cooldown, not false"
+    );
+
+    // After cooldown expires at t=61, re-checks fresh
+    env.ledger().with_mut(|l| l.timestamp = 61);
+    assert!(client.verify_reserves());
+}
+
+#[test]
+fn test_verify_reserves_caches_false_during_cooldown() {
     let acbu_token = Address::generate(&env);
     client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
 
@@ -470,11 +496,26 @@ fn test_update_reserve_rejects_inconsistent_value_usd() {
 
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
+    let token = env.register_contract(None, MockToken);
     let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
 
+    client.initialize(&admin, &oracle, &token, &10_000i128);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    // Tiny reserve (0.1 USD) vs 10 ACBU supply → insufficient
+    client.update_reserve(&admin, &ngn, &1, &10_000_000);
+
+    // First call: insufficient (false)
+    assert!(!client.verify_reserves());
+
+    // Within cooldown: returns cached false (not a stale true)
+    env.ledger().with_mut(|l| l.timestamp = 30);
+    assert!(
+        !client.verify_reserves(),
+        "verify_reserves must return cached false during cooldown"
     let acbu_token = Address::generate(&env);
     client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
 
@@ -492,6 +533,7 @@ fn test_update_reserve_rejects_inconsistent_value_usd() {
 }
 
 #[test]
+fn test_verify_reserves_refreshes_after_cooldown_expires() {
 fn test_update_reserve_accepts_consistent_value_usd() {
     let env = Env::default();
     env.mock_all_auths();
@@ -499,11 +541,37 @@ fn test_update_reserve_accepts_consistent_value_usd() {
 
     let admin = Address::generate(&env);
     let oracle = env.register_contract(None, MockOracle);
+    let token = env.register_contract(None, MockToken);
     let oracle_client = MockOracleClient::new(&env, &oracle);
 
     let contract_id = env.register_contract(None, ReserveTrackerContract);
     let client = ReserveTrackerContractClient::new(&env, &contract_id);
 
+    client.initialize(&admin, &oracle, &token, &10_000i128);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    // Tiny reserve → insufficient
+    client.update_reserve(&admin, &ngn, &1, &10_000_000);
+
+    // First call: false
+    assert!(!client.verify_reserves());
+
+    // Add real reserves
+    env.ledger().with_mut(|l| l.timestamp = 2);
+    client.update_reserve(&admin, &ngn, &1_000_000_000, &100_000_000);
+
+    // Still within cooldown of first call → returns cached false
+    env.ledger().with_mut(|l| l.timestamp = 30);
+    assert!(
+        !client.verify_reserves(),
+        "must still return cached false within cooldown of first call"
+    );
+
+    // After cooldown (t=61 > 1+60): fresh check sees new reserves → true
+    env.ledger().with_mut(|l| l.timestamp = 61);
+    assert!(
+        client.verify_reserves(),
+        "must re-evaluate after cooldown expires and return true"
     let acbu_token = Address::generate(&env);
     client.initialize(&admin, &oracle, &acbu_token, &10_000i128);
 
