@@ -597,7 +597,10 @@ fn test_update_reserve_rejects_inconsistent_value_usd() {
     client.initialize(&admin, &oracle, &token, &10_000i128);
     client.set_custodian(&custodian);
 
-    let root = BytesN::from_array(&env, &[0u8; 32]);
+    // Build a deterministic root that differs from any real Merkle tree
+    let mut root_buf = Bytes::new(&env);
+    root_buf.extend_from_slice(&[0xabu8; 32][..]);
+    let root = env.crypto().keccak256(&root_buf);
 
     // Only impersonator auth is provided – submit_attestation must reject it
     // because the contract will call `custodian.require_auth()` which the

@@ -443,11 +443,11 @@ impl ReserveTrackerContract {
             let sibling = proof.get(i).unwrap();
             let mut combined = Bytes::new(env);
             if (index >> i) & 1 == 0 {
-                combined.extend_from_slice(&current.to_buffer());
-                combined.extend_from_slice(&sibling.to_buffer());
+                combined.extend_from_slice(&current.to_buffer()[..]);
+                combined.extend_from_slice(&sibling.to_buffer()[..]);
             } else {
-                combined.extend_from_slice(&sibling.to_buffer());
-                combined.extend_from_slice(&current.to_buffer());
+                combined.extend_from_slice(&sibling.to_buffer()[..]);
+                combined.extend_from_slice(&current.to_buffer()[..]);
             }
             current = env.crypto().keccak256(&combined);
         }
