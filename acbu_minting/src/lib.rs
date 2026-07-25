@@ -937,20 +937,6 @@ impl MintingContract {
         acbu_amount
     }
 
-    /// Helper to check if an address is authorized as operator (fintech backend).
-    /// Returns true if the address is the configured operator.
-    fn check_is_operator(env: &Env, address: &Address) -> bool {
-        let operator: Address = Self::get_operator(env.clone());
-        address == &operator
-    }
-
-    /// Helper to check if an address is authorized as admin.
-    /// Returns true if the address is the configured admin.
-    fn check_is_admin(env: &Env, address: &Address) -> bool {
-        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        address == &admin
-    }
-
     /// Transfer a basket S-token from this contract's custodial balance to
     /// `recipient` (e.g. user faucet). Admin only; caps per call to limit abuse.
     ///
@@ -973,10 +959,6 @@ impl MintingContract {
 
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
-
-        if !Self::check_is_admin(&env, &admin) {
-            env.panic_with_error(MintingError::UnauthorizedOperator);
-        }
 
         // C-058: reject contract-type recipients to prevent stranded token transfers.
         Self::assert_recipient_is_account(&recipient);

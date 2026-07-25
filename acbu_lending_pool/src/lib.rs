@@ -28,6 +28,18 @@ pub enum DataKey {
 
 const VERSION: u32 = CONTRACT_VERSION;
 const UPGRADE_TIMELOCK_SECONDS: u64 = 86_400;
+/// TTL extension applied to instance storage on every public entry-point call
+/// (≈60 days at ~5-second ledger close time).
+const INSTANCE_TTL_BUMP: u32 = 1_036_800;
+/// Minimum remaining TTL below which the extension kicks in; using the same
+/// value as the bump means the lease is always reset to 60 days.
+const INSTANCE_TTL_THRESHOLD: u32 = 1_036_800;
+/// TTL extension applied to persistent storage entries (lender balances, loan
+/// records) — extended to ≈120 days to survive a period of user inactivity.
+const PERSISTENT_TTL_BUMP: u32 = 2_073_600;
+/// Threshold for persistent TTL extension — extended when less than 60 days
+/// of TTL remain, keeping the entry alive for another 120 days.
+const PERSISTENT_TTL_THRESHOLD: u32 = 1_036_800;
 /// Minimum balance a lender may leave in the pool after a partial withdrawal.
 /// A withdrawal must either drain the balance to zero or leave at least this
 /// amount. This prevents dust balances (e.g. 1 stroop) that waste a storage
@@ -198,6 +210,9 @@ impl LendingPool {
         env.storage()
             .instance()
             .set(&SharedDataKey::Version, &VERSION);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP);
     }
 
     /// Deposit `amount` of ACBU into the pool as the caller's lendable liquidity.
@@ -230,6 +245,12 @@ impl LendingPool {
         env.storage()
             .persistent()
             .set(&DataKey::Balance(lender.clone()), &new_balance);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Balance(lender.clone()), PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_BUMP);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP);
 
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
         token.transfer(&lender, &env.current_contract_address(), &amount);
@@ -295,6 +316,12 @@ impl LendingPool {
         env.storage()
             .persistent()
             .set(&DataKey::Balance(lender.clone()), &new_balance);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Balance(lender.clone()), PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_BUMP);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP);
 
         let acbu_token: Address = env.storage().instance().get(&DataKey::AcbuToken).unwrap();
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
@@ -391,7 +418,13 @@ impl LendingPool {
 
         env.storage()
             .persistent()
-            .set(&DataKey::Loan(loan_key), &loan_data);
+            .set(&DataKey::Loan(loan_key.clone()), &loan_data);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Loan(loan_key), PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_BUMP);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP);
 
         let timestamp = env.ledger().timestamp();
         let fee_rate: i128 = env
@@ -539,7 +572,7 @@ impl LendingPool {
 
             env.storage()
                 .persistent()
-                .set(&DataKey::Loan(loan_key), &loan_data);
+                .set(&DataKey::Loan(loan_key.clone()), &loan_data);
         } else {
             loan_data.loan_start_timestamp = env.ledger().timestamp();
             let remaining_interest = if amount < loan_data.accrued_interest {
@@ -555,8 +588,14 @@ impl LendingPool {
 
             env.storage()
                 .persistent()
-                .set(&DataKey::Loan(loan_key), &loan_data);
+                .set(&DataKey::Loan(loan_key.clone()), &loan_data);
         }
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Loan(loan_key), PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_BUMP);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP);
 
         let timestamp = env.ledger().timestamp();
         env.events().publish(

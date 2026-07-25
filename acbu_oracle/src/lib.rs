@@ -124,7 +124,7 @@ const DATA_KEY: DataKey = DataKey {
     s_tokens: symbol_short!("S_TOKENS"),
     version: symbol_short!("VERSION"),
     pending_admin: symbol_short!("PEND_ADM"),
-    pending_admin_eligible_at: symbol_short!("PEND_ETA"),
+    pending_admin_eligible_at: symbol_short!("PA_ETA"),
     pending_upgrade_wasm: symbol_short!("PEND_UPG"),
     pending_upgrade_version: symbol_short!("PEND_UVER"),
     pending_upgrade_eligible_at: symbol_short!("PEND_UETA"),
