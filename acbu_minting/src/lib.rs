@@ -553,6 +553,9 @@ impl MintingContract {
         env.events()
             .publish((symbol_short!("mint"), recipient), mint_event);
 
+        // Seal the proof so it cannot be replayed (fixes the check_proof_unused guard above).
+        mark_proof_used(&env, &proof_id);
+
         // Release re-entrancy guard
         reentrancy_guard::release_guard(&env);
 

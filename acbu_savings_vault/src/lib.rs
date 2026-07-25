@@ -195,13 +195,15 @@ impl SavingsVault {
             .ok_or(Error::NoYieldRate)
     }
 
-    fn is_paused(env: &Env) -> bool {
+    fn check_paused(env: &Env) {
         let phase: ContractPhase = env
             .storage()
             .instance()
             .get(&DATA_KEY.phase)
             .unwrap_or(ContractPhase::Uninitialized);
-        phase == ContractPhase::Paused
+        if phase == ContractPhase::Paused {
+            env.panic_with_error(Error::Paused);
+        }
     }
 
     fn extend_instance_ttl(env: &Env) {
@@ -264,9 +266,8 @@ impl SavingsVault {
 
         user.require_auth();
 
-        if Self::is_paused(&env) {
-            env.panic_with_error(Error::Paused);
-        }
+        Self::check_paused(&env);
+
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
         }
@@ -351,9 +352,8 @@ impl SavingsVault {
 
         user.require_auth();
 
-        if Self::is_paused(&env) {
-            env.panic_with_error(Error::Paused);
-        }
+        Self::check_paused(&env);
+
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
         }
