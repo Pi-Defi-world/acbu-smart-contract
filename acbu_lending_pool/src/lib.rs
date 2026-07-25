@@ -564,6 +564,12 @@ impl LendingPool {
 
         token.transfer(&borrower, &env.current_contract_address(), &amount);
 
+        let interest_repaid = amount - principal_repaid;
+        if interest_repaid > 0 {
+            let lender = loan_data.lender.clone();
+            token.transfer(&env.current_contract_address(), &lender, &interest_repaid);
+        }
+
         if loan_data.amount == 0 {
             loan_data.accrued_interest = 0;
             loan_data.total_repayment_due = 0;
