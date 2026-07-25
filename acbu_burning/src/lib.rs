@@ -6,7 +6,7 @@ use soroban_sdk::{
 
 use shared::{
     calculate_fee, reentrancy_guard, BurnEvent, ContractError, ContractPhase, CurrencyCode,
-    DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, MIN_BURN_AMOUNT,
+    DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MIN_BURN_AMOUNT,
     ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_CURRENCIES,
     ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT,
     TOKEN_GET_TOTAL_SUPPLY, UPDATE_INTERVAL_SECONDS,
@@ -54,8 +54,6 @@ const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 
 #[contract]
 pub struct BurningContract;
-
-const ADMIN_TIMELOCK_SECONDS: u64 = 3 * 24 * 60 * 60;
 
 #[contractimpl]
 impl BurningContract {
@@ -153,7 +151,7 @@ impl BurningContract {
             .get(&DATA_KEY.reserve_tracker)
             .unwrap();
 
-
+        let current_time = env.ledger().timestamp();
         let (acbu_rate, oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
             &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
@@ -221,29 +219,22 @@ impl BurningContract {
         stoken_out
     }
 
-    /// Redeem `acbu_amount` of ACBU proportionally across all basket currencies.
-    ///
-    /// Burns `acbu_amount` from `user` and distributes the basket-weighted S-token
-    /// amounts to each address in `recipients` (one per currency). Uses the lower
-    /// basket fee tier. `recipients` must have the same length as the oracle's
-    /// currency list and must contain no duplicate addresses.
+    /// Redeem ACBU for proportional Afreum S-tokens across the basket (lower fee tier).
     pub fn redeem_basket(
         env: Env,
         user: Address,
         recipients: Vec<Address>,
         acbu_amount: i128,
     ) -> Vec<i128> {
-
         Self::check_paused(&env);
         user.require_auth();
 
         if recipients.is_empty() {
-
             env.panic_with_error(ContractError::InvalidRecipient);
         }
 
-        for i in 0..rlen {
-            for j in (i + 1)..rlen {
+        for i in 0..recipients.len() {
+            for j in (i + 1)..recipients.len() {
                 if recipients.get(i).unwrap() == recipients.get(j).unwrap() {
                     env.panic_with_error(ContractError::InvalidRecipient);
                 }
@@ -282,7 +273,6 @@ impl BurningContract {
             env.panic_with_error(ContractError::InvalidRate);
         }
 
-
         let currencies: Vec<CurrencyCode> = env.invoke_contract(
             &oracle_addr,
             &Symbol::new(&env, ORACLE_GET_CURRENCIES),
@@ -295,7 +285,8 @@ impl BurningContract {
             env.panic_with_error(ContractError::InvalidRecipient);
         }
 
-
+        let mut weights = Vec::new(&env);
+        let mut total_weight: i128 = 0;
         for i in 0..currencies.len() {
             let currency = currencies.get(i).unwrap();
             let weight: i128 = env.invoke_contract(
@@ -303,10 +294,36 @@ impl BurningContract {
                 &Symbol::new(&env, ORACLE_GET_BASKET_WEIGHT),
                 vec![&env, currency.into_val(&env)],
             );
-
+            total_weight = total_weight
+                .checked_add(weight)
+                .expect("Overflow in total weight");
+            weights.push_back(weight);
+        }
 
         if total_weight == 0 {
             env.panic_with_error(ContractError::InvalidRate);
+        }
+
+        let total_fee = calculate_fee(acbu_amount, fee_rate);
+        let net_acbu = acbu_amount
+            .checked_sub(total_fee)
+            .expect("Underflow in net acbu");
+        let usd_total = net_acbu
+            .checked_mul(acbu_rate)
+            .and_then(|v| v.checked_div(DECIMALS))
+            .expect("Overflow in usd total");
+
+        reentrancy_guard::acquire_guard(&env);
+        Self::check_reserves(&env, &acbu_token, &reserve_tracker_addr);
+
+        let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token);
+        acbu_client.burn(&user, &acbu_amount);
+
+        let mut last_positive_weight_index: Option<usize> = None;
+        for i in 0..weights.len() {
+            if weights.get(i).unwrap() > 0 {
+                last_positive_weight_index = Some(i);
+            }
         }
 
         let mut amounts_out = Vec::new(&env);
@@ -336,7 +353,7 @@ impl BurningContract {
                 env.panic_with_error(ContractError::InvalidRate);
             }
 
-            let (usd_i, acbu_gross_i, fee_i) = if i == last_positive_weight_index.unwrap() {
+            let (usd_i, acbu_gross_i, fee_i) = if last_positive_weight_index == Some(i) {
                 (
                     usd_total
                         .checked_sub(allocated_usd)
@@ -356,23 +373,40 @@ impl BurningContract {
                 )
             };
 
+            allocated_usd = allocated_usd
+                .checked_add(usd_i)
+                .expect("Overflow in allocated usd");
+            allocated_gross = allocated_gross
+                .checked_add(acbu_gross_i)
+                .expect("Overflow in allocated gross");
+            allocated_fee = allocated_fee
+                .checked_add(fee_i)
+                .expect("Overflow in allocated fee");
 
-                .and_then(|v| v.checked_div(rate))
-                .expect("Overflow in native amount");
+            let stoken: Address = env.invoke_contract(
+                &oracle_addr,
+                &Symbol::new(&env, ORACLE_GET_S_TOKEN_ADDR),
+                vec![&env, currency.clone().into_val(&env)],
+            );
 
             let net_acbu_i = acbu_gross_i
                 .checked_sub(fee_i)
                 .expect("Underflow in net per-leg");
 
-            if native_i > 0 {
+            let native_i = net_acbu_i
+                .checked_mul(acbu_rate)
+                .and_then(|v| v.checked_div(rate))
+                .expect("Overflow in native amount");
 
+            if native_i > 0 {
                 let token = soroban_sdk::token::Client::new(&env, &stoken);
                 let spender = env.current_contract_address();
                 token.transfer_from(&spender, &vault, &recipient, &native_i);
             }
             amounts_out.push_back(native_i);
 
-
+            let burn_event = BurnEvent {
+                transaction_id: SorobanString::from_str(&env, "redeem_basket"),
                 user: user.clone(),
                 acbu_amount: acbu_gross_i,
                 net_acbu: net_acbu_i,
@@ -385,8 +419,6 @@ impl BurningContract {
             env.events()
                 .publish((symbol_short!("burn"), user.clone()), burn_event);
         }
-
-
 
         reentrancy_guard::release_guard(&env);
         amounts_out
@@ -623,7 +655,12 @@ impl BurningContract {
     }
 
     fn check_paused(env: &Env) {
-
+        let phase: ContractPhase = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.phase)
+            .unwrap_or(ContractPhase::Active);
+        if matches!(phase, ContractPhase::Paused) {
             env.panic_with_error(ContractError::Paused);
         }
     }

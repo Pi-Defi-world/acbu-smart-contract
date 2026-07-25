@@ -38,6 +38,7 @@ pub enum OracleError {
     MaxValidatorsReached = 7021,
     TimestampRollback = 7022,
     RateNotInitialized = 7023,
+    CurrencyNotRegistered = 7024,
     Unknown = 7999,
 }
 
@@ -67,6 +68,7 @@ impl Display for OracleError {
             Self::MaxValidatorsReached => "maximum validators reached",
             Self::TimestampRollback => "timestamp rollback",
             Self::RateNotInitialized => "rate not initialized - no submissions yet",
+            Self::CurrencyNotRegistered => "currency not registered",
             Self::Unknown => "unknown oracle error",
         };
         f.write_str(message)
@@ -77,6 +79,13 @@ pub const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 const MIN_ORACLE_SOURCE_FEEDS: u32 = 3;
 /// Number of decimal places used for all rates reported by this oracle.
 const RATE_DECIMALS: u32 = 7;
+
+/// Mirrors acbu_reserve_tracker's instance-TTL ceiling: bumps the entry to
+/// ~300 days (at 5s/ledger) on every rate write and read. Every mint, burn,
+/// and reserve check reads through this contract's instance storage, so it
+/// must never be allowed to archive from inactivity.
+const INSTANCE_TTL_THRESHOLD: u32 = 5_184_000;
+const INSTANCE_TTL_EXTEND_TO: u32 = 5_184_000;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -237,6 +246,7 @@ impl OracleContract {
         env.storage()
             .instance()
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
+        Self::extend_instance_ttl(&env);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -421,7 +431,16 @@ impl OracleContract {
             }
         }
 
-        if sources.len() > 0 && sources.len() < MIN_ORACLE_SOURCE_FEEDS {
+        let min_sigs: u32 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.min_signatures)
+            .unwrap();
+        let required = min_sigs.max(MIN_ORACLE_SOURCE_FEEDS);
+        // The 0/1-source path below intentionally bypasses median/outlier
+        // aggregation, so the multi-source quorum floor only applies once
+        // there's more than one source to aggregate.
+        if sources.len() > 1 && sources.len() < required {
             env.panic_with_error(OracleError::InsufficientOracleSources);
         }
 
@@ -480,6 +499,7 @@ impl OracleContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.last_update, &current_time);
+        Self::extend_instance_ttl(&env);
 
         let event = RateUpdateEvent {
             currency: currency.clone(),
@@ -525,6 +545,7 @@ impl OracleContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.last_update, &current_time);
+        Self::extend_instance_ttl(&env);
 
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         let event = RateUpdateEvent {
@@ -1013,12 +1034,19 @@ impl OracleContract {
     // ─────────────────────────────────────────────────────────────────────────
 
     fn get_rate_internal(env: &Env, currency: &CurrencyCode) -> Option<RateData> {
+        Self::extend_instance_ttl(env);
         let rates: Map<CurrencyCode, RateData> = env
             .storage()
             .instance()
             .get(&DATA_KEY.rates)
             .unwrap_or(Map::new(env));
         rates.get(currency.clone())
+    }
+
+    fn extend_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
     }
 
     fn assert_rate_fresh(env: &Env, rate_data: &RateData, currency: &CurrencyCode) {
