@@ -129,12 +129,17 @@ impl BurningContract {
     /// transfers the equivalent S-token amount to `recipient` from the vault.
     /// Requires that both the ACBU/USD and currency/USD oracle prices are fresh
     /// (within `UPDATE_INTERVAL_SECONDS`) and that reserves are sufficient.
+    ///
+    /// `min_stoken_out` is an optional slippage guard: if the computed S-token
+    /// output is below this value the transaction reverts with `SlippageExceeded`
+    /// before any ACBU is burned. Pass `None` to disable the check.
     pub fn redeem_single(
         env: Env,
         user: Address,
         recipient: Address,
         acbu_amount: i128,
         currency: CurrencyCode,
+        min_stoken_out: Option<i128>,
     ) -> i128 {
 
         Self::check_paused(&env);
@@ -204,6 +209,13 @@ impl BurningContract {
             .and_then(|v| v.checked_div(rate))
             .expect("Overflow in stoken out calculation");
 
+        // Slippage guard: reject before any state change if output is below caller's floor.
+        if let Some(floor) = min_stoken_out {
+            if stoken_out < floor {
+                env.panic_with_error(ContractError::SlippageExceeded);
+            }
+        }
+
         Self::check_reserves(&env, &acbu_token, &reserve_tracker_addr);
 
         let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token);
@@ -233,11 +245,19 @@ impl BurningContract {
     }
 
     /// Redeem ACBU for proportional Afreum S-tokens across the basket (lower fee tier).
+    ///
+    /// `min_stokens_out` is an optional per-leg slippage guard: if provided, its
+    /// length must equal the number of basket currencies and each element is the
+    /// minimum acceptable S-token amount for that leg. The transaction reverts
+    /// with `SlippageExceeded` before any ACBU is burned if any leg's computed
+    /// output falls below the corresponding floor. Pass `None` to disable all
+    /// per-leg checks (backwards-compatible default).
     pub fn redeem_basket(
         env: Env,
         user: Address,
         recipients: Vec<Address>,
         acbu_amount: i128,
+        min_stokens_out: Option<Vec<i128>>,
     ) -> Vec<i128> {
         Self::check_paused(&env);
         user.require_auth();
@@ -245,6 +265,13 @@ impl BurningContract {
 
         if recipients.is_empty() {
             env.panic_with_error(ContractError::InvalidRecipient);
+        }
+
+        // Validate min_stokens_out length before doing any heavy computation.
+        if let Some(ref floors) = min_stokens_out {
+            if floors.len() != recipients.len() {
+                env.panic_with_error(ContractError::InvalidAmount);
+            }
         }
 
         for i in 0..recipients.len() {
@@ -325,6 +352,61 @@ impl BurningContract {
             .checked_mul(acbu_rate)
             .and_then(|v| v.checked_div(DECIMALS))
             .expect("Overflow in usd total");
+
+        // Pre-flight slippage check — runs before any state change so the
+        // transaction reverts cleanly without burning ACBU first.
+        if let Some(ref floors) = min_stokens_out {
+            let mut pf_last_positive: Option<u32> = None;
+            for i in 0..weights.len() {
+                if weights.get(i).unwrap() > 0 {
+                    pf_last_positive = Some(i);
+                }
+            }
+            let mut pf_allocated_usd = 0i128;
+            let mut pf_allocated_gross = 0i128;
+            let mut pf_allocated_fee = 0i128;
+            for i in 0..currencies.len() {
+                let currency = currencies.get(i).unwrap();
+                let weight = weights.get(i).unwrap();
+                if weight == 0 {
+                    continue;
+                }
+                let (rate, _): (i128, u64) = env.invoke_contract(
+                    &oracle_addr,
+                    &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
+                    vec![&env, currency.clone().into_val(&env)],
+                );
+                if rate <= 0 {
+                    env.panic_with_error(ContractError::InvalidRate);
+                }
+                let (pf_usd_i, pf_gross_i, pf_fee_i) = if pf_last_positive == Some(i) {
+                    (
+                        usd_total.checked_sub(pf_allocated_usd).expect("pf usd"),
+                        acbu_amount.checked_sub(pf_allocated_gross).expect("pf gross"),
+                        total_fee.checked_sub(pf_allocated_fee).expect("pf fee"),
+                    )
+                } else {
+                    (
+                        Self::weighted_floor(usd_total, weight, total_weight),
+                        Self::weighted_floor(acbu_amount, weight, total_weight),
+                        Self::weighted_floor(total_fee, weight, total_weight),
+                    )
+                };
+                pf_allocated_usd = pf_allocated_usd.checked_add(pf_usd_i).expect("pf alloc usd");
+                pf_allocated_gross = pf_allocated_gross.checked_add(pf_gross_i).expect("pf alloc gross");
+                pf_allocated_fee = pf_allocated_fee.checked_add(pf_fee_i).expect("pf alloc fee");
+                let pf_net_i = pf_gross_i.checked_sub(pf_fee_i).expect("pf net");
+                let pf_native_i = pf_net_i
+                    .checked_mul(acbu_rate)
+                    .and_then(|v| v.checked_div(rate))
+                    .expect("pf native");
+                if let Some(floor) = floors.get(i) {
+                    if pf_native_i < floor {
+                        env.panic_with_error(ContractError::SlippageExceeded);
+                    }
+                }
+            }
+        }
 
         reentrancy_guard::acquire_guard(&env);
         Self::check_reserves(&env, &acbu_token, &reserve_tracker_addr);

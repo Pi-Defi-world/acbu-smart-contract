@@ -125,6 +125,10 @@ pub enum MintingError {
     InvalidRecipient = 5023,
     InvalidRoleSeparation = 5024,
     SupplyMismatch = 5025,
+    /// The computed ACBU output is below the caller-supplied `min_acbu_out`
+    /// floor, indicating that same-block oracle movement would cause unacceptable
+    /// slippage. The transaction should be retried with updated parameters.
+    SlippageExceeded = 5026,
     Unknown = 5999,
 }
 
@@ -156,6 +160,7 @@ impl Display for MintingError {
             Self::InvalidRecipient => "invalid recipient",
             Self::InvalidRoleSeparation => "admin and operator must be different addresses",
             Self::SupplyMismatch => "supplied value does not match on-chain supply",
+            Self::SlippageExceeded => "output below minimum: slippage exceeded",
             Self::Unknown => "unknown minting error",
         };
         f.write_str(message)
@@ -286,7 +291,17 @@ impl MintingContract {
     }
 
     /// Mint ACBU from USDC deposit (unchanged reserve/oracle flow).
-    pub fn mint_from_usdc(env: Env, user: Address, usdc_amount: i128, recipient: Address) -> i128 {
+    ///
+    /// `min_acbu_out` is an optional slippage guard: if the computed ACBU amount
+    /// is below this value the transaction reverts with `SlippageExceeded`.
+    /// Pass `None` to disable the check (backwards-compatible default).
+    pub fn mint_from_usdc(
+        env: Env,
+        user: Address,
+        usdc_amount: i128,
+        recipient: Address,
+        min_acbu_out: Option<i128>,
+    ) -> i128 {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
@@ -342,6 +357,13 @@ impl MintingContract {
             .checked_mul(DECIMALS)
             .and_then(|v| v.checked_div(acbu_rate))
             .unwrap_or_else(|| env.panic_with_error(MintingError::InvalidMintAmount));
+
+        // Slippage guard: reject if computed output is below caller's minimum.
+        if let Some(floor) = min_acbu_out {
+            if acbu_amount < floor {
+                env.panic_with_error(MintingError::SlippageExceeded);
+            }
+        }
 
         let projected_supply = total_supply
             .checked_add(acbu_amount)

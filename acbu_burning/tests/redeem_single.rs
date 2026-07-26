@@ -32,9 +32,7 @@ fn test_redeem_single_success() {
     let recipient = Address::generate(&env);
     let out = ctx
         .burning
-        .redeem_single(&ctx.user, &recipient, &burn_amount, &currency);
-
-    let expected_fee = (burn_amount * 200) / BASIS_POINTS;
+        .redeem_single(&ctx.user, &recipient, &burn_amount, &currency, &None);
     let net_acbu = burn_amount - expected_fee;
     let expected_out = (net_acbu * acbu_rate) / ngn_rate;
 
