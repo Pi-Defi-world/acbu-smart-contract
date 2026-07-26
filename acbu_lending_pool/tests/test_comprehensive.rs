@@ -1,6 +1,8 @@
 #![cfg(test)]
 
-use acbu_lending_pool::{BorrowEvent, LendingPool, LendingPoolClient, LoanStatus, RepayEvent};
+use acbu_lending_pool::{
+    BorrowEvent, LoanCreatedEvent, LendingPool, LendingPoolClient, LoanStatus, RepayEvent,
+};
 use shared::DECIMALS;
 use soroban_sdk::{
     symbol_short,
@@ -697,4 +699,62 @@ fn test_borrow_negative_amount_fails() {
 
     let result = client.try_borrow(&borrower, &lender, &-100, &1u64);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_loan_created_event_has_correct_term_seconds() {
+    let (env, client, contract_id, _admin, acbu_token) = setup();
+
+    let lender = Address::generate(&env);
+    let borrower = Address::generate(&env);
+    let pool_liquidity = 10_000 * DECIMALS;
+    let borrow_amount = 3_000 * DECIMALS;
+    let loan_id = 99u64;
+
+    let token_admin = StellarAssetClient::new(&env, &acbu_token);
+    token_admin.mint(&lender, &pool_liquidity);
+    client.deposit(&lender, &pool_liquidity);
+
+    let borrow_timestamp = env.ledger().timestamp();
+    client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
+
+    let events = env.events().all();
+    let loan_created_event = events
+        .iter()
+        .rev()
+        .find(|e| {
+            e.0 == contract_id
+                && e.1.first().map_or(false, |t| {
+                    if let Ok(symbol_val) =
+                        TryIntoVal::<_, Symbol>::try_into_val(&t, &env)
+                    {
+                        symbol_val == symbol_short!("loan_cr")
+                    } else {
+                        false
+                    }
+                })
+        })
+        .expect("loan_cr event not found");
+
+    let event_data: LoanCreatedEvent = loan_created_event.2.try_into_val(&env).unwrap();
+
+    assert_eq!(
+        event_data.term_seconds,
+        30 * 24 * 60 * 60,
+        "event.term_seconds should equal 30 days in seconds (2_592_000)"
+    );
+    assert_eq!(event_data.lender, lender, "event.lender should match");
+    assert_eq!(event_data.borrower, borrower, "event.borrower should match");
+    assert_eq!(
+        event_data.amount, borrow_amount,
+        "event.amount should match borrow_amount"
+    );
+    assert_eq!(
+        event_data.interest_bps, 300,
+        "event.interest_bps should match fee_rate (300)"
+    );
+    assert_eq!(
+        event_data.timestamp, borrow_timestamp,
+        "event.timestamp should match borrow timestamp"
+    );
 }

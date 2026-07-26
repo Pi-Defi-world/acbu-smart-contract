@@ -27,6 +27,8 @@ pub enum DataKey {
 }
 
 const VERSION: u32 = CONTRACT_VERSION;
+/// Duration of a loan in seconds (30 days).
+const LOAN_TERM_SECONDS: u64 = 30 * 24 * 60 * 60;
 const UPGRADE_TIMELOCK_SECONDS: u64 = 86_400;
 /// TTL extension applied to instance storage on every public entry-point call
 /// (≈60 days at ~5-second ledger close time).
@@ -410,7 +412,7 @@ impl LendingPool {
             interest_rate_bps: u32::try_from(fee_rate_bps)
                 .unwrap_or_else(|_| env.panic_with_error(Error::InvalidAmount)),
             loan_start_timestamp: start_time,
-            repayment_deadline: start_time + (30 * 24 * 60 * 60),
+            repayment_deadline: start_time + LOAN_TERM_SECONDS,
             accrued_interest: 0,
             total_repayment_due: amount,
             status: LoanStatus::Active,
@@ -451,7 +453,7 @@ impl LendingPool {
                 borrower,
                 amount,
                 interest_bps: fee_rate,
-                term_seconds: 0,
+                term_seconds: LOAN_TERM_SECONDS,
                 timestamp,
             },
         );
