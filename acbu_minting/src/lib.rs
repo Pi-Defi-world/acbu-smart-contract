@@ -1094,6 +1094,22 @@ impl MintingContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         Self::check_paused(&env);
+
+        // SC-035 (1): reject negative values — supply can never be below zero.
+        if new_supply < 0 {
+            env.panic_with_error(MintingError::NegativeSupply);
+        }
+
+        // SC-035 (2): cross-check against the token contract's on-chain
+        // total_supply so the minting contract's internal counter stays in sync
+        // with the actual circulating supply.
+        let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
+        let token_client = soroban_sdk::token::Client::new(&env, &acbu_token);
+        let on_chain_supply = token_client.total_supply();
+        if new_supply != on_chain_supply {
+            env.panic_with_error(MintingError::SupplyMismatch);
+        }
+
         Self::check_supply_cap(&env, new_supply);
 
         let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
