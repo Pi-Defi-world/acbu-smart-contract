@@ -11,30 +11,30 @@ Soroban (Stellar) smart contracts for the ACBU (African Currency Basket Unit) st
 
 ## Prerequisites
 
-- Rust 1.70 or higher
+- Rust 1.87.0 (pinned in `rust-toolchain.toml`)
 - Soroban CLI (`cargo install --locked soroban-cli`)
 - Stellar account with XLM for deployment fees
 
 ## Building
 
-```bash
-# Build all contracts
-cargo build --target wasm32-unknown-unknown --release
+You can use the new `Makefile` for common commands.
 
-# Build specific contract
-cd minting
-cargo build --target wasm32-unknown-unknown --release
+```bash
+# Build all contracts in the workspace
+make build
+
+# Build a specific contract
+make build-minting
 ```
 
 ## Testing
 
 ```bash
-# Run all tests
-cargo test
+# Run all tests in the workspace
+make test
 
-# Run tests for specific contract
-cd minting
-cargo test
+# Run tests for a specific contract
+make test-minting
 ```
 
 ## Deployment
@@ -43,20 +43,22 @@ cargo test
 
 ```bash
 export STELLAR_SECRET_KEY="your-secret-key"
-./scripts/deploy_testnet.sh
+make deploy-testnet
 ```
 
 ### Mainnet
 
 ```bash
 export STELLAR_SECRET_KEY="your-secret-key"
-./scripts/deploy_mainnet.sh
+make deploy-mainnet
 ```
 
-**Warning:** Only deploy to mainnet after:
-1. Testing on testnet
-2. Security audit completion
-3. Backup of secret keys
+## Git Hooks Setup
+
+After cloning, run:
+```bash
+make setup-hooks
+```
 
 ## Contract Addresses
 
@@ -64,17 +66,31 @@ After deployment, contract addresses are saved to `.soroban/deployment_{network}
 
 ## Development
 
+### Git Hooks Setup
+
+After cloning, run:
+```bash
+./scripts/setup-git-hooks.sh
+```
+This configures the pre-commit hook for WASM integrity checks.
+
+
 ### Project Structure
 
 ```
-contracts/
-├── Cargo.toml              # Workspace configuration
+.
+├── acbu_minting/           # Minting contract
+├── acbu_burning/           # Burning contract
+├── acbu_oracle/            # Oracle contract
+├── acbu_reserve_tracker/   # Reserve tracker contract
+├── acbu_savings_vault/     # Savings vault contract
+├── acbu_lending_pool/      # Lending pool contract
+├── acbu_escrow/            # Escrow contract
+├── acbu_multisig/          # Multisig shared contract
 ├── shared/                 # Shared types and utilities
-├── minting/                # Minting contract
-├── burning/                # Burning contract
-├── oracle/                 # Oracle contract
-├── reserve_tracker/        # Reserve tracker contract
-└── scripts/                # Deployment scripts
+├── scripts/                # Deployment scripts
+├── docs/                   # Documentation
+└── tests/                  # Integration tests
 ```
 
 ### Adding a New Contract

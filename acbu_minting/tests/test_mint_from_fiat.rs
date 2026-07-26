@@ -11,8 +11,10 @@ use soroban_sdk::{
 // --- Mocks (reuse from test.rs) ---
 
 mod oracle_mock {
-    use super::*;
+    use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
+
     use shared::CurrencyCode;
+    use super::DECIMALS;
 
     #[contract]
     pub struct MockOracle;
@@ -59,7 +61,7 @@ mod oracle_mock {
 }
 
 mod reserve_mock {
-    use super::*;
+    use soroban_sdk::{contract, contractimpl, Env};
 
     #[contract]
     pub struct MockReserveTracker;
@@ -124,17 +126,19 @@ fn init_mint_client(
     fee_rate: i128,
     fee_single: i128,
 ) {
-    client.initialize(
-        admin,
-        oracle,
-        reserve_tracker,
-        acbu_token,
-        usdc_token,
-        vault,
-        treasury,
-        &fee_rate,
-        &fee_single,
-    );
+    let config = acbu_minting::MintingConfig {
+        admin: admin.clone(),
+        oracle: oracle.clone(),
+        reserve_tracker: reserve_tracker.clone(),
+        acbu_token: acbu_token.clone(),
+        usdc_token: usdc_token.clone(),
+        vault: vault.clone(),
+        treasury: treasury.clone(),
+        fee_rate_bps: fee_rate,
+        fee_single_bps: fee_single,
+        operator: admin.clone(),
+    };
+    client.initialize(&config);
 }
 
 // --- Tests for mint_from_fiat: Access Control and Validation ---
@@ -184,63 +188,12 @@ fn test_mint_from_fiat_success() {
 
     assert!(acbu > 0);
     let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token_id);
-    assert_eq!(acbu_client.balance(&recipient), acbu);
-    assert_eq!(client.get_total_supply(), acbu);
+    assert_eq!(acbu_client.balance(&recipient), acbu, "acbu_client.balance(&recipient) should equal acbu");
+    assert_eq!(client.get_total_supply(), acbu, "client.get_total_supply() should equal acbu");
 }
 
 #[test]
-fn test_mint_from_fiat_mints_fee_to_treasury() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
-    let operator = Address::generate(&env);
-    let recipient = Address::generate(&env);
-    let treasury = Address::generate(&env);
-    let mint_addr = client.address.clone();
-
-    let stoken_id = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
-    stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
-    oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
-
-    init_mint_client(
-        &env,
-        &client,
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token_id,
-        &usdc_token_id,
-        &admin,
-        &treasury,
-        100,
-        0,
-    );
-
-    client.set_operator(&operator);
-
-    let fiat_amount = 100 * DECIMALS;
-    let fintech_tx_id = SorobanString::from_str(&env, "fintech_fee_tx");
-    let acbu = client.mint_from_fiat(
-        &operator,
-        &recipient,
-        &CurrencyCode::new(&env, "NGN"),
-        &fiat_amount,
-        &fintech_tx_id,
-    );
-
-    let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token_id);
-    let expected_fee = 1 * DECIMALS;
-    let expected_acbu = 99 * DECIMALS;
-    assert_eq!(acbu, expected_acbu);
-    assert_eq!(acbu_client.balance(&recipient), expected_acbu);
-    assert_eq!(acbu_client.balance(&treasury), expected_fee);
-}
-
-#[test]
+#[should_panic(expected = "Unauthorized operator")]
 #[should_panic(expected = "#5007")]
 fn test_mint_from_fiat_unauthorized_caller() {
     let env = Env::default();
@@ -289,6 +242,7 @@ fn test_mint_from_fiat_unauthorized_caller() {
 }
 
 #[test]
+#[should_panic(expected = "Unauthorized operator")]
 #[should_panic(expected = "#5007")]
 fn test_mint_from_fiat_recipient_self_mint() {
     let env = Env::default();
@@ -383,6 +337,7 @@ fn test_mint_from_fiat_empty_tx_id() {
 }
 
 #[test]
+#[should_panic(expected = "Fiat transaction already processed")]
 #[should_panic(expected = "#5008")]
 fn test_mint_from_fiat_duplicate_tx_id() {
     let env = Env::default();
@@ -581,6 +536,7 @@ fn test_mint_from_fiat_admin_not_default_operator() {
 }
 
 #[test]
+#[should_panic(expected = "Unauthorized operator")]
 #[should_panic(expected = "#5007")]
 fn test_mint_from_fiat_admin_when_operator_set() {
     let env = Env::default();

@@ -8,8 +8,13 @@ crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
-soroban-sdk = "21.0.0"
+soroban-sdk = { workspace = true }
 shared = { path = "../shared" }
 
 [dev-dependencies]
-soroban-sdk = { version = "21.0.0", features = ["testutils"] }
+proptest = "1.11.0"
+soroban-sdk = { workspace = true, features = ['testutils'] }
+serde_json = "1.0"
+
+[lints]
+workspace = true

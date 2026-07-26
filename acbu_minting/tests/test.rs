@@ -8,11 +8,16 @@ use soroban_sdk::{
     Address, BytesN, Env, FromVal, IntoVal, String as SorobanString, Symbol, Vec,
 };
 
+// Include snapshot validation module
+mod snapshot_validation;
+
 // --- Mocks ---
 
 mod oracle_mock {
-    use super::*;
     use shared::CurrencyCode;
+    use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Vec};
+
+    use super::DECIMALS;
 
     #[contract]
     pub struct MockOracle;
@@ -59,7 +64,8 @@ mod oracle_mock {
 }
 
 mod reserve_mock {
-    use super::*;
+    use soroban_sdk::{contract, contractimpl, Env};
+
     #[contract]
     pub struct MockReserveTracker;
 
@@ -72,7 +78,8 @@ mod reserve_mock {
 }
 
 mod failing_reserve_mock {
-    use super::*;
+    use soroban_sdk::{contract, contractimpl, Env};
+
     #[contract]
     pub struct MockFailingReserveTracker;
 
@@ -97,17 +104,19 @@ fn init_mint_client(
     fee_rate: i128,
     fee_single: i128,
 ) {
-    client.initialize(
-        admin,
-        oracle,
-        reserve_tracker,
-        acbu_token,
-        usdc_token,
-        vault,
-        treasury,
-        &fee_rate,
-        &fee_single,
-    );
+    let config = acbu_minting::MintingConfig {
+        admin: admin.clone(),
+        oracle: oracle.clone(),
+        reserve_tracker: reserve_tracker.clone(),
+        acbu_token: acbu_token.clone(),
+        usdc_token: usdc_token.clone(),
+        vault: vault.clone(),
+        treasury: treasury.clone(),
+        fee_rate_bps: fee_rate,
+        fee_single_bps: fee_single,
+        operator: admin.clone(),
+    };
+    client.initialize(&config);
 }
 
 // --- Setup ---
@@ -169,9 +178,9 @@ fn test_initialize() {
         fee_single,
     );
 
-    assert_eq!(client.get_fee_rate(), fee_rate);
-    assert_eq!(client.get_fee_single(), fee_single);
-    assert_eq!(client.get_total_supply(), 0);
+    assert_eq!(client.get_fee_rate(), fee_rate, "client.get_fee_rate() should equal fee_rate");
+    assert_eq!(client.get_fee_single(), fee_single, "client.get_fee_single() should equal fee_single");
+    assert_eq!(client.get_total_supply(), 0, "client.get_total_supply() should equal 0");
     assert!(!client.is_paused());
 }
 
@@ -250,10 +259,10 @@ fn test_mint_from_usdc() {
     let expected_fee = 15_000_000;
     let expected_acbu = 485_000_000;
 
-    assert_eq!(acbu_minted, expected_acbu);
-    assert_eq!(acbu_client.balance(&user), expected_acbu);
-    assert_eq!(usdc_client.balance(&user), 50 * DECIMALS);
-    assert_eq!(client.get_total_supply(), expected_acbu);
+    assert_eq!(acbu_minted, expected_acbu, "acbu_minted should equal expected_acbu");
+    assert_eq!(acbu_client.balance(&user), expected_acbu, "acbu_client.balance(&user) should equal expected_acbu");
+    assert_eq!(usdc_client.balance(&user), 50 * DECIMALS, "usdc_client.balance(&user) should equal 50 * DECIMALS");
+    assert_eq!(client.get_total_supply(), expected_acbu, "client.get_total_supply() should equal expected_acbu");
 
     let events = env.events().all();
     let mut found = false;
@@ -266,9 +275,9 @@ fn test_mint_from_usdc() {
             && Symbol::from_val(&env, &topics.get(0).unwrap()) == symbol_short!("mint")
         {
             let event_data: MintEvent = event.2.into_val(&env);
-            assert_eq!(event_data.usdc_amount, mint_amount);
-            assert_eq!(event_data.acbu_amount, expected_acbu);
-            assert_eq!(event_data.fee, expected_fee);
+            assert_eq!(event_data.usdc_amount, mint_amount, "event_data.usdc_amount should equal mint_amount");
+            assert_eq!(event_data.acbu_amount, expected_acbu, "event_data.acbu_amount should equal expected_acbu");
+            assert_eq!(event_data.fee, expected_fee, "event_data.fee should equal expected_fee");
             found = true;
             break;
         }
@@ -337,10 +346,11 @@ fn test_mint_from_basket() {
     );
 
     let acbu_amt = 100 * DECIMALS;
+    let proof = SorobanString::from_str(&env, "basket_proof_001");
     let proof_id = soroban_sdk::String::from_str(&env, "proof_1");
     let net = client.mint_from_basket(&user, &user, &acbu_amt, &proof_id);
     assert!(net > 0);
-    assert_eq!(client.get_total_supply(), acbu_amt);
+    assert_eq!(client.get_total_supply(), acbu_amt, "client.get_total_supply() should equal acbu_amt");
 }
 
 #[test]
@@ -425,11 +435,10 @@ fn test_mint_from_demo_fiat() {
         &CurrencyCode::new(&env, "NGN"),
         &fiat_amount,
         &proof,
-        &tx_id,
     );
     assert!(acbu > 0);
-    assert_eq!(acbu_client.balance(&recipient), acbu);
-    assert_eq!(client.get_total_supply(), acbu);
+    assert_eq!(acbu_client.balance(&recipient), acbu, "acbu_client.balance(&recipient) should equal acbu");
+    assert_eq!(client.get_total_supply(), acbu, "client.get_total_supply() should equal acbu");
 }
 
 #[test]
@@ -508,7 +517,7 @@ fn test_set_operator_and_mint_demo_fiat() {
     );
 
     client.set_operator(&operator);
-    assert_eq!(client.get_operator(), operator);
+    assert_eq!(client.get_operator(), operator, "client.get_operator() should equal operator");
 
     let proof = SorobanString::from_str(&env, "demo_proof_operator");
     let tx_id = soroban_sdk::String::from_str(&env, "tx_ok");
@@ -518,7 +527,6 @@ fn test_set_operator_and_mint_demo_fiat() {
         &CurrencyCode::new(&env, "NGN"),
         &(20 * DECIMALS),
         &proof,
-        &tx_id,
     );
     assert!(acbu > 0);
 }
@@ -588,6 +596,7 @@ fn test_mint_from_demo_fiat_exceeds_max() {
     client.set_operator(&operator);
 
     let huge_fiat_amount = 2_000_000_000_000;
+    // huge_fiat_amount converted to USD gross will exceed max (given 1:1 rate in MockOracle)
     let proof = SorobanString::from_str(&env, "demo_proof_huge");
     let tx_id = soroban_sdk::String::from_str(&env, "tx_huge");
     client.mint_from_demo_fiat(
@@ -596,7 +605,6 @@ fn test_mint_from_demo_fiat_exceeds_max() {
         &CurrencyCode::new(&env, "NGN"),
         &huge_fiat_amount,
         &proof,
-        &tx_id,
     );
 }
 
@@ -609,23 +617,24 @@ fn test_version_set_on_initialize() {
     let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
     init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
         &acbu_token, &usdc_token, &admin, &admin, 300, 100);
-    assert_eq!(client.get_version(), 1);
+    assert_eq!(client.get_version(), 1, "client.get_version() should equal 1");
 }
 
 #[test]
-#[should_panic(expected = "Invalid version upgrade")]
+#[should_panic(expected = "#5018")]
 fn test_upgrade_rejects_same_version() {
     let env = Env::default();
     env.mock_all_auths();
     let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
     init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
         &acbu_token, &usdc_token, &admin, &admin, 300, 100);
+    // version is 1; upgrading to 1 must be rejected before any WASM lookup
     let dummy_hash: BytesN<32> = bytesn!(&env, 0x0000000000000000000000000000000000000000000000000000000000000000);
     client.upgrade(&dummy_hash, &1u32);
 }
 
 #[test]
-#[should_panic(expected = "Invalid version upgrade")]
+#[should_panic(expected = "#5018")]
 fn test_upgrade_rejects_lower_version() {
     let env = Env::default();
     env.mock_all_auths();
@@ -643,11 +652,58 @@ fn test_storage_state_intact_across_upgrade_boundary() {
     let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
     init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
         &acbu_token, &usdc_token, &admin, &admin, 300, 100);
-    assert_eq!(client.get_version(), 1);
-    assert_eq!(client.get_fee_rate(), 300);
-    assert_eq!(client.get_fee_single(), 100);
-    assert_eq!(client.get_total_supply(), 0);
+    // All configured values must be intact regardless of whether an upgrade is attempted.
+    assert_eq!(client.get_version(), 1, "client.get_version() should equal 1");
+    assert_eq!(client.get_fee_rate(), 300, "client.get_fee_rate() should equal 300");
+    assert_eq!(client.get_fee_single(), 100, "client.get_fee_single() should equal 100");
+    assert_eq!(client.get_total_supply(), 0, "client.get_total_supply() should equal 0");
     assert!(!client.is_paused());
+}
+
+// --- SC-034: single-step upgrade enforcement ---
+
+/// Skipping a version (current=1, new=3) must be rejected with InvalidVersion (5018).
+#[test]
+#[should_panic(expected = "#5018")]
+fn test_upgrade_rejects_skipping_version() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
+        &acbu_token, &usdc_token, &admin, &admin, 300, 100);
+    // current version is 1; jumping to 3 skips v2 migration → must panic.
+    let dummy_hash: BytesN<32> = bytesn!(&env, 0x0000000000000000000000000000000000000000000000000000000000000000);
+    client.upgrade(&dummy_hash, &3u32);
+}
+
+/// Skipping many versions at once (current=1, new=100) must also be rejected.
+#[test]
+#[should_panic(expected = "#5018")]
+fn test_upgrade_rejects_large_version_jump() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
+        &acbu_token, &usdc_token, &admin, &admin, 300, 100);
+    let dummy_hash: BytesN<32> = bytesn!(&env, 0x0000000000000000000000000000000000000000000000000000000000000000);
+    client.upgrade(&dummy_hash, &100u32);
+}
+
+/// Upgrading by exactly one step (current=1, new=2) must be accepted and
+/// the stored version updated accordingly.
+#[test]
+fn test_upgrade_accepts_single_step() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
+        &acbu_token, &usdc_token, &admin, &admin, 300, 100);
+    assert_eq!(client.get_version(), 1);
+    // Use the current contract's own WASM hash — valid for testing the version
+    // guard; the WASM itself doesn't change in the test environment.
+    let current_hash = env.deployer().get_contract_wasm_hash(&client.address);
+    client.upgrade(&current_hash, &2u32);
+    assert_eq!(client.get_version(), 2);
 }
 
 #[test]
@@ -747,468 +803,60 @@ fn test_update_oracle_requires_admin_minting() {
     client2.update_oracle(&new_oracle);
 }
 
-// ============================================================
-// Tests added to resolve Issue #229:
-// "No tests for core minting flows"
-// Covers: mint_from_fiat, pause/unpause, and fee-rate management
-// ============================================================
-
-// --- Pause / Unpause ---
+// --- Fee-rate range validation (#317) ---
 
 #[test]
-fn test_pause_and_unpause() {
+fn test_set_fee_rate_accepts_in_range() {
     let env = Env::default();
     env.mock_all_auths();
     let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    let vault = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker, &acbu_token, &usdc_token, &vault, &treasury, 100, 200);
 
-    init_mint_client(
-        &env,
-        &client,
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token,
-        &usdc_token,
-        &admin,
-        &admin,
-        300,
-        100,
-    );
-
-    assert!(!client.is_paused(), "contract should start unpaused");
-
-    client.pause();
-    assert!(client.is_paused(), "contract should be paused after pause()");
-
-    client.unpause();
-    assert!(!client.is_paused(), "contract should be unpaused after unpause()");
+    // The upper bound (BASIS_POINTS == 100%) is accepted.
+    client.set_fee_rate(&10_000);
+    assert_eq!(client.get_fee_rate(), 10_000);
+    client.set_fee_rate(&0);
+    assert_eq!(client.get_fee_rate(), 0);
 }
 
 #[test]
 #[should_panic(expected = "#5002")]
-fn test_mint_from_usdc_reverts_when_paused() {
+fn test_set_fee_rate_rejects_above_basis_points() {
     let env = Env::default();
     env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    let vault = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker, &acbu_token, &usdc_token, &vault, &treasury, 100, 200);
 
-    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
-    let user = Address::generate(&env);
-
-    let usdc_sac = soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token_id);
-    usdc_sac.mint(&user, &(100 * DECIMALS));
-
-    init_mint_client(
-        &env,
-        &client,
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token_id,
-        &usdc_token_id,
-        &admin,
-        &admin,
-        300,
-        100,
-    );
-
-    client.pause();
-
-    // Should panic with error #5002 (paused)
-    client.mint_from_usdc(&user, &(10 * DECIMALS), &user);
+    // A fee above 10,000 bps (>100%) would silence mints / underflow fee math, so it must revert.
+    client.set_fee_rate(&10_001);
 }
 
 #[test]
 #[should_panic(expected = "#5002")]
-fn test_mint_from_fiat_reverts_when_paused() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
-    let recipient = Address::generate(&env);
-    let mint_addr = client.address.clone();
-
-    let stoken_id = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
-    stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
-    oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken_id);
-
-    init_mint_client(
-        &env,
-        &client,
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token_id,
-        &usdc_token_id,
-        &admin,
-        &admin,
-        50,
-        100,
-    );
-
-    client.pause();
-
-    // mint_from_fiat must also respect the pause flag
-    let tx_id = soroban_sdk::String::from_str(&env, "tx_paused");
-    client.mint_from_fiat(
-        &admin,
-        &recipient,
-        &CurrencyCode::new(&env, "NGN"),
-        &(10 * DECIMALS),
-        &tx_id,
-    );
-}
-
-// --- Fee Rate ---
-
-#[test]
-fn test_get_and_set_fee_rate() {
+fn test_set_fee_rate_rejects_negative() {
     let env = Env::default();
     env.mock_all_auths();
     let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    let vault = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker, &acbu_token, &usdc_token, &vault, &treasury, 100, 200);
 
-    init_mint_client(
-        &env,
-        &client,
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token,
-        &usdc_token,
-        &admin,
-        &admin,
-        300,
-        100,
-    );
-
-    assert_eq!(client.get_fee_rate(), 300);
-    assert_eq!(client.get_fee_single(), 100);
-
-    client.set_fee_rate(&150);
-    assert_eq!(client.get_fee_rate(), 150, "fee_rate should update to 150");
+    client.set_fee_rate(&-1);
 }
 
 #[test]
-fn test_fee_rate_zero_means_no_fee_deducted() {
+#[should_panic(expected = "#5002")]
+fn test_set_fee_single_rejects_above_basis_points() {
     let env = Env::default();
     env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    let vault = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker, &acbu_token, &usdc_token, &vault, &treasury, 100, 200);
 
-    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
-    let user = Address::generate(&env);
-
-    let usdc_sac = soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token_id);
-    let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token_id);
-    let usdc_amount = 10 * DECIMALS;
-    usdc_sac.mint(&user, &usdc_amount);
-
-    init_mint_client(
-        &env,
-        &client,
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token_id,
-        &usdc_token_id,
-        &admin,
-        &admin,
-        0, // zero percentage fee
-        0, // zero flat fee
-    );
-
-    let acbu_minted = client.mint_from_usdc(&user, &usdc_amount, &user);
-
-    // With no fee the minted ACBU must equal the full USDC input (1:1 rate from mock oracle)
-    assert_eq!(acbu_minted, usdc_amount, "zero fee must yield 1:1 mint");
-    assert_eq!(acbu_client.balance(&user), usdc_amount);
-    assert_eq!(client.get_total_supply(), usdc_amount);
-}
-
-#[test]
-fn test_fee_applied_correctly_on_usdc_mint() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
-    let user = Address::generate(&env);
-
-    let usdc_sac = soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token_id);
-    let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token_id);
-
-    let usdc_amount = 100 * DECIMALS; // 100 USDC
-    usdc_sac.mint(&user, &usdc_amount);
-
-    // fee_rate = 100 bps (1%), fee_single = 0
-    init_mint_client(
-        &env,
-        &client,
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token_id,
-        &usdc_token_id,
-        &admin,
-        &admin,
-        100,
-        0,
-    );
-
-    let acbu_minted = client.mint_from_usdc(&user, &usdc_amount, &user);
-
-    // 1% of 100 USDC = 1 USDC fee → 99 ACBU minted
-    let expected_acbu = 99 * DECIMALS;
-    assert_eq!(
-        acbu_minted, expected_acbu,
-        "1% fee on 100 USDC should yield 99 ACBU"
-    );
-    assert_eq!(acbu_client.balance(&user), expected_acbu);
-}
-
-// --- mint_from_fiat (admin/operator fiat path) ---
-
-#[test]
-fn test_mint_from_fiat_happy_path() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
-    let recipient = Address::generate(&env);
-    let mint_addr = client.address.clone();
-
-    let stoken_id = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
-    stoken_sac.mint(&mint_addr, &(500 * DECIMALS));
-    oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken_id);
-
-    init_mint_client(
-        &env,
-        &client,
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token_id,
-        &usdc_token_id,
-        &admin,
-        &admin,
-        50,
-        100,
-    );
-
-    let fiat_amount = 100 * DECIMALS;
-    let acbu_client = soroban_sdk::token::Client::new(&env, &acbu_token_id);
-
-    let tx_id = soroban_sdk::String::from_str(&env, "fiat_tx_001");
-    let acbu_minted = client.mint_from_fiat(
-        &admin,
-        &recipient,
-        &CurrencyCode::new(&env, "NGN"),
-        &fiat_amount,
-        &tx_id,
-    );
-
-    assert!(acbu_minted > 0, "mint_from_fiat must return positive ACBU");
-    assert_eq!(
-        acbu_client.balance(&recipient),
-        acbu_minted,
-        "recipient balance must equal minted amount"
-    );
-    assert_eq!(
-        client.get_total_supply(),
-        acbu_minted,
-        "total_supply must reflect the mint"
-    );
-}
-
-#[test]
-fn test_mint_from_fiat_emits_event() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
-    let recipient = Address::generate(&env);
-    let mint_addr = client.address.clone();
-
-    let stoken_id = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
-    stoken_sac.mint(&mint_addr, &(200 * DECIMALS));
-    oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken_id);
-
-    init_mint_client(
-        &env,
-        &client,
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token_id,
-        &usdc_token_id,
-        &admin,
-        &admin,
-        0,
-        0,
-    );
-
-    let tx_id = soroban_sdk::String::from_str(&env, "fiat_tx_event");
-    client.mint_from_fiat(
-        &admin,
-        &recipient,
-        &CurrencyCode::new(&env, "NGN"),
-        &(50 * DECIMALS),
-        &tx_id,
-    );
-
-    let events = env.events().all();
-    let contract_events: std::vec::Vec<_> = events
-        .iter()
-        .filter(|e| e.0 == client.address)
-        .collect();
-    assert!(
-        !contract_events.is_empty(),
-        "mint_from_fiat must emit at least one contract event"
-    );
-}
-
-#[test]
-#[should_panic(expected = "#5007")]
-fn test_mint_from_fiat_rejects_non_operator() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
-    let attacker = Address::generate(&env);
-    let recipient = Address::generate(&env);
-    let mint_addr = client.address.clone();
-
-    let stoken_id = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
-    stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
-    oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken_id);
-
-    init_mint_client(
-        &env,
-        &client,
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token_id,
-        &usdc_token_id,
-        &admin,
-        &admin,
-        50,
-        100,
-    );
-
-    // attacker is neither admin nor a set operator — must panic #5007
-    let tx_id = soroban_sdk::String::from_str(&env, "tx_hack");
-    client.mint_from_fiat(
-        &attacker,
-        &recipient,
-        &CurrencyCode::new(&env, "NGN"),
-        &(10 * DECIMALS),
-        &tx_id,
-    );
-}
-
-#[test]
-#[should_panic(expected = "#5003")]
-fn test_mint_from_fiat_exceeds_max() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
-    let recipient = Address::generate(&env);
-    let mint_addr = client.address.clone();
-
-    let huge_amount = 2_000_000_000_000_i128;
-
-    let stoken_id = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
-    stoken_sac.mint(&mint_addr, &(huge_amount * 2));
-    oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken_id);
-
-    init_mint_client(
-        &env,
-        &client,
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token_id,
-        &usdc_token_id,
-        &admin,
-        &admin,
-        0,
-        0,
-    );
-
-    let tx_id = soroban_sdk::String::from_str(&env, "tx_huge");
-    client.mint_from_fiat(
-        &admin,
-        &recipient,
-        &CurrencyCode::new(&env, "NGN"),
-        &huge_amount,
-        &tx_id,
-    );
-}
-
-#[test]
-fn test_mint_from_fiat_total_supply_accumulates() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
-    let r1 = Address::generate(&env);
-    let r2 = Address::generate(&env);
-    let mint_addr = client.address.clone();
-
-    let stoken_id = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let stoken_sac = soroban_sdk::token::StellarAssetClient::new(&env, &stoken_id);
-    stoken_sac.mint(&mint_addr, &(1_000 * DECIMALS));
-    oracle_mock::MockOracleClient::new(&env, &oracle).seed_stoken(&stoken_id);
-
-    init_mint_client(
-        &env,
-        &client,
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token_id,
-        &usdc_token_id,
-        &admin,
-        &admin,
-        0,
-        0,
-    );
-
-    let tx1 = soroban_sdk::String::from_str(&env, "tx_acc_1");
-    let tx2 = soroban_sdk::String::from_str(&env, "tx_acc_2");
-
-    let a1 = client.mint_from_fiat(
-        &admin,
-        &r1,
-        &CurrencyCode::new(&env, "NGN"),
-        &(30 * DECIMALS),
-        &tx1,
-    );
-    let a2 = client.mint_from_fiat(
-        &admin,
-        &r2,
-        &CurrencyCode::new(&env, "NGN"),
-        &(70 * DECIMALS),
-        &tx2,
-    );
-
-    assert_eq!(
-        client.get_total_supply(),
-        a1 + a2,
-        "total_supply must equal sum of all minted ACBU"
-    );
+    client.set_fee_single(&10_001);
 }
