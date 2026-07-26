@@ -6,7 +6,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEST="$PROJECT_ROOT/soroban_token_contract.wasm"
 
 # SHA-256 of the expected artifact — must match contractimport! sha256 fields.
-EXPECTED_HASH="eb1a53948744e12a6b00ec891b301ebc78a06deb984d3726c9cbc315392aedec"
+EXPECTED_HASH="8759e8ea16c858a6d3b743dd0be8b580e363d0097538fb77b375965619288d95"
 
 # Stellar / soroban-examples release that ships this exact token contract.
 # The soroban-examples repo does not publish pre-built WASM binaries;
@@ -45,7 +45,7 @@ trap "rm -rf $TEMP_DIR" EXIT
 git clone --depth 1 --branch "$SOROBAN_EXAMPLES_TAG" "$SOROBAN_EXAMPLES_REPO" "$TEMP_DIR/soroban-examples" 2>&1 | grep -v "^Cloning" || true
 
 # Build the token contract
-cd "$TEMP_DIR/soroban-examples/contracts/tokens/stellar_asset"
+cd "$TEMP_DIR/soroban-examples/token"
 if cargo build --release --target wasm32-unknown-unknown >/dev/null 2>&1; then
   :
 else
@@ -54,7 +54,7 @@ else
 fi
 
 # Copy the built WASM to the destination
-BUILT_WASM="$TEMP_DIR/soroban-examples/target/wasm32-unknown-unknown/release/soroban_token_contract.wasm"
+BUILT_WASM="$TEMP_DIR/soroban-examples/token/target/wasm32-unknown-unknown/release/soroban_token_contract.wasm"
 if [[ ! -f "$BUILT_WASM" ]]; then
   echo -e "${RED}[FAIL]${NC} Built WASM file not found at expected location."
   exit 1
