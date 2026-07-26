@@ -20,10 +20,7 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 10 | `InsufficientBalance` | The account's token balance is too low to complete the transfer/operation. |
 | 11 | `InvalidRecipient` | The recipient address is invalid for this operation (e.g. a contract address where a classic account is required). |
 | 12 | `InvalidVersion` | WASM upgrade rejected: `new_version` must be greater than the stored version. |
-| 13 | `NoPendingAdmin` | No admin transfer is in progress, so `accept_admin` has nothing to claim. |
-| 14 | `AdminTimelockNotElapsed` | The two-step admin transfer timelock has not yet elapsed; the pending admin must wait before calling `accept_admin`. |
-| 15 | `NoPendingAdminToCancel` | No admin transfer is in progress, so `cancel_admin_transfer` has nothing to cancel. |
-| 9999 | `Unknown` | Catch-all for an unexpected/unclassified failure. Should not occur in normal operation; treat as an internal error. |
+| 9999 | `Unknown` | unknown error |
 
 ## `shared / reentrancy guard` - `ReentrancyError`
 
@@ -74,6 +71,7 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 1019 | `NoPendingAdmin` | no pending admin |
 | 1020 | `AdminTimelockNotElapsed` | admin timelock has not elapsed |
 | 1021 | `NoPendingAdminToCancel` | no pending admin to cancel |
+| 1022 | `InsufficientYieldReserve` | vault balance cannot cover principal + yield owed |
 | 1999 | `Unknown` | unknown savings vault error |
 
 ## `acbu_lending_pool` - `Error`
@@ -148,7 +146,8 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 5021 | `AdminTimelockNotElapsed` | admin timelock has not elapsed |
 | 5022 | `NoPendingAdminToCancel` | no pending admin to cancel |
 | 5023 | `InvalidRecipient` | invalid recipient |
-| 5024 | `InvalidRoleSeparation` | invalid role separation |
+| 5024 | `InvalidRoleSeparation` | admin and operator must be different addresses |
+| 5025 | `SupplyMismatch` | supplied value does not match on-chain supply |
 | 5999 | `Unknown` | unknown minting error |
 
 ## `acbu_oracle` - `OracleError`
@@ -178,6 +177,7 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 7021 | `MaxValidatorsReached` | maximum validators reached |
 | 7022 | `TimestampRollback` | timestamp rollback |
 | 7023 | `RateNotInitialized` | rate not initialized - no submissions yet |
+| 7024 | `CurrencyNotRegistered` | currency not registered |
 | 7999 | `Unknown` | unknown oracle error |
 
 ## `acbu_reserve_tracker` - `ReserveTrackerError`
@@ -191,4 +191,13 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 8005 | `AdminTimelockNotElapsed` | admin timelock has not elapsed |
 | 8006 | `NoPendingAdminToCancel` | no pending admin to cancel |
 | 8007 | `Unauthorized` | unauthorized |
+| 8008 | `AttestationNotFound` | no attestation submitted yet |
+| 8009 | `InvalidMerkleProof` | merkle proof does not match stored root |
+| 8010 | `InvalidCustodian` | caller is not the custodian |
+| 8011 | `AttestationExpired` | attestation has expired |
+| 8008 | `NonPositiveAmount` | amount and value_usd must be positive |
+| 8009 | `InconsistentReserve` | value_usd inconsistent with oracle rate |
+| 8010 | `DuplicateCurrency` | currency already tracked |
+| 8012 | `NoPendingUpgrade` | no pending upgrade |
+| 8013 | `TimelockNotElapsed` | timelock has not elapsed |
 | 8999 | `Unknown` | unknown reserve tracker error |
