@@ -1,7 +1,7 @@
 #![no_std]
 use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Symbol, Vec,
 };
 
@@ -112,15 +112,6 @@ const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 const INSTANCE_TTL_THRESHOLD: u32 = 5_184_000;
 const INSTANCE_TTL_EXTEND_TO: u32 = 5_184_000;
 
-/// Deposit lots live in *temporary* storage, which is erased entirely (not just
-/// restorable) once its TTL lapses. Unlike instance storage, a lot's required
-/// lifetime depends on the user-chosen lock term, so the extension target scales
-/// with `term_seconds` instead of using a fixed constant. `MIN_DEPOSIT_TTL_LEDGERS`
-/// mirrors acbu_escrow's temporary-entry threshold; `MAX_DEPOSIT_TTL_LEDGERS`
-/// mirrors this contract's own instance-TTL ceiling above.
-const APPROX_LEDGER_SECONDS: u64 = 5;
-const MIN_DEPOSIT_TTL_LEDGERS: u32 = 17_280;
-const MAX_DEPOSIT_TTL_LEDGERS: u32 = 5_184_000;
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -133,7 +124,7 @@ pub struct DepositLot {
     pub term_seconds: u64,
 }
 
-#[contractevent]
+#[contracttype]
 pub struct DepositEvent {
     pub user: Address,
     pub gross_amount: i128,
@@ -144,7 +135,7 @@ pub struct DepositEvent {
     pub maturity_timestamp: u64,
 }
 
-#[contractevent]
+#[contracttype]
 pub struct WithdrawEvent {
     pub user: Address,
     pub amount: i128,
@@ -213,17 +204,6 @@ impl SavingsVault {
     }
 
     /// Extends the temporary storage entry backing a user's deposit lots for
-    /// `term_seconds`, scaling the extension with the lock term (capped to
-    /// `MAX_DEPOSIT_TTL_LEDGERS`) so it survives at least until maturity.
-    fn extend_deposit_ttl(env: &Env, key: &(Symbol, Address, u64), term_seconds: u64) {
-        let term_ledgers = term_seconds
-            .saturating_div(APPROX_LEDGER_SECONDS)
-            .min(MAX_DEPOSIT_TTL_LEDGERS as u64) as u32;
-        let extend_to = term_ledgers.max(MIN_DEPOSIT_TTL_LEDGERS);
-        env.storage()
-            .temporary()
-            .extend_ttl(key, MIN_DEPOSIT_TTL_LEDGERS, extend_to);
-    }
 
     // -----------------------------------------------------------------------
     // Public logic
@@ -255,7 +235,7 @@ impl SavingsVault {
         env.storage().instance().set(&DATA_KEY.acbu_token, &acbu_token);
         env.storage().instance().set(&DATA_KEY.fee_rate, &fee_rate_bps);
         env.storage().instance().set(&DATA_KEY.yield_rate, &yield_rate_bps);
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
         env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
         Self::extend_instance_ttl(&env);
     }
@@ -314,7 +294,7 @@ impl SavingsVault {
         let key = (DEPOSIT_KEY, user.clone(), term_seconds);
         let mut lots: Vec<DepositLot> = env
             .storage()
-            .temporary()
+            .persistent()
             .get(&key)
             .unwrap_or_else(|| Vec::new(&env));
 
@@ -324,8 +304,7 @@ impl SavingsVault {
             term_seconds,
         });
 
-        env.storage().temporary().set(&key, &lots);
-        Self::extend_deposit_ttl(&env, &key, term_seconds);
+        env.storage().persistent().set(&key, &lots);
         Self::extend_instance_ttl(&env);
 
         env.events().publish(
@@ -361,7 +340,7 @@ impl SavingsVault {
         let key = (DEPOSIT_KEY, user.clone(), term_seconds);
         let lots: Vec<DepositLot> = env
             .storage()
-            .temporary()
+            .persistent()
             .get(&key)
             .unwrap_or_else(|| env.panic_with_error(Error::NoDeposit));
 
@@ -428,10 +407,9 @@ impl SavingsVault {
         }
 
         if updated_lots.is_empty() {
-            env.storage().temporary().remove(&key);
+            env.storage().persistent().remove(&key);
         } else {
-            env.storage().temporary().set(&key, &updated_lots);
-            Self::extend_deposit_ttl(&env, &key, term_seconds);
+            env.storage().persistent().set(&key, &updated_lots);
         }
         Self::extend_instance_ttl(&env);
 
@@ -478,7 +456,7 @@ impl SavingsVault {
         let key = (DEPOSIT_KEY, user, term_seconds);
         let lots: Vec<DepositLot> = env
             .storage()
-            .temporary()
+            .persistent()
             .get(&key)
             .unwrap_or_else(|| Vec::new(&env));
         Self::sum_lots(&lots)
@@ -491,7 +469,7 @@ impl SavingsVault {
         let key = (DEPOSIT_KEY, user, term_seconds);
         let lots: Vec<DepositLot> = env
             .storage()
-            .temporary()
+            .persistent()
             .get(&key)
             .unwrap_or_else(|| env.panic_with_error(Error::NoDeposit));
 
@@ -524,7 +502,7 @@ impl SavingsVault {
         let key = (DEPOSIT_KEY, user, term_seconds);
         let lots: Vec<DepositLot> = env
             .storage()
-            .temporary()
+            .persistent()
             .get(&key)
             .unwrap_or(Vec::new(&env));
 

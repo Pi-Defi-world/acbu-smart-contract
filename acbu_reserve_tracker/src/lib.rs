@@ -194,7 +194,7 @@ impl ReserveTrackerContract {
     /// Like [`Self::verify_reserves`] but uses the caller-supplied
     /// `total_acbu_supply` instead of querying the token contract. Returns `true`
     /// if reserves meet the minimum ratio.
-    pub fn verify_reserves_manual(env: Env, total_acbu_supply: i128) -> bool {
+    fn verify_reserves_manual(env: Env, total_acbu_supply: i128) -> bool {
         Self::is_reserve_sufficient(env, total_acbu_supply)
     }
 
