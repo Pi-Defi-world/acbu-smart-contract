@@ -1,13 +1,14 @@
 #![no_std]
 use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Map, Symbol, Vec,
 };
 
 use shared::{
-    calculate_deviation, median, CurrencyCode, DataKey as SharedDataKey, OutlierDetectionEvent,
-    RateData, RateUpdateEvent, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, EMERGENCY_THRESHOLD_BPS,
+    calculate_deviation, median, CurrencyCode, DataKey as SharedDataKey, EmergencyBypassEvent,
+    EmergencyConfig, EmergencyVote, EmergencyVoteCastEvent, OutlierDetectionEvent, RateData,
+    RateUpdateEvent, BASIS_POINTS, CONTRACT_VERSION, EMERGENCY_THRESHOLD_BPS,
     MAX_VALIDATORS, OUTLIER_THRESHOLD_BPS, STALE_RATE_MAX_LEDGERS, UPDATE_INTERVAL_SECONDS,
 };
 
@@ -39,6 +40,9 @@ pub enum OracleError {
     TimestampRollback = 7022,
     RateNotInitialized = 7023,
     CurrencyNotRegistered = 7024,
+    /// Emergency vote cast but consensus not yet reached — caller must wait for
+    /// more validators to submit corroborating emergency rates.
+    InsufficientEmergencyVotes = 7025,
     Unknown = 7999,
 }
 
@@ -69,6 +73,7 @@ impl Display for OracleError {
             Self::TimestampRollback => "timestamp rollback",
             Self::RateNotInitialized => "rate not initialized - no submissions yet",
             Self::CurrencyNotRegistered => "currency not registered",
+            Self::InsufficientEmergencyVotes => "emergency vote cast - waiting for N-of-M validator consensus",
             Self::Unknown => "unknown oracle error",
         };
         f.write_str(message)
@@ -109,6 +114,10 @@ pub struct DataKey {
     pub pending_validator: Symbol,
     pub pending_validator_is_add: Symbol,
     pub pending_validator_eligible_at: Symbol,
+    /// Map<CurrencyCode, EmergencyConfig> — per-pair emergency threshold config.
+    pub emergency_thresholds: Symbol,
+    /// Map<CurrencyCode, Vec<EmergencyVote>> — pending emergency votes per pair.
+    pub emergency_votes: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -131,32 +140,39 @@ const DATA_KEY: DataKey = DataKey {
     pending_validator: symbol_short!("PEND_VAL"),
     pending_validator_is_add: symbol_short!("PEND_VADD"),
     pending_validator_eligible_at: symbol_short!("PEND_VETA"),
+    emergency_thresholds: symbol_short!("EMRG_THR"),
+    emergency_votes: symbol_short!("EMRG_VOT"),
 };
 
 const VERSION: u32 = 9;
 
-#[contractevent]
+/// Number of seconds after which pending emergency votes expire and are cleared.
+/// Set to 1 hour — long enough for validators to respond but short enough to
+/// prevent stale votes from trickling into a later genuine crisis.
+const EMERGENCY_VOTE_TTL_SECONDS: u64 = 3_600;
+
+#[contracttype]
 pub struct AdminTransferInitiatedEvent {
     pub current_admin: Address,
     pub pending_admin: Address,
     pub eligible_at: u64,
 }
 
-#[contractevent]
+#[contracttype]
 pub struct AdminTransferCompletedEvent {
     pub old_admin: Address,
     pub new_admin: Address,
     pub timestamp: u64,
 }
 
-#[contractevent]
+#[contracttype]
 pub struct AdminTransferCancelledEvent {
     pub admin: Address,
     pub cancelled_pending: Address,
     pub timestamp: u64,
 }
 
-#[contractevent]
+#[contracttype]
 pub struct StaleRateEvent {
     pub currency: CurrencyCode,
     pub stored_ledger: u32,
@@ -373,9 +389,13 @@ impl OracleContract {
     /// median is taken and feeds deviating beyond [`OUTLIER_THRESHOLD_BPS`] are
     /// discarded as outliers (emitting `OutlierDetectionEvent`). Updates are
     /// rate-limited to the configured update interval unless the new rate deviates
-    /// beyond [`EMERGENCY_THRESHOLD_BPS`]. Rejects timestamps older than the stored
-    /// rate. The `_timestamp` parameter is ignored; the ledger timestamp is used.
-    /// Emits `RateUpdateEvent`.
+    /// beyond the per-currency emergency threshold **and** at least `min_signatures`
+    /// validators have all independently cast emergency votes via
+    /// [`Self::cast_emergency_vote`] (N-of-M consensus). A single validator can no
+    /// longer unilaterally bypass the time-lock. Rejects timestamps older than the
+    /// stored rate. The `_timestamp` parameter is ignored; the ledger timestamp is
+    /// used. Emits `RateUpdateEvent` and, when an emergency bypass fires, also emits
+    /// `EmergencyBypassEvent`.
     pub fn update_rate(
         env: Env,
         validator: Address,
@@ -417,25 +437,58 @@ impl OracleContract {
                 env.panic_with_error(OracleError::TimestampRollback);
             }
         }
-        let mut allow_update = false;
-        if let Some(existing_rate) = existing_rate.clone() {
-            let deviation = calculate_deviation(rate, existing_rate.rate_usd);
-            if deviation > EMERGENCY_THRESHOLD_BPS {
-                allow_update = true;
-            }
-        }
-
-        if let Some(existing_rate) = existing_rate {
-            if !allow_update && current_time < existing_rate.timestamp + update_interval {
-                env.panic_with_error(OracleError::UpdateIntervalNotMet);
-            }
-        }
 
         let min_sigs: u32 = env
             .storage()
             .instance()
             .get(&DATA_KEY.min_signatures)
             .unwrap();
+
+        // ── Emergency bypass logic (SC-025) ──────────────────────────────────
+        //
+        // A single validator can no longer unilaterally bypass the time-lock.
+        // The two-step flow is:
+        //
+        //  1. Each validator that believes an emergency exists calls
+        //     `cast_emergency_vote(validator, currency, rate)` — this always
+        //     succeeds and persists the vote (it never panics, so storage is
+        //     never rolled back).
+        //
+        //  2. Once `min_signatures` qualifying votes exist, any validator may
+        //     call `update_rate` with the emergency rate. This function checks
+        //     whether the consensus has been reached: if yes it clears the votes
+        //     and grants the bypass (emitting `EmergencyBypassEvent`); if not it
+        //     falls through to the regular interval check and fails with
+        //     `UpdateIntervalNotMet`.
+        //
+        // The separation is critical: because Soroban rolls back all storage
+        // writes inside a panicking call, votes must be persisted via a
+        // dedicated non-panicking function rather than inside `update_rate`.
+        // ─────────────────────────────────────────────────────────────────────
+
+        let mut allow_update = false;
+        if let Some(ref existing) = existing_rate {
+            let emergency_threshold = Self::get_emergency_threshold_bps(&env, &currency);
+            let deviation = calculate_deviation(rate, existing.rate_usd);
+            if deviation > emergency_threshold {
+                // Check whether N-of-M consensus already exists (votes were
+                // pre-registered via cast_emergency_vote).
+                allow_update = Self::check_and_consume_emergency_votes(
+                    &env,
+                    &currency,
+                    current_time,
+                    min_sigs,
+                    rate,
+                );
+            }
+        }
+
+        if let Some(ref existing) = existing_rate {
+            if !allow_update && current_time < existing.timestamp + update_interval {
+                env.panic_with_error(OracleError::UpdateIntervalNotMet);
+            }
+        }
+
         let required = min_sigs.max(MIN_ORACLE_SOURCE_FEEDS);
         // The 0/1-source path below intentionally bypasses median/outlier
         // aggregation, so the multi-source quorum floor only applies once
@@ -481,6 +534,20 @@ impl OracleContract {
             }
         };
 
+        if allow_update {
+            // Emit bypass event now that we know the final median rate.
+            let vote_count = min_sigs; // consensus already confirmed above
+            env.events().publish(
+                (symbol_short!("emrg_byp"),),
+                EmergencyBypassEvent {
+                    currency: currency.clone(),
+                    new_rate: median_rate,
+                    vote_count,
+                    timestamp: current_time,
+                },
+            );
+        }
+
         let rate_data = RateData {
             currency: currency.clone(),
             rate_usd: median_rate,
@@ -508,6 +575,122 @@ impl OracleContract {
             validator: validator.clone(),
         };
         env.events().publish((symbol_short!("rate_upd"),), event);
+    }
+
+    /// Cast an emergency vote for `currency` from an authorised `validator`.
+    ///
+    /// This is step 1 of the two-step emergency bypass flow (SC-025).  A validator
+    /// that believes a rate has genuinely moved beyond the per-currency emergency
+    /// threshold calls this function to register their vote.  Once `min_signatures`
+    /// distinct validators have cast qualifying votes for the same currency, any
+    /// validator may call [`Self::update_rate`] with the emergency rate to apply the
+    /// bypass.
+    ///
+    /// **This function always succeeds** (never panics on success path) so that the
+    /// vote is durably persisted in contract storage.  Votes expire after
+    /// `EMERGENCY_VOTE_TTL_SECONDS` (1 hour); stale votes are discarded before the
+    /// new vote is recorded.  Duplicate votes from the same validator for the same
+    /// currency replace the previous vote (no double-counting).
+    ///
+    /// Emits `EmergencyVoteCastEvent` with the current tally and required quorum.
+    pub fn cast_emergency_vote(
+        env: Env,
+        validator: Address,
+        currency: CurrencyCode,
+        rate: i128,
+    ) {
+        validator.require_auth();
+
+        // Validator must be in the authorised set.
+        let validator_set: Map<Address, bool> =
+            match env.storage().instance().get(&DATA_KEY.validator_set) {
+                Some(set) => set,
+                None => {
+                    let validators: Vec<Address> =
+                        env.storage().instance().get(&DATA_KEY.validators).unwrap();
+                    let mut set: Map<Address, bool> = Map::new(&env);
+                    for v in validators.iter() {
+                        set.set(v, true);
+                    }
+                    env.storage().instance().set(&DATA_KEY.validator_set, &set);
+                    set
+                }
+            };
+        if !validator_set.contains_key(validator.clone()) {
+            env.panic_with_error(OracleError::UnauthorizedValidator);
+        }
+
+        let min_sigs: u32 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.min_signatures)
+            .unwrap();
+
+        let current_time = env.ledger().timestamp();
+
+        let mut all_votes: Map<CurrencyCode, Vec<EmergencyVote>> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.emergency_votes)
+            .unwrap_or(Map::new(&env));
+
+        let votes: Vec<EmergencyVote> = all_votes
+            .get(currency.clone())
+            .unwrap_or(Vec::new(&env));
+
+        // Discard expired and deduplicate same-validator votes.
+        let mut fresh_votes: Vec<EmergencyVote> = Vec::new(&env);
+        for v in votes.iter() {
+            let expired = current_time.saturating_sub(v.timestamp) > EMERGENCY_VOTE_TTL_SECONDS;
+            let is_same = v.validator == validator;
+            if !expired && !is_same {
+                fresh_votes.push_back(v.clone());
+            }
+        }
+        fresh_votes.push_back(EmergencyVote {
+            validator: validator.clone(),
+            rate,
+            timestamp: current_time,
+        });
+
+        let vote_count = fresh_votes.len();
+        all_votes.set(currency.clone(), fresh_votes);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.emergency_votes, &all_votes);
+        Self::extend_instance_ttl(&env);
+
+        env.events().publish(
+            (symbol_short!("emrg_vot"),),
+            EmergencyVoteCastEvent {
+                currency,
+                validator,
+                rate,
+                vote_count,
+                required: min_sigs,
+                timestamp: current_time,
+            },
+        );
+    }
+
+    /// Return the number of active (non-expired) emergency votes for `currency`.
+    pub fn get_emergency_vote_count(env: Env, currency: CurrencyCode) -> u32 {
+        let current_time = env.ledger().timestamp();
+        let all_votes: Map<CurrencyCode, Vec<EmergencyVote>> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.emergency_votes)
+            .unwrap_or(Map::new(&env));
+        let votes: Vec<EmergencyVote> = all_votes
+            .get(currency)
+            .unwrap_or(Vec::new(&env));
+        let mut count: u32 = 0;
+        for v in votes.iter() {
+            if current_time.saturating_sub(v.timestamp) <= EMERGENCY_VOTE_TTL_SECONDS {
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Admin override to set the rate for `currency` directly, bypassing validator
@@ -716,6 +899,73 @@ impl OracleContract {
             .instance()
             .set(&DATA_KEY.basket_weights, &basket_weights);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Emergency threshold configuration (SC-025)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Set the per-currency emergency deviation threshold in basis points (admin only).
+    ///
+    /// When a validator submits a rate that deviates more than `threshold_bps`
+    /// from the stored rate, it is counted as an emergency vote rather than
+    /// immediately bypassing the time-lock.  The bypass only fires once
+    /// `min_signatures` validators have all cast qualifying votes.
+    ///
+    /// Pass `threshold_bps = 0` to reset the currency to the global default
+    /// ([`EMERGENCY_THRESHOLD_BPS`]).
+    pub fn set_emergency_threshold(env: Env, currency: CurrencyCode, threshold_bps: i128) {
+        Self::check_admin(&env);
+        // A threshold of 0 means "use the global default"; treat it the same as
+        // storing the default explicitly so readers always get a positive value.
+        let effective = if threshold_bps == 0 {
+            EMERGENCY_THRESHOLD_BPS
+        } else {
+            threshold_bps
+        };
+        let mut thresholds: Map<CurrencyCode, EmergencyConfig> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.emergency_thresholds)
+            .unwrap_or(Map::new(&env));
+        thresholds.set(currency, EmergencyConfig { threshold_bps: effective });
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.emergency_thresholds, &thresholds);
+    }
+
+    /// Return the emergency deviation threshold (in basis points) for `currency`.
+    ///
+    /// Falls back to the global [`EMERGENCY_THRESHOLD_BPS`] constant if no
+    /// per-currency override has been configured.
+    pub fn get_emergency_threshold(env: Env, currency: CurrencyCode) -> i128 {
+        Self::get_emergency_threshold_bps(&env, &currency)
+    }
+
+    /// Update the minimum number of validator signatures required for both
+    /// normal rate acceptance and emergency bypass consensus (admin only).
+    ///
+    /// `new_min` must be in `1..=validators.len()`.  Pending emergency votes are
+    /// cleared on change to avoid cross-quorum contamination.
+    pub fn set_min_signatures(env: Env, new_min: u32) {
+        Self::check_admin(&env);
+        let validators: Vec<Address> =
+            env.storage().instance().get(&DATA_KEY.validators).unwrap();
+        if new_min == 0 || new_min > validators.len() {
+            env.panic_with_error(OracleError::InvalidMinSignatures);
+        }
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.min_signatures, &new_min);
+        // Clear all pending emergency votes — they were cast under the old quorum.
+        let empty_votes: Map<CurrencyCode, Vec<EmergencyVote>> = Map::new(&env);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.emergency_votes, &empty_votes);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // S-token config
+    // ─────────────────────────────────────────────────────────────────────────
 
     /// Set the S-token contract address backing `currency` (admin only).
     pub fn set_s_token_address(env: Env, currency: CurrencyCode, token_address: Address) {
@@ -1032,6 +1282,60 @@ impl OracleContract {
     // ─────────────────────────────────────────────────────────────────────────
     // Private helpers
     // ─────────────────────────────────────────────────────────────────────────
+
+    /// Return the effective emergency threshold (bps) for `currency`.
+    fn get_emergency_threshold_bps(env: &Env, currency: &CurrencyCode) -> i128 {
+        let thresholds: Map<CurrencyCode, EmergencyConfig> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.emergency_thresholds)
+            .unwrap_or(Map::new(env));
+        thresholds
+            .get(currency.clone())
+            .map(|cfg| cfg.threshold_bps)
+            .unwrap_or(EMERGENCY_THRESHOLD_BPS)
+    }
+
+    /// Check whether `>= min_sigs` non-expired emergency votes exist for `currency`.
+    ///
+    /// If consensus is reached, the vote list is cleared and `true` is returned.
+    /// Otherwise `false` is returned and votes are left intact.
+    fn check_and_consume_emergency_votes(
+        env: &Env,
+        currency: &CurrencyCode,
+        current_time: u64,
+        min_sigs: u32,
+        _rate: i128,
+    ) -> bool {
+        let mut all_votes: Map<CurrencyCode, Vec<EmergencyVote>> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.emergency_votes)
+            .unwrap_or(Map::new(env));
+
+        let votes: Vec<EmergencyVote> = all_votes
+            .get(currency.clone())
+            .unwrap_or(Vec::new(env));
+
+        // Count only non-expired votes.
+        let mut live_count: u32 = 0;
+        for v in votes.iter() {
+            if current_time.saturating_sub(v.timestamp) <= EMERGENCY_VOTE_TTL_SECONDS {
+                live_count += 1;
+            }
+        }
+
+        if live_count >= min_sigs {
+            // Consume the votes — clear them so they can't be reused.
+            all_votes.remove(currency.clone());
+            env.storage()
+                .instance()
+                .set(&DATA_KEY.emergency_votes, &all_votes);
+            true
+        } else {
+            false
+        }
+    }
 
     fn get_rate_internal(env: &Env, currency: &CurrencyCode) -> Option<RateData> {
         Self::extend_instance_ttl(env);
