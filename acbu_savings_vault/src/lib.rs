@@ -1,15 +1,11 @@
 #![no_std]
 use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Symbol, Vec,
 };
 
-use shared::{calculate_fee, DataKey as SharedDataKey, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION};
-
-mod shared {
-    pub use shared::*;
-}
+use shared::{calculate_fee, ContractPhase, DataKey as SharedDataKey, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION};
 
 // ---------------------------------------------------------------------------
 // Error codes
@@ -39,6 +35,7 @@ pub enum Error {
     NoPendingAdmin = 1019,
     AdminTimelockNotElapsed = 1020,
     NoPendingAdminToCancel = 1021,
+    InsufficientYieldReserve = 1022,
     Unknown = 1999,
 }
 
@@ -66,6 +63,7 @@ impl Display for Error {
             Self::NoPendingAdmin => "no pending admin",
             Self::AdminTimelockNotElapsed => "admin timelock has not elapsed",
             Self::NoPendingAdminToCancel => "no pending admin to cancel",
+            Self::InsufficientYieldReserve => "vault balance cannot cover principal + yield owed",
             Self::Unknown => "unknown savings vault error",
         };
         f.write_str(message)
@@ -82,7 +80,7 @@ pub struct DataKey {
     pub acbu_token: Symbol,
     pub fee_rate: Symbol,
     pub yield_rate: Symbol,
-    pub paused: Symbol,
+    pub phase: Symbol,
     pub pending_upgrade_wasm: Symbol,
     pub pending_upgrade_version: Symbol,
     pub pending_upgrade_eligible_at: Symbol,
@@ -95,7 +93,7 @@ const DATA_KEY: DataKey = DataKey {
     acbu_token: symbol_short!("ACBU_TKN"),
     fee_rate: symbol_short!("FEE_RATE"),
     yield_rate: symbol_short!("YLD_RATE"),
-    paused: symbol_short!("PAUSED"),
+    phase: symbol_short!("PHASE"),
     pending_upgrade_wasm: symbol_short!("PU_WASM"),
     pending_upgrade_version: symbol_short!("PU_VER"),
     pending_upgrade_eligible_at: symbol_short!("PU_ETA"),
@@ -108,6 +106,13 @@ const SECONDS_PER_YEAR: i128 = 31_536_000;
 const UPGRADE_TIMELOCK_SECONDS: u64 = 86_400;
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 
+/// Mirrors acbu_reserve_tracker's instance-TTL ceiling: bumps the entry to
+/// ~300 days (at 5s/ledger) on every deposit/withdraw so admin config
+/// (acbu_token, fee_rate, yield_rate) never archives from inactivity.
+const INSTANCE_TTL_THRESHOLD: u32 = 5_184_000;
+const INSTANCE_TTL_EXTEND_TO: u32 = 5_184_000;
+
+
 // ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------
@@ -119,8 +124,7 @@ pub struct DepositLot {
     pub term_seconds: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct DepositEvent {
     pub user: Address,
     pub gross_amount: i128,
@@ -131,8 +135,7 @@ pub struct DepositEvent {
     pub maturity_timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct WithdrawEvent {
     pub user: Address,
     pub amount: i128,
@@ -183,17 +186,35 @@ impl SavingsVault {
             .ok_or(Error::NoYieldRate)
     }
 
-    fn is_paused(env: &Env) -> bool {
+    fn check_paused(env: &Env) {
+        let phase: ContractPhase = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.phase)
+            .unwrap_or(ContractPhase::Uninitialized);
+        if phase == ContractPhase::Paused {
+            env.panic_with_error(Error::Paused);
+        }
+    }
+
+    fn extend_instance_ttl(env: &Env) {
         env.storage()
             .instance()
-            .get(&DATA_KEY.paused)
-            .unwrap_or(false)
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
     }
+
+    /// Extends the temporary storage entry backing a user's deposit lots for
 
     // -----------------------------------------------------------------------
     // Public logic
     // -----------------------------------------------------------------------
 
+    /// Initialize the vault. Callable once; reverts with `AlreadyInitialized`
+    /// afterwards.
+    ///
+    /// Sets the `admin`, the `acbu_token` accepted for deposits, the deposit
+    /// `fee_rate_bps` and the `yield_rate_bps` paid on locked deposits. Both rates
+    /// must be within `0..=BASIS_POINTS`. The vault starts unpaused.
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -216,6 +237,7 @@ impl SavingsVault {
         env.storage().instance().set(&DATA_KEY.yield_rate, &yield_rate_bps);
         env.storage().instance().set(&DATA_KEY.paused, &false);
         env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
+        Self::extend_instance_ttl(&env);
     }
 
     /// Deposit (lock) ACBU for a term. User transfers ACBU to this contract.
@@ -224,9 +246,8 @@ impl SavingsVault {
 
         user.require_auth();
 
-        if Self::is_paused(&env) {
-            env.panic_with_error(Error::Paused);
-        }
+        Self::check_paused(&env);
+
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
         }
@@ -284,7 +305,7 @@ impl SavingsVault {
         });
 
         env.storage().persistent().set(&key, &lots);
-
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("Deposit"), user.clone()),
@@ -310,9 +331,8 @@ impl SavingsVault {
 
         user.require_auth();
 
-        if Self::is_paused(&env) {
-            env.panic_with_error(Error::Paused);
-        }
+        Self::check_paused(&env);
+
         if amount <= 0 {
             env.panic_with_error(Error::InvalidAmount);
         }
@@ -391,6 +411,7 @@ impl SavingsVault {
         } else {
             env.storage().persistent().set(&key, &updated_lots);
         }
+        Self::extend_instance_ttl(&env);
 
         let payout_amount = amount
             .checked_add(yield_amount)
@@ -399,6 +420,14 @@ impl SavingsVault {
         let acbu = Self::load_acbu_token(&env).unwrap_or_else(|e| env.panic_with_error(e));
         let token = soroban_sdk::token::Client::new(&env, &acbu);
         let vault_addr = env.current_contract_address();
+
+        // Yield is paid directly out of the vault's own ACBU balance — there is no
+        // external yield-generation mechanism funding it. Check the balance up front
+        // so an underfunded vault fails with a clear, specific error instead of the
+        // token contract's generic insufficient-balance panic.
+        if token.balance(&vault_addr) < payout_amount {
+            env.panic_with_error(Error::InsufficientYieldReserve);
+        }
 
         token.transfer(&vault_addr, &user, &amount);
         if yield_amount > 0 {
@@ -421,6 +450,8 @@ impl SavingsVault {
         payout_amount
     }
 
+    /// Return the total locked principal `user` holds across all deposit lots for
+    /// the given `term_seconds` bucket (0 if none).
     pub fn get_balance(env: Env, user: Address, term_seconds: u64) -> i128 {
         let key = (DEPOSIT_KEY, user, term_seconds);
         let lots: Vec<DepositLot> = env
@@ -431,6 +462,9 @@ impl SavingsVault {
         Self::sum_lots(&lots)
     }
 
+    /// Return the yield accrued so far on `user`'s matured deposit lots for the
+    /// given `term_seconds`. Only lots past their unlock time contribute. Panics
+    /// with `NoDeposit` if the user has no lots in this bucket.
     pub fn get_pending_yield(env: Env, user: Address, term_seconds: u64) -> i128 {
         let key = (DEPOSIT_KEY, user, term_seconds);
         let lots: Vec<DepositLot> = env
@@ -483,18 +517,77 @@ impl SavingsVault {
         ends
     }
 
+    /// Returns deposit lots for a specific term with pagination support.
+    ///
+    /// This function prevents exceeding Soroban's return value size limit by allowing
+    /// callers to request lots in chunks. Use `offset` to skip lots and `limit` to
+    /// specify the maximum number of lots to return.
+    ///
+    /// # Arguments
+    /// * `user` - The address whose deposit lots to retrieve
+    /// * `term_seconds` - The term bucket to query
+    /// * `offset` - Number of lots to skip from the beginning (0-indexed)
+    /// * `limit` - Maximum number of lots to return (0 defaults to max 100)
+    ///
+    /// # Returns
+    /// A paginated Vec of DepositLot structures
+    pub fn get_user_lots(
+        env: Env,
+        user: Address,
+        term_seconds: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<DepositLot> {
+        let key = (DEPOSIT_KEY, user, term_seconds);
+        let lots: Vec<DepositLot> = env
+            .storage()
+            .temporary()
+            .get(&key)
+            .unwrap_or(Vec::new(&env));
+
+        let total_lots = lots.len();
+
+        if offset >= total_lots {
+            return Vec::new(&env);
+        }
+
+        let limit_u32 = if limit == 0 || limit > 100 {
+            100
+        } else {
+            limit
+        };
+
+        let end_idx = if offset + limit_u32 < total_lots {
+            offset + limit_u32
+        } else {
+            total_lots
+        };
+        let mut result = Vec::new(&env);
+
+        for idx in offset..end_idx {
+            if let Some(lot) = lots.get(idx) {
+                result.push_back(lot);
+            }
+        }
+
+        result
+    }
+
+    /// Pause the vault, disabling deposits and withdrawals (admin only).
     pub fn pause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.paused, &true);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Paused);
     }
 
+    /// Unpause the vault, re-enabling deposits and withdrawals (admin only).
     pub fn unpause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
     }
 
+    /// Update the ACBU token contract address (admin only).
     pub fn update_acbu_token(env: Env, new_acbu_token: Address) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -503,6 +596,8 @@ impl SavingsVault {
             .set(&DATA_KEY.acbu_token, &new_acbu_token);
     }
 
+    /// Set the deposit fee in basis points (admin only). Must be within
+    /// `0..=BASIS_POINTS`.
     pub fn set_fee_rate(env: Env, fee_rate_bps: i128) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -514,6 +609,8 @@ impl SavingsVault {
             .set(&DATA_KEY.fee_rate, &fee_rate_bps);
     }
 
+    /// Set the yield rate in basis points paid on locked deposits (admin only).
+    /// Must be within `0..=BASIS_POINTS`.
     pub fn set_yield_rate(env: Env, yield_rate_bps: i128) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -525,10 +622,12 @@ impl SavingsVault {
             .set(&DATA_KEY.yield_rate, &yield_rate_bps);
     }
 
+    /// Return the current admin address.
     pub fn get_admin(env: Env) -> Address {
         env.storage().instance().get(&DATA_KEY.admin).unwrap()
     }
 
+    /// Return the stored contract version (0 if never set).
     pub fn get_version(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -536,6 +635,17 @@ impl SavingsVault {
             .unwrap_or(0)
     }
 
+    /// Check if the contract has been initialized.
+    ///
+    /// Backend services can call this before invoking other functions to avoid
+    /// cryptic storage-not-found errors from uninitialized contracts.
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&SharedDataKey::Version)
+    }
+
+    /// Stage a WASM upgrade to `new_wasm_hash`/`new_version` and start the upgrade
+    /// timelock (admin only). `new_version` must exceed the current version. Apply
+    /// later with [`Self::execute_upgrade`] or abort with [`Self::cancel_upgrade`].
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -560,6 +670,9 @@ impl SavingsVault {
             .set(&DATA_KEY.pending_upgrade_eligible_at, &eligible_at);
     }
 
+    /// Execute a previously proposed upgrade once its timelock has elapsed,
+    /// swapping in the staged WASM, running migrations and bumping the version
+    /// (admin only). Panics if none is pending or the timelock is still active.
     pub fn execute_upgrade(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -594,7 +707,7 @@ impl SavingsVault {
         env.deployer().update_current_contract_wasm(wasm_hash);
         for v in current_version..new_version {
             match v {
-                0 => Self::migrate_v0_to_v1(env.clone()),
+                0 => shared::migrate_v0_to_v1(&env),
                 _ => {}
             }
         }
@@ -603,6 +716,8 @@ impl SavingsVault {
             .set(&SharedDataKey::Version, &new_version);
     }
 
+    /// Cancel a pending upgrade, clearing the staged WASM hash, version and
+    /// timelock (admin only).
     pub fn cancel_upgrade(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -621,6 +736,8 @@ impl SavingsVault {
     // Two-step admin rotation
     // -----------------------------------------------------------------------
 
+    /// Step 1 of admin rotation — current admin nominates `new_admin` and starts
+    /// the timelock (admin only). Emits an `adm_init` event.
     pub fn transfer_admin(env: Env, new_admin: Address) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -642,12 +759,15 @@ impl SavingsVault {
         );
     }
 
+    /// Step 2 of admin rotation — the nominated address claims ownership after the
+    /// timelock elapses. Requires the pending admin's auth. Emits an `adm_done`
+    /// event.
     pub fn accept_admin(env: Env) {
         let pending_admin: Address = env
             .storage()
             .instance()
             .get(&DATA_KEY.pending_admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::NoAdmin));
+            .unwrap_or_else(|| env.panic_with_error(Error::NoPendingAdmin));
         pending_admin.require_auth();
 
         let eligible_at: u64 = env
@@ -656,7 +776,7 @@ impl SavingsVault {
             .get(&DATA_KEY.pending_admin_eligible_at)
             .unwrap_or(u64::MAX);
         if env.ledger().timestamp() < eligible_at {
-            env.panic_with_error(Error::TimelockNotElapsed);
+            env.panic_with_error(Error::AdminTimelockNotElapsed);
         }
 
         let old_admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
@@ -672,6 +792,8 @@ impl SavingsVault {
         );
     }
 
+    /// Cancel a pending admin transfer (current admin only). Emits an `adm_cncl`
+    /// event.
     pub fn cancel_admin_transfer(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
@@ -679,7 +801,7 @@ impl SavingsVault {
             .storage()
             .instance()
             .get(&DATA_KEY.pending_admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::NoAdmin));
+            .unwrap_or_else(|| env.panic_with_error(Error::NoPendingAdminToCancel));
         env.storage().instance().remove(&DATA_KEY.pending_admin);
         env.storage()
             .instance()
@@ -690,10 +812,12 @@ impl SavingsVault {
         );
     }
 
+    /// Return the pending admin, if a transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&DATA_KEY.pending_admin)
     }
 
+    /// Return the stored contract version (0 if never set).
     pub fn version(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -701,6 +825,8 @@ impl SavingsVault {
             .unwrap_or(0)
     }
 
+    /// Return the timestamp after which `accept_admin` becomes callable, if a
+    /// transfer is pending.
     pub fn get_pending_admin_eligible_at(env: Env) -> Option<u64> {
         env.storage()
             .instance()
@@ -742,8 +868,5 @@ impl SavingsVault {
             .and_then(|v| v.checked_mul(elapsed_i128))
             .ok_or(Error::Overflow)?;
         numerator.checked_div(divisor).ok_or(Error::Overflow)
-    }
-    fn migrate_v0_to_v1(_env: Env) {
-        // No storage schema changes between v0 and v1.
     }
 }

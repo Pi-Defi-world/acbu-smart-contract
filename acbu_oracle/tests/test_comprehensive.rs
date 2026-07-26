@@ -77,7 +77,7 @@ fn test_add_validator() {
     client.execute_validator_change();
 
     let validators = client.get_validators();
-    assert_eq!(validators.len(), 4);
+    assert_eq!(validators.len(), 4, "validators.len() should equal 4");
     assert!(validators.iter().any(|v| v == new_validator));
 }
 
@@ -103,10 +103,8 @@ fn test_remove_validator() {
     client.execute_validator_change();
 
     let remaining_validators = client.get_validators();
-    assert_eq!(remaining_validators.len(), 2);
-    assert!(!remaining_validators
-        .iter()
-        .any(|v| v == validator_to_remove));
+    assert_eq!(remaining_validators.len(), 2, "remaining_validators.len() should equal 2");
+    assert!(!remaining_validators.iter().any(|v| v == validator_to_remove));
 }
 
 #[test]
@@ -131,15 +129,15 @@ fn test_get_validators() {
     let (_env, client, _contract_id, _admin, validators) = setup();
 
     let stored_validators = client.get_validators();
-    assert_eq!(stored_validators.len(), 3);
-    assert_eq!(stored_validators, validators);
+    assert_eq!(stored_validators.len(), 3, "stored_validators.len() should equal 3");
+    assert_eq!(stored_validators, validators, "stored_validators should equal validators");
 }
 
 #[test]
 fn test_get_min_signatures() {
     let (_env, client, _contract_id, _admin, _validators) = setup();
 
-    assert_eq!(client.get_min_signatures(), 2);
+    assert_eq!(client.get_min_signatures(), 2, "client.get_min_signatures() should equal 2");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -161,7 +159,7 @@ fn test_update_rate_by_validator() {
     client.update_rate(&validator, &ngn, &rate, &sources, &env.ledger().timestamp());
 
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1_235_000); // median of sources
+    assert_eq!(stored_rate, 1_235_000, "stored_rate should equal 1_235_000"); // median of sources
 }
 
 #[test]
@@ -225,9 +223,9 @@ fn test_update_rate_emits_event() {
         .expect("rate_upd event not found");
 
     let event_data: RateUpdateEvent = rate_update_event.2.into_val(&env);
-    assert_eq!(event_data.currency, ngn);
-    assert_eq!(event_data.rate, 1_235_000);
-    assert_eq!(event_data.validator, validator);
+    assert_eq!(event_data.currency, ngn, "event_data.currency should equal ngn");
+    assert_eq!(event_data.rate, 1_235_000, "event_data.rate should equal 1_235_000");
+    assert_eq!(event_data.validator, validator, "event_data.validator should equal validator");
 }
 
 #[test]
@@ -292,7 +290,7 @@ fn test_update_rate_with_emergency_deviation_bypasses_interval() {
     );
 
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1_060_000);
+    assert_eq!(stored_rate, 1_060_000, "stored_rate should equal 1_060_000");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -315,7 +313,7 @@ fn test_outlier_detection_filters_bad_source() {
 
     // Stored rate should be median of clean sources only
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1_002_500); // (1_000_000 + 1_005_000) / 2
+    assert_eq!(stored_rate, 1_002_500, "stored_rate should equal 1_002_500"); // (1_000_000 + 1_005_000) / 2
 
     // Check outlier event was emitted
     let events = env.events().all();
@@ -329,7 +327,7 @@ fn test_outlier_detection_filters_bad_source() {
         .expect("outlier event not found");
 
     let event_data: OutlierDetectionEvent = outlier_event.2.into_val(&env);
-    assert_eq!(event_data.outlier_rate, 1_350_000);
+    assert_eq!(event_data.outlier_rate, 1_350_000, "event_data.outlier_rate should equal 1_350_000");
 }
 
 #[test]
@@ -348,7 +346,7 @@ fn test_all_sources_outlier_uses_fallback() {
 
     // Should not panic, should use fallback
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1_250_000); // raw median
+    assert_eq!(stored_rate, 1_250_000, "stored_rate should equal 1_250_000"); // raw median
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -365,7 +363,7 @@ fn test_admin_can_set_rate() {
     client.set_rate_admin(&ngn, &admin_rate);
 
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, admin_rate);
+    assert_eq!(stored_rate, admin_rate, "stored_rate should equal admin_rate");
 }
 
 #[test]
@@ -409,9 +407,9 @@ fn test_set_basket_config() {
     client.set_basket_config(&new_currencies, &new_weights);
 
     let stored_currencies = client.get_currencies();
-    assert_eq!(stored_currencies.len(), 2);
-    assert_eq!(client.get_basket_weight(&usd), 6000);
-    assert_eq!(client.get_basket_weight(&eur), 4000);
+    assert_eq!(stored_currencies.len(), 2, "stored_currencies.len() should equal 2");
+    assert_eq!(client.get_basket_weight(&usd), 6000, "client.get_basket_weight(&usd) should equal 6000");
+    assert_eq!(client.get_basket_weight(&eur), 4000, "client.get_basket_weight(&eur) should equal 4000");
 }
 
 #[test]
@@ -419,7 +417,7 @@ fn test_get_basket_weight_nonexistent_returns_zero() {
     let (env, client, _contract_id, _admin, _validators) = setup();
 
     let nonexistent = CurrencyCode::new(&env, "XXX");
-    assert_eq!(client.get_basket_weight(&nonexistent), 0);
+    assert_eq!(client.get_basket_weight(&nonexistent), 0, "client.get_basket_weight(&nonexistent) should equal 0");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -436,7 +434,7 @@ fn test_set_and_get_s_token_address() {
     client.set_s_token_address(&ngn, &token_address);
 
     let stored_address = client.get_s_token_address(&ngn);
-    assert_eq!(stored_address, token_address);
+    assert_eq!(stored_address, token_address, "stored_address should equal token_address");
 }
 
 #[test]
@@ -488,7 +486,7 @@ fn test_get_acbu_usd_rate_basket_weighted() {
 
     // Basket is 50% NGN (1.0) + 50% KES (2.0) = 1.5
     let acbu_rate = client.get_acbu_usd_rate();
-    assert_eq!(acbu_rate, 1_500_000);
+    assert_eq!(acbu_rate, 1_500_000, "acbu_rate should equal 1_500_000");
 }
 
 #[test]
@@ -527,8 +525,8 @@ fn test_get_acbu_usd_rate_with_timestamp() {
     // Weighted average: (1_000_000 * 5000 + 2_000_000 * 5000) / 10_000 / 10_000
     // = (5_000_000_000 + 10_000_000_000) / 10_000 / 10_000
     // = 15_000_000_000 / 100_000_000 = 150
-    assert_eq!(rate, 150);
-    assert_eq!(timestamp, env.ledger().timestamp());
+    assert_eq!(rate, 150, "rate should equal 150");
+    assert_eq!(timestamp, env.ledger().timestamp(), "timestamp should equal env.ledger().timestamp()");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -584,7 +582,7 @@ fn test_rate_at_staleness_boundary_accepted() {
     advance_ledger_to(&env, &contract_id, 100 + STALE_RATE_MAX_LEDGERS);
 
     let rate = client.get_rate(&ngn);
-    assert_eq!(rate, 1_000_000);
+    assert_eq!(rate, 1_000_000, "rate should equal 1_000_000");
 }
 
 #[test]
@@ -614,7 +612,7 @@ fn test_admin_override_refreshes_stale_rate() {
 
     // Should now be readable
     let rate = client.get_rate(&ngn);
-    assert_eq!(rate, 1_050_000);
+    assert_eq!(rate, 1_050_000, "rate should equal 1_050_000");
 }
 
 #[test]
@@ -654,13 +652,11 @@ fn test_transfer_admin_initiates_pending() {
     let new_admin = Address::generate(&env);
     client.transfer_admin(&new_admin);
 
-    let pending = client
-        .get_pending_admin()
-        .expect("pending admin should be set");
-    assert_eq!(pending, new_admin);
+    let pending = client.get_pending_admin().expect("pending admin should be set");
+    assert_eq!(pending, new_admin, "pending should equal new_admin");
 
     // Current admin should still be the same
-    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_admin(), admin, "client.get_admin() should equal admin");
 }
 
 #[test]
@@ -687,7 +683,7 @@ fn test_accept_admin_after_timelock_succeeds() {
 
     client.accept_admin();
 
-    assert_eq!(client.get_admin(), new_admin);
+    assert_eq!(client.get_admin(), new_admin, "client.get_admin() should equal new_admin");
     assert!(client.get_pending_admin().is_none());
 }
 
@@ -701,7 +697,7 @@ fn test_cancel_admin_transfer() {
     client.cancel_admin_transfer();
 
     assert!(client.get_pending_admin().is_none());
-    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_admin(), admin, "client.get_admin() should equal admin");
 }
 
 #[test]
