@@ -909,7 +909,11 @@ impl OracleContract {
     pub fn migrate(env: Env) {
         Self::check_admin(&env);
         let current_version = VERSION;
-        let stored_version: u32 = env.storage().instance().get(&DATA_KEY.version).unwrap_or(0);
+        let stored_version: u32 = env
+            .storage()
+            .instance()
+            .get(&SharedDataKey::Version)
+            .unwrap_or(0);
         if stored_version < current_version {
             if stored_version < 2 {
                 let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
@@ -943,7 +947,7 @@ impl OracleContract {
             }
             env.storage()
                 .instance()
-                .set(&DATA_KEY.version, &current_version);
+                .set(&SharedDataKey::Version, &current_version);
         }
     }
 
