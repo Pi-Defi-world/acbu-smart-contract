@@ -18,7 +18,7 @@ use shared::{
 pub mod token_contract {
     soroban_sdk::contractimport!(
         file = "../soroban_token_contract.wasm",
-        sha256 = "fff46d90821401584414ee6afc5ef36d99e95ef7e37d8652ad3e6c4a4e099dc0"
+        sha256 = "8331ad752af7ff986f2b9497ac7383c57020bfc80ba19541f4142fc94d1348c1"
     );
 }
 
@@ -725,7 +725,7 @@ impl MintingContract {
         operator.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        Self::assert_recipient_is_account(&recipient);
+        assert_recipient_is_account(&recipient);
         env.storage().instance().extend_ttl(5184000, 5184000);
 
         if !check_proof_unused(&env, &proof_id) {
@@ -904,7 +904,7 @@ impl MintingContract {
             .instance()
             .get(&DATA_KEY.reserve_tracker)
             .unwrap();
-        let vault: Address = env.storage().instance().get(&DATA_KEY.vault).unwrap();
+        let _vault: Address = env.storage().instance().get(&DATA_KEY.vault).unwrap();
         let fee_rate: i128 = env.storage().instance().get(&DATA_KEY.fee_rate).unwrap();
         let treasury: Address = env.storage().instance().get(&DATA_KEY.treasury).unwrap();
         let mut total_supply: i128 = env
@@ -1029,7 +1029,7 @@ impl MintingContract {
         admin.require_auth();
 
         // C-058: reject contract-type recipients to prevent stranded token transfers.
-        Self::assert_recipient_is_account(&recipient);
+        assert_recipient_is_account(&recipient);
         if amount <= 0 {
             env.panic_with_error(MintingError::InvalidDripAmount);
         }
@@ -1108,8 +1108,11 @@ impl MintingContract {
         Self::check_supply_cap(&env, new_supply);
 
         let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
-        let token = soroban_sdk::token::Client::new(&env, &acbu_token);
-        let on_chain_supply = token.total_supply();
+        let on_chain_supply: i128 = env.invoke_contract(
+            &acbu_token,
+            &Symbol::new(&env, shared::TOKEN_GET_TOTAL_SUPPLY),
+            vec![&env],
+        );
         if new_supply != on_chain_supply {
             env.panic_with_error(MintingError::SupplyMismatch);
         }

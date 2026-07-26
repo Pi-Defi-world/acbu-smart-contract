@@ -6,7 +6,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEST="$PROJECT_ROOT/soroban_token_contract.wasm"
 
 # SHA-256 of the expected artifact — must match contractimport! sha256 fields.
-EXPECTED_HASH="eb1a53948744e12a6b00ec891b301ebc78a06deb984d3726c9cbc315392aedec"
+EXPECTED_HASH="8331ad752af7ff986f2b9497ac7383c57020bfc80ba19541f4142fc94d1348c1"
 
 # Stellar / soroban-examples release that ships this exact token contract.
 # The soroban-examples repo does not publish pre-built WASM binaries;

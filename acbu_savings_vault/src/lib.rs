@@ -1,7 +1,7 @@
 #![no_std]
 use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Symbol, Vec,
 };
 
@@ -124,7 +124,7 @@ pub struct DepositLot {
     pub term_seconds: u64,
 }
 
-#[contractevent]
+#[contracttype]
 pub struct DepositEvent {
     pub user: Address,
     pub gross_amount: i128,
@@ -135,7 +135,7 @@ pub struct DepositEvent {
     pub maturity_timestamp: u64,
 }
 
-#[contractevent]
+#[contracttype]
 pub struct WithdrawEvent {
     pub user: Address,
     pub amount: i128,
@@ -235,7 +235,7 @@ impl SavingsVault {
         env.storage().instance().set(&DATA_KEY.acbu_token, &acbu_token);
         env.storage().instance().set(&DATA_KEY.fee_rate, &fee_rate_bps);
         env.storage().instance().set(&DATA_KEY.yield_rate, &yield_rate_bps);
-        env.storage().instance().set(&DATA_KEY.paused, &false);
+        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
         env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
         Self::extend_instance_ttl(&env);
     }
