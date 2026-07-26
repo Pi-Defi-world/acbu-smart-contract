@@ -52,6 +52,11 @@ contractmeta!(key = "version", val = "1");
 /// or malicious transfer.
 const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 
+/// Minimum remaining TTL before an instance TTL extension is triggered (~60 days at 5s/ledger).
+const INSTANCE_TTL_THRESHOLD: u32 = 5_184_000;
+/// Extension target TTL (~60 days at 5s/ledger).
+const INSTANCE_TTL_EXTEND_TO: u32 = 5_184_000;
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct PauseEvent {
@@ -115,6 +120,7 @@ impl BurningContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.min_burn_amount, &MIN_BURN_AMOUNT);
+        Self::extend_instance_ttl(&env);
     }
 
     /// Redeem `acbu_amount` of ACBU for a single basket currency's S-token.
@@ -134,6 +140,7 @@ impl BurningContract {
         Self::check_paused(&env);
         user.require_auth();
         Self::validate_recipient(&env, &recipient);
+        Self::extend_instance_ttl(&env);
 
         let min_amount: i128 = env
             .storage()
@@ -234,6 +241,7 @@ impl BurningContract {
     ) -> Vec<i128> {
         Self::check_paused(&env);
         user.require_auth();
+        Self::extend_instance_ttl(&env);
 
         if recipients.is_empty() {
             env.panic_with_error(ContractError::InvalidRecipient);
@@ -436,6 +444,7 @@ impl BurningContract {
     /// [`Self::accept_admin`] after the timelock elapses.
     pub fn transfer_admin(env: Env, new_admin: Address) {
         Self::check_admin(&env);
+        Self::extend_instance_ttl(&env);
         let eligible_at = env.ledger().timestamp() + ADMIN_TIMELOCK_SECONDS;
         env.storage()
             .instance()
@@ -454,6 +463,7 @@ impl BurningContract {
     /// after the timelock has elapsed. Panics if no transfer is pending or the
     /// timelock is still active.
     pub fn accept_admin(env: Env) {
+        Self::extend_instance_ttl(&env);
         let pending_admin: Address = env
             .storage()
             .instance()
@@ -489,6 +499,7 @@ impl BurningContract {
     /// admin and its timelock.
     pub fn cancel_admin_transfer(env: Env) {
         Self::check_admin(&env);
+        Self::extend_instance_ttl(&env);
         env.storage().instance().remove(&DATA_KEY.pending_admin);
         env.storage()
             .instance()
@@ -510,6 +521,7 @@ impl BurningContract {
     pub fn pause(env: Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        Self::extend_instance_ttl(&env);
         env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Paused);
         let event = PauseEvent {
             admin,
@@ -522,6 +534,7 @@ impl BurningContract {
     pub fn unpause(env: Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        Self::extend_instance_ttl(&env);
         env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
         let event = PauseEvent {
             admin,
@@ -643,6 +656,7 @@ impl BurningContract {
     /// in order before updating the version.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: u32) {
         Self::check_admin(&env);
+        Self::extend_instance_ttl(&env);
         let current_version = Self::get_version(env.clone());
         if new_version <= current_version {
             env.panic_with_error(ContractError::InvalidVersion);
@@ -702,5 +716,11 @@ impl BurningContract {
         if *recipient == env.current_contract_address() {
             env.panic_with_error(ContractError::InvalidRecipient);
         }
+    }
+
+    fn extend_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
     }
 }
