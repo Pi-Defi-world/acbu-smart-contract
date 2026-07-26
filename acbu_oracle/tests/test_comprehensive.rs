@@ -21,7 +21,13 @@ fn advance_ledger_to(env: &Env, contract_id: &Address, target_seq: u32) {
 }
 
 /// Test helper: setup oracle with basic configuration
-fn setup() -> (Env, OracleContractClient<'static>, Address, Address, Vec<Address>) {
+fn setup() -> (
+    Env,
+    OracleContractClient<'static>,
+    Address,
+    Address,
+    Vec<Address>,
+) {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().with_mut(|l| {
@@ -66,10 +72,12 @@ fn test_add_validator() {
     let (env, client, _contract_id, _admin, _validators) = setup();
 
     let new_validator = Address::generate(&env);
-    client.add_validator(&new_validator);
+    client.schedule_validator_change(&new_validator, &true);
+    env.ledger().with_mut(|l| l.timestamp += 86_401);
+    client.execute_validator_change();
 
     let validators = client.get_validators();
-    assert_eq!(validators.len(), 4);
+    assert_eq!(validators.len(), 4, "validators.len() should equal 4");
     assert!(validators.iter().any(|v| v == new_validator));
 }
 
@@ -78,7 +86,9 @@ fn test_add_duplicate_validator_fails() {
     let (env, client, _contract_id, _admin, validators) = setup();
 
     let existing_validator = validators.get(0).unwrap();
-    let result = client.try_add_validator(&existing_validator);
+    client.schedule_validator_change(&existing_validator, &true);
+    env.ledger().with_mut(|l| l.timestamp += 86_401);
+    let result = client.try_execute_validator_change();
 
     assert!(result.is_err());
 }
@@ -88,10 +98,12 @@ fn test_remove_validator() {
     let (env, client, _contract_id, _admin, validators) = setup();
 
     let validator_to_remove = validators.get(2).unwrap();
-    client.remove_validator(&validator_to_remove);
+    client.schedule_validator_change(&validator_to_remove, &false);
+    env.ledger().with_mut(|l| l.timestamp += 86_401);
+    client.execute_validator_change();
 
     let remaining_validators = client.get_validators();
-    assert_eq!(remaining_validators.len(), 2);
+    assert_eq!(remaining_validators.len(), 2, "remaining_validators.len() should equal 2");
     assert!(!remaining_validators.iter().any(|v| v == validator_to_remove));
 }
 
@@ -101,10 +113,14 @@ fn test_remove_validator_below_min_signatures_fails() {
 
     // min_signatures is 2, we have 3 validators
     // Remove one (now 2 validators)
-    client.remove_validator(&validators.get(2).unwrap());
+    client.schedule_validator_change(&validators.get(2).unwrap(), &false);
+    env.ledger().with_mut(|l| l.timestamp += 86_401);
+    client.execute_validator_change();
 
     // Try to remove another (would leave 1 validator, below min_signatures of 2)
-    let result = client.try_remove_validator(&validators.get(1).unwrap());
+    client.schedule_validator_change(&validators.get(1).unwrap(), &false);
+    env.ledger().with_mut(|l| l.timestamp += 86_401);
+    let result = client.try_execute_validator_change();
     assert!(result.is_err());
 }
 
@@ -113,15 +129,15 @@ fn test_get_validators() {
     let (_env, client, _contract_id, _admin, validators) = setup();
 
     let stored_validators = client.get_validators();
-    assert_eq!(stored_validators.len(), 3);
-    assert_eq!(stored_validators, validators);
+    assert_eq!(stored_validators.len(), 3, "stored_validators.len() should equal 3");
+    assert_eq!(stored_validators, validators, "stored_validators should equal validators");
 }
 
 #[test]
 fn test_get_min_signatures() {
     let (_env, client, _contract_id, _admin, _validators) = setup();
 
-    assert_eq!(client.get_min_signatures(), 2);
+    assert_eq!(client.get_min_signatures(), 2, "client.get_min_signatures() should equal 2");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -143,7 +159,7 @@ fn test_update_rate_by_validator() {
     client.update_rate(&validator, &ngn, &rate, &sources, &env.ledger().timestamp());
 
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1_235_000); // median of sources
+    assert_eq!(stored_rate, 1_235_000, "stored_rate should equal 1_235_000"); // median of sources
 }
 
 #[test]
@@ -155,7 +171,13 @@ fn test_update_rate_by_non_validator_fails() {
     let rate = 1_234_567i128;
     let sources = Vec::new(&env);
 
-    let result = client.try_update_rate(&non_validator, &ngn, &rate, &sources, &env.ledger().timestamp());
+    let result = client.try_update_rate(
+        &non_validator,
+        &ngn,
+        &rate,
+        &sources,
+        &env.ledger().timestamp(),
+    );
     assert!(result.is_err());
 }
 
@@ -171,7 +193,8 @@ fn test_update_rate_with_insufficient_sources_fails() {
     sources.push_back(1_235_000i128);
     // Only 2 sources, need at least 3
 
-    let result = client.try_update_rate(&validator, &ngn, &rate, &sources, &env.ledger().timestamp());
+    let result =
+        client.try_update_rate(&validator, &ngn, &rate, &sources, &env.ledger().timestamp());
     assert!(result.is_err());
 }
 
@@ -200,9 +223,9 @@ fn test_update_rate_emits_event() {
         .expect("rate_upd event not found");
 
     let event_data: RateUpdateEvent = rate_update_event.2.into_val(&env);
-    assert_eq!(event_data.currency, ngn);
-    assert_eq!(event_data.rate, 1_235_000);
-    assert_eq!(event_data.validator, validator);
+    assert_eq!(event_data.currency, ngn, "event_data.currency should equal ngn");
+    assert_eq!(event_data.rate, 1_235_000, "event_data.rate should equal 1_235_000");
+    assert_eq!(event_data.validator, validator, "event_data.validator should equal validator");
 }
 
 #[test]
@@ -223,15 +246,21 @@ fn test_update_rate_before_interval_fails() {
     // Try to update again immediately (before 6 hours)
     env.ledger().with_mut(|l| l.timestamp += 1000); // Only 1000 seconds later
 
-    let result = client.try_update_rate(&validator, &ngn, &rate, &sources, &env.ledger().timestamp());
+    let result =
+        client.try_update_rate(&validator, &ngn, &rate, &sources, &env.ledger().timestamp());
     assert!(result.is_err());
 }
 
 #[test]
 fn test_update_rate_with_emergency_deviation_bypasses_interval() {
+    // SC-025: A single validator can no longer unilaterally bypass the update interval.
+    // The bypass now requires N-of-M (min_signatures) validators to first call
+    // cast_emergency_vote, and then any validator may call update_rate to commit.
+    // setup() initialises min_signatures = 2, so two validators must agree.
     let (env, client, _contract_id, _admin, validators) = setup();
 
     let validator = validators.get(0).unwrap();
+    let validator2 = validators.get(1).unwrap();
     let ngn = CurrencyCode::new(&env, "NGN");
     let initial_rate = 1_000_000i128;
     let mut sources = Vec::new(&env);
@@ -239,22 +268,38 @@ fn test_update_rate_with_emergency_deviation_bypasses_interval() {
     sources.push_back(1_000_000i128);
     sources.push_back(1_000_000i128);
 
-    // First update
-    client.update_rate(&validator, &ngn, &initial_rate, &sources, &env.ledger().timestamp());
+    // Seed an initial rate.
+    client.update_rate(
+        &validator,
+        &ngn,
+        &initial_rate,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
-    // Try to update with emergency deviation (>5%)
-    env.ledger().with_mut(|l| l.timestamp += 1000); // Only 1000 seconds later
-    let emergency_rate = 1_060_000i128; // 6% higher
+    // Advance only 1000 seconds — well within the 6h update interval.
+    env.ledger().with_mut(|l| l.timestamp += 1000);
+    let emergency_rate = 1_060_000i128; // 6% above threshold (>5%)
     let mut emergency_sources = Vec::new(&env);
     emergency_sources.push_back(1_060_000i128);
     emergency_sources.push_back(1_060_000i128);
     emergency_sources.push_back(1_060_000i128);
 
-    // Should succeed despite interval not met
-    client.update_rate(&validator, &ngn, &emergency_rate, &emergency_sources, &env.ledger().timestamp());
+    // Step 1: Both validators cast emergency votes.
+    client.cast_emergency_vote(&validator, &ngn, &emergency_rate);
+    client.cast_emergency_vote(&validator2, &ngn, &emergency_rate);
+
+    // Step 2: Now consensus is met (2-of-3) — update_rate grants the bypass.
+    client.update_rate(
+        &validator,
+        &ngn,
+        &emergency_rate,
+        &emergency_sources,
+        &env.ledger().timestamp(),
+    );
 
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1_060_000);
+    assert_eq!(stored_rate, 1_060_000, "stored_rate should equal 1_060_000 after 2-of-3 consensus");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -277,7 +322,7 @@ fn test_outlier_detection_filters_bad_source() {
 
     // Stored rate should be median of clean sources only
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1_002_500); // (1_000_000 + 1_005_000) / 2
+    assert_eq!(stored_rate, 1_002_500, "stored_rate should equal 1_002_500"); // (1_000_000 + 1_005_000) / 2
 
     // Check outlier event was emitted
     let events = env.events().all();
@@ -291,7 +336,7 @@ fn test_outlier_detection_filters_bad_source() {
         .expect("outlier event not found");
 
     let event_data: OutlierDetectionEvent = outlier_event.2.into_val(&env);
-    assert_eq!(event_data.outlier_rate, 1_350_000);
+    assert_eq!(event_data.outlier_rate, 1_350_000, "event_data.outlier_rate should equal 1_350_000");
 }
 
 #[test]
@@ -310,7 +355,7 @@ fn test_all_sources_outlier_uses_fallback() {
 
     // Should not panic, should use fallback
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1_250_000); // raw median
+    assert_eq!(stored_rate, 1_250_000, "stored_rate should equal 1_250_000"); // raw median
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -327,7 +372,7 @@ fn test_admin_can_set_rate() {
     client.set_rate_admin(&ngn, &admin_rate);
 
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, admin_rate);
+    assert_eq!(stored_rate, admin_rate, "stored_rate should equal admin_rate");
 }
 
 #[test]
@@ -371,9 +416,9 @@ fn test_set_basket_config() {
     client.set_basket_config(&new_currencies, &new_weights);
 
     let stored_currencies = client.get_currencies();
-    assert_eq!(stored_currencies.len(), 2);
-    assert_eq!(client.get_basket_weight(&usd), 6000);
-    assert_eq!(client.get_basket_weight(&eur), 4000);
+    assert_eq!(stored_currencies.len(), 2, "stored_currencies.len() should equal 2");
+    assert_eq!(client.get_basket_weight(&usd), 6000, "client.get_basket_weight(&usd) should equal 6000");
+    assert_eq!(client.get_basket_weight(&eur), 4000, "client.get_basket_weight(&eur) should equal 4000");
 }
 
 #[test]
@@ -381,7 +426,7 @@ fn test_get_basket_weight_nonexistent_returns_zero() {
     let (env, client, _contract_id, _admin, _validators) = setup();
 
     let nonexistent = CurrencyCode::new(&env, "XXX");
-    assert_eq!(client.get_basket_weight(&nonexistent), 0);
+    assert_eq!(client.get_basket_weight(&nonexistent), 0, "client.get_basket_weight(&nonexistent) should equal 0");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -398,7 +443,7 @@ fn test_set_and_get_s_token_address() {
     client.set_s_token_address(&ngn, &token_address);
 
     let stored_address = client.get_s_token_address(&ngn);
-    assert_eq!(stored_address, token_address);
+    assert_eq!(stored_address, token_address, "stored_address should equal token_address");
 }
 
 #[test]
@@ -428,17 +473,29 @@ fn test_get_acbu_usd_rate_basket_weighted() {
     ngn_sources.push_back(1_000_000i128);
     ngn_sources.push_back(1_000_000i128);
     ngn_sources.push_back(1_000_000i128);
-    client.update_rate(&validator, &ngn, &1_000_000i128, &ngn_sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &ngn_sources,
+        &env.ledger().timestamp(),
+    );
 
     let mut kes_sources = Vec::new(&env);
     kes_sources.push_back(2_000_000i128);
     kes_sources.push_back(2_000_000i128);
     kes_sources.push_back(2_000_000i128);
-    client.update_rate(&validator, &kes, &2_000_000i128, &kes_sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &kes,
+        &2_000_000i128,
+        &kes_sources,
+        &env.ledger().timestamp(),
+    );
 
     // Basket is 50% NGN (1.0) + 50% KES (2.0) = 1.5
     let acbu_rate = client.get_acbu_usd_rate();
-    assert_eq!(acbu_rate, 1_500_000);
+    assert_eq!(acbu_rate, 1_500_000, "acbu_rate should equal 1_500_000");
 }
 
 #[test]
@@ -453,20 +510,32 @@ fn test_get_acbu_usd_rate_with_timestamp() {
     ngn_sources.push_back(1_000_000i128);
     ngn_sources.push_back(1_000_000i128);
     ngn_sources.push_back(1_000_000i128);
-    client.update_rate(&validator, &ngn, &1_000_000i128, &ngn_sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &ngn_sources,
+        &env.ledger().timestamp(),
+    );
 
     let mut kes_sources = Vec::new(&env);
     kes_sources.push_back(2_000_000i128);
     kes_sources.push_back(2_000_000i128);
     kes_sources.push_back(2_000_000i128);
-    client.update_rate(&validator, &kes, &2_000_000i128, &kes_sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &kes,
+        &2_000_000i128,
+        &kes_sources,
+        &env.ledger().timestamp(),
+    );
 
     let (rate, timestamp) = client.get_acbu_usd_rate_with_timestamp();
     // Weighted average: (1_000_000 * 5000 + 2_000_000 * 5000) / 10_000 / 10_000
     // = (5_000_000_000 + 10_000_000_000) / 10_000 / 10_000
     // = 15_000_000_000 / 100_000_000 = 150
-    assert_eq!(rate, 150);
-    assert_eq!(timestamp, env.ledger().timestamp());
+    assert_eq!(rate, 150, "rate should equal 150");
+    assert_eq!(timestamp, env.ledger().timestamp(), "timestamp should equal env.ledger().timestamp()");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -484,7 +553,13 @@ fn test_stale_rate_rejected() {
     sources.push_back(1_000_001i128);
     sources.push_back(999_999i128);
 
-    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     // Advance past staleness threshold
     advance_ledger_to(&env, &contract_id, 100 + STALE_RATE_MAX_LEDGERS + 1);
@@ -504,13 +579,19 @@ fn test_rate_at_staleness_boundary_accepted() {
     sources.push_back(1_000_001i128);
     sources.push_back(999_999i128);
 
-    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     // Advance exactly to the boundary
     advance_ledger_to(&env, &contract_id, 100 + STALE_RATE_MAX_LEDGERS);
 
     let rate = client.get_rate(&ngn);
-    assert_eq!(rate, 1_000_000);
+    assert_eq!(rate, 1_000_000, "rate should equal 1_000_000");
 }
 
 #[test]
@@ -524,7 +605,13 @@ fn test_admin_override_refreshes_stale_rate() {
     sources.push_back(1_000_001i128);
     sources.push_back(999_999i128);
 
-    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     // Advance past staleness
     advance_ledger_to(&env, &contract_id, 100 + STALE_RATE_MAX_LEDGERS + 1);
@@ -534,7 +621,7 @@ fn test_admin_override_refreshes_stale_rate() {
 
     // Should now be readable
     let rate = client.get_rate(&ngn);
-    assert_eq!(rate, 1_050_000);
+    assert_eq!(rate, 1_050_000, "rate should equal 1_050_000");
 }
 
 #[test]
@@ -548,7 +635,13 @@ fn test_stale_basket_component_blocks_acbu_rate() {
     sources.push_back(1_000_001i128);
     sources.push_back(999_999i128);
 
-    client.update_rate(&validator, &ngn, &1_000_000i128, &sources, &env.ledger().timestamp());
+    client.update_rate(
+        &validator,
+        &ngn,
+        &1_000_000i128,
+        &sources,
+        &env.ledger().timestamp(),
+    );
 
     // Advance past staleness
     advance_ledger_to(&env, &contract_id, 100 + STALE_RATE_MAX_LEDGERS + 1);
@@ -569,10 +662,10 @@ fn test_transfer_admin_initiates_pending() {
     client.transfer_admin(&new_admin);
 
     let pending = client.get_pending_admin().expect("pending admin should be set");
-    assert_eq!(pending, new_admin);
+    assert_eq!(pending, new_admin, "pending should equal new_admin");
 
     // Current admin should still be the same
-    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_admin(), admin, "client.get_admin() should equal admin");
 }
 
 #[test]
@@ -599,7 +692,7 @@ fn test_accept_admin_after_timelock_succeeds() {
 
     client.accept_admin();
 
-    assert_eq!(client.get_admin(), new_admin);
+    assert_eq!(client.get_admin(), new_admin, "client.get_admin() should equal new_admin");
     assert!(client.get_pending_admin().is_none());
 }
 
@@ -613,7 +706,7 @@ fn test_cancel_admin_transfer() {
     client.cancel_admin_transfer();
 
     assert!(client.get_pending_admin().is_none());
-    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_admin(), admin, "client.get_admin() should equal admin");
 }
 
 #[test]

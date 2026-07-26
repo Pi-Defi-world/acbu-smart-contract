@@ -1,23 +1,8 @@
 #!/usr/bin/env bash
-# fetch_token_wasm.sh — download the pinned soroban_token_contract.wasm
-#
-# The WASM artifact is NOT stored in git (see .gitignore).  Run this script
-# once after cloning — or whenever you need to rebuild — to place the verified
-# artifact at the project root where contractimport! expects it.
-#
-# Verification: the script checks the downloaded file against the pinned
-# SHA-256 hash before it is usable.  If the hash does not match, the file
-# is deleted and the script exits non-zero.
-#
-# Usage:
-#   ./scripts/fetch_token_wasm.sh
-#   ./scripts/fetch_token_wasm.sh --force   # overwrite an existing file
-
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-
 DEST="$PROJECT_ROOT/soroban_token_contract.wasm"
 
 # SHA-256 of the expected artifact — must match contractimport! sha256 fields.
@@ -91,5 +76,4 @@ if [[ "$ACTUAL" != "$EXPECTED_HASH" ]]; then
   exit 1
 fi
 
-echo -e "${GREEN}[OK]${NC} soroban_token_contract.wasm verified ($ACTUAL)"
-echo "Artifact is ready for use."
+echo "[OK] soroban_token_contract.wasm ready at $DEST"

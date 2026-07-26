@@ -106,7 +106,7 @@ The file includes:
   - `MultisigConfig`
   - Event types for proposal creation/approval/execution.
 - **Financial types**:
-  - `CurrencyCode` (a wrapper around Soroban `Vec<SorobanString>`)
+  - `CurrencyCode` (a wrapper around a single Soroban `String`)
   - `RateData`
   - `ReserveData`
   - `AccountDetails` (bank/account details for withdrawals)
