@@ -23,8 +23,6 @@ mod oracle_mock {
             DECIMALS
         }
 
-        pub fn get_acbu_usd_rate_with_timestamp(_env: Env) -> (i128, u64) {
-            (DECIMALS, 0)
         pub fn get_acbu_usd_rate_with_timestamp(env: Env) -> (i128, u64) {
             (DECIMALS, env.ledger().timestamp())
         }
@@ -43,8 +41,6 @@ mod oracle_mock {
             DECIMALS
         }
 
-        pub fn get_rate_with_timestamp(_env: Env, _c: CurrencyCode) -> (i128, u64) {
-            (DECIMALS, 0)
         pub fn get_rate_with_timestamp(env: Env, _c: CurrencyCode) -> (i128, u64) {
             (DECIMALS, env.ledger().timestamp())
         }
@@ -193,7 +189,6 @@ fn test_mint_from_fiat_success() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized operator")]
 #[should_panic(expected = "#5007")]
 fn test_mint_from_fiat_unauthorized_caller() {
     let env = Env::default();
@@ -242,7 +237,6 @@ fn test_mint_from_fiat_unauthorized_caller() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized operator")]
 #[should_panic(expected = "#5007")]
 fn test_mint_from_fiat_recipient_self_mint() {
     let env = Env::default();
@@ -337,7 +331,6 @@ fn test_mint_from_fiat_empty_tx_id() {
 }
 
 #[test]
-#[should_panic(expected = "Fiat transaction already processed")]
 #[should_panic(expected = "#5008")]
 fn test_mint_from_fiat_duplicate_tx_id() {
     let env = Env::default();
@@ -536,7 +529,6 @@ fn test_mint_from_fiat_admin_not_default_operator() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized operator")]
 #[should_panic(expected = "#5007")]
 fn test_mint_from_fiat_admin_when_operator_set() {
     let env = Env::default();
