@@ -1512,7 +1512,13 @@ impl MintingContract {
         Self::check_paused(&env);
 
         let current_version = Self::get_version(env.clone());
-        if new_version <= current_version {
+
+        // SC-034: enforce single-step increments only.
+        // Allowing new_version > current_version + 1 would silently skip any
+        // migrations registered for the intermediate versions (the `_ => {}`
+        // arms). Each deployment must advance exactly one version so every
+        // migration function is guaranteed to run.
+        if new_version != current_version + 1 {
             env.panic_with_error(MintingError::InvalidVersion);
         }
 
