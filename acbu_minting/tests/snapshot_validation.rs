@@ -29,30 +29,33 @@ const EXPECTED_STORAGE_KEYS: &[&str] = &[
     "ADMIN",
     "FEE_RATE",
     "FEE_SGL",
+    "FTX_IDS",
+    "MAX_DRIP",
     "MAX_MINT",
     "MAX_SUP",
     "MIN_MINT",
+    "OPERATOR",
     "ORACLE",
-    "PAUSED",
+    "PEND_ADM",
+    "PA_ETA",
+    "PHASE",
+    "PRF_SET",
+    "PROOFS",
     "RES_TRK",
     "SUPPLY",
     "TRSY",
+    "TX_NONCE",
     "USDC_TKN",
     "VAULT",
-    "Version",
 ];
 
 /// Expected event types that should be emitted by the contract
 /// Update this list when event types are added/removed/renamed
 const EXPECTED_EVENT_TYPES: &[&str] = &[
     "mint",
-    "set_admin",
-    "initialize",
-    "mint_from_fiat",
-    "mint_from_basket",
-    "pause",
-    "unpause",
-    "set_fee_rate",
+    "adm_init",
+    "adm_done",
+    "adm_cncl",
 ];
 
 /// Represents the result of snapshot validation

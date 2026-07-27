@@ -27,6 +27,8 @@ pub enum DataKey {
 }
 
 const VERSION: u32 = CONTRACT_VERSION;
+/// Duration of a loan in seconds (30 days).
+const LOAN_TERM_SECONDS: u64 = 30 * 24 * 60 * 60;
 const UPGRADE_TIMELOCK_SECONDS: u64 = 86_400;
 /// TTL extension applied to instance storage on every public entry-point call
 /// (≈60 days at ~5-second ledger close time).
@@ -136,15 +138,6 @@ pub struct RepaymentEvent {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Error {
-    NotFound = 1,
-    InvalidState = 2,
-    Unauthorized = 3,
-    AlreadyInitialized = 4,
-    InvalidAmount = 5,
-    InsufficientBalance = 6,
-    InsufficientCollateral = 7,
-    InsufficientLiquidity = 8,
-    DustBalance = 9,
     Paused = 2001,
     InvalidVersion = 2002,
     TimelockNotElapsed = 2003,
@@ -152,6 +145,15 @@ pub enum Error {
     NoPendingAdmin = 2005,
     AdminTimelockNotElapsed = 2006,
     NoPendingAdminToCancel = 2007,
+    NotFound = 2008,
+    InvalidState = 2009,
+    Unauthorized = 2010,
+    AlreadyInitialized = 2011,
+    InvalidAmount = 2012,
+    InsufficientBalance = 2013,
+    InsufficientCollateral = 2014,
+    InsufficientLiquidity = 2015,
+    DustBalance = 2016,
     Unknown = 2999,
 }
 
@@ -410,7 +412,7 @@ impl LendingPool {
             interest_rate_bps: u32::try_from(fee_rate_bps)
                 .unwrap_or_else(|_| env.panic_with_error(Error::InvalidAmount)),
             loan_start_timestamp: start_time,
-            repayment_deadline: start_time + (30 * 24 * 60 * 60),
+            repayment_deadline: start_time + LOAN_TERM_SECONDS,
             accrued_interest: 0,
             total_repayment_due: amount,
             status: LoanStatus::Active,
@@ -451,7 +453,7 @@ impl LendingPool {
                 borrower,
                 amount,
                 interest_bps: fee_rate,
-                term_seconds: 0,
+                term_seconds: LOAN_TERM_SECONDS,
                 timestamp,
             },
         );
@@ -563,6 +565,12 @@ impl LendingPool {
         }
 
         token.transfer(&borrower, &env.current_contract_address(), &amount);
+
+        let interest_repaid = amount - principal_repaid;
+        if interest_repaid > 0 {
+            let lender = loan_data.lender.clone();
+            token.transfer(&env.current_contract_address(), &lender, &interest_repaid);
+        }
 
         if loan_data.amount == 0 {
             loan_data.accrued_interest = 0;

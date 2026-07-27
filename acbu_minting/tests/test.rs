@@ -629,6 +629,52 @@ fn test_storage_state_intact_across_upgrade_boundary() {
     assert!(!client.is_paused());
 }
 
+// --- SC-034: single-step upgrade enforcement ---
+
+/// Skipping a version (current=1, new=3) must be rejected with InvalidVersion (5018).
+#[test]
+#[should_panic(expected = "#5018")]
+fn test_upgrade_rejects_skipping_version() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
+        &acbu_token, &usdc_token, &admin, &admin, 300, 100);
+    // current version is 1; jumping to 3 skips v2 migration → must panic.
+    let dummy_hash: BytesN<32> = bytesn!(&env, 0x0000000000000000000000000000000000000000000000000000000000000000);
+    client.upgrade(&dummy_hash, &3u32);
+}
+
+/// Skipping many versions at once (current=1, new=100) must also be rejected.
+#[test]
+#[should_panic(expected = "#5018")]
+fn test_upgrade_rejects_large_version_jump() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
+        &acbu_token, &usdc_token, &admin, &admin, 300, 100);
+    let dummy_hash: BytesN<32> = bytesn!(&env, 0x0000000000000000000000000000000000000000000000000000000000000000);
+    client.upgrade(&dummy_hash, &100u32);
+}
+
+/// Upgrading by exactly one step (current=1, new=2) must be accepted and
+/// the stored version updated accordingly.
+#[test]
+fn test_upgrade_accepts_single_step() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
+        &acbu_token, &usdc_token, &admin, &admin, 300, 100);
+    assert_eq!(client.get_version(), 1);
+    // Use the current contract's own WASM hash — valid for testing the version
+    // guard; the WASM itself doesn't change in the test environment.
+    let current_hash = env.deployer().get_contract_wasm_hash(&client.address);
+    client.upgrade(&current_hash, &2u32);
+    assert_eq!(client.get_version(), 2);
+}
+
 #[test]
 fn test_update_oracle_by_admin() {
     let env = Env::default();
