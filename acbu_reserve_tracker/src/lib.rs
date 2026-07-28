@@ -304,7 +304,11 @@ impl ReserveTrackerContract {
             Vec::new(&env),
         );
 
-        let total_acbu_usd = (total_acbu_supply * acbu_usd_rate) / 100_000_000;
+        let total_acbu_usd = total_acbu_supply
+            .checked_mul(acbu_usd_rate)
+            .expect("Overflow in ACBU USD calculation")
+            .checked_div(100_000_000)
+            .expect("Division by zero in ACBU USD calculation");
         if total_acbu_usd == 0 {
             return true;
         }
@@ -315,7 +319,11 @@ impl ReserveTrackerContract {
             .get(&DATA_KEY.min_reserve_ratio)
             .unwrap_or(10000i128); // Default to 100%
 
-        let current_ratio = (total_reserve_usd * BASIS_POINTS) / total_acbu_usd;
+        let current_ratio = total_reserve_usd
+            .checked_mul(BASIS_POINTS)
+            .expect("Overflow in reserve ratio calculation")
+            .checked_div(total_acbu_usd)
+            .expect("Division by zero in reserve ratio calculation");
         current_ratio >= min_reserve_ratio
     }
 
