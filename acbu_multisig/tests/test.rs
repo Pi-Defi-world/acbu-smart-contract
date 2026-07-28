@@ -317,3 +317,92 @@ fn test_execute_after_signer_removed_panics() {
     // signers[0] approved but is no longer a signer — execute must panic.
     client.execute(&signers[2], &pid);
 }
+
+// ── Additional Tests ─────────────────────────────────────────────────────────
+
+/// Test that multiple proposals can exist simultaneously and be managed independently.
+#[test]
+fn test_multiple_concurrent_proposals() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (signers, client) = setup(&env, 4, 3);
+    
+    // Create three different proposals
+    let pid0 = client.propose(&signers[0], &SorobanString::from_str(&env, "pause"));
+    let pid1 = client.propose(&signers[1], &SorobanString::from_str(&env, "upgrade"));
+    let pid2 = client.propose(&signers[2], &SorobanString::from_str(&env, "transfer"));
+    
+    assert_eq!(pid0, 0, "First proposal ID should be 0");
+    assert_eq!(pid1, 1, "Second proposal ID should be 1");
+    assert_eq!(pid2, 2, "Third proposal ID should be 2");
+    
+    // Each proposal should have only 1 approval (from proposer)
+    assert_eq!(client.approval_count(&pid0), 1);
+    assert_eq!(client.approval_count(&pid1), 1);
+    assert_eq!(client.approval_count(&pid2), 1);
+    
+    // Approve first proposal to threshold and execute it
+    client.approve(&signers[1], &pid0);
+    client.approve(&signers[2], &pid0);
+    client.execute(&signers[3], &pid0);
+    
+    // Verify first proposal is executed but others are not
+    assert!(client.get_proposal(&pid0).executed);
+    assert!(!client.get_proposal(&pid1).executed);
+    assert!(!client.get_proposal(&pid2).executed);
+    
+    // Other proposals should still be independently approvable
+    client.approve(&signers[0], &pid1);
+    assert_eq!(client.approval_count(&pid1), 2);
+}
+
+/// Test edge case: 1-of-1 multisig (single signer scenario).
+#[test]
+fn test_single_signer_1_of_1() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (signers, client) = setup(&env, 1, 1);
+    
+    let cfg = client.get_config();
+    assert_eq!(cfg.threshold, 1, "Threshold should be 1");
+    assert_eq!(cfg.signers.len(), 1, "Should have exactly 1 signer");
+    
+    // Propose automatically meets threshold
+    let pid = client.propose(&signers[0], &SorobanString::from_str(&env, "pause"));
+    assert_eq!(client.approval_count(&pid), 1, "Should have 1 approval");
+    
+    // Execute should succeed immediately
+    client.execute(&signers[0], &pid);
+    assert!(client.get_proposal(&pid).executed);
+}
+
+/// Test that approval count correctly reflects unique approvals after config changes.
+#[test]
+fn test_threshold_increase_requires_more_approvals() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (signers, client) = setup(&env, 5, 2);
+    
+    // Create proposal and get initial approvals
+    let pid = client.propose(&signers[0], &SorobanString::from_str(&env, "pause"));
+    client.approve(&signers[1], &pid);
+    assert_eq!(client.approval_count(&pid), 2, "Should have 2 approvals");
+    
+    // Update config to increase threshold to 4
+    let mut same_signers = soroban_sdk::Vec::new(&env);
+    for i in 0..5 {
+        same_signers.push_back(signers[i].clone());
+    }
+    client.update_config(&same_signers, &4);
+    
+    // Verify config updated
+    let cfg = client.get_config();
+    assert_eq!(cfg.threshold, 4, "Threshold should be updated to 4");
+    
+    // With only 2 approvals and new threshold of 4, execution should fail
+    // (This test verifies the threshold is enforced after config changes)
+    let result = std::panic::catch_unwind(|| {
+        client.execute(&signers[2], &pid);
+    });
+    assert!(result.is_err(), "Execute should panic when approvals are below new threshold");
+}
