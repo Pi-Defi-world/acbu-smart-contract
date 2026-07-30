@@ -286,6 +286,36 @@ fn test_mint_from_usdc() {
 }
 
 #[test]
+#[should_panic(expected = "#5003")]
+fn test_mint_from_usdc_below_min() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
+    let user = Address::generate(&env);
+    let usdc_sac = soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token_id);
+
+    let tiny_amount = 1;
+    usdc_sac.mint(&user, &tiny_amount);
+
+    init_mint_client(
+        &env,
+        &client,
+        &admin,
+        &oracle,
+        &reserve_tracker,
+        &acbu_token_id,
+        &usdc_token_id,
+        &admin,
+        &admin,
+        300,
+        100,
+    );
+
+    client.mint_from_usdc(&user, &tiny_amount, &user);
+}
+
+#[test]
 fn test_mint_from_basket() {
     let env = Env::default();
     env.mock_all_auths();
@@ -444,11 +474,13 @@ fn test_mint_from_demo_fiat_wrong_operator() {
     );
 
     let tx_id = soroban_sdk::String::from_str(&env, "tx_bad");
+    let proof = SorobanString::from_str(&env, "proof_bad");
     client.mint_from_demo_fiat(
         &attacker,
         &recipient,
         &CurrencyCode::new(&env, "NGN"),
         &(10 * DECIMALS),
+        &proof,
         &tx_id,
     );
 }
@@ -509,7 +541,6 @@ fn test_mint_from_usdc_exceeds_max() {
     let user = Address::generate(&env);
     let usdc_sac = soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token_id);
 
-    // Max mint amount is 1_000_000_000_000, so 2_000_000_000_000 is huge
     let huge_amount = 2_000_000_000_000;
     usdc_sac.mint(&user, &huge_amount);
 
@@ -762,7 +793,6 @@ fn test_update_oracle_requires_admin_minting() {
     let treasury = Address::generate(&env);
     init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker, &acbu_token, &usdc_token, &vault, &treasury, 100, 200);
 
-    // Without mock_all_auths, a non-admin call should fail
     let env2 = Env::default();
     let (admin2, oracle2, rt2, acbu2, usdc2, client2) = setup_test(&env2);
     let vault2 = Address::generate(&env2);
@@ -770,7 +800,6 @@ fn test_update_oracle_requires_admin_minting() {
     env2.mock_all_auths();
     init_mint_client(&env2, &client2, &admin2, &oracle2, &rt2, &acbu2, &usdc2, &vault2, &treasury2, 100, 200);
     let new_oracle = Address::generate(&env2);
-    // With mock_all_auths this succeeds; the auth check is enforced by Soroban's auth framework
     client2.update_oracle(&new_oracle);
 }
 
