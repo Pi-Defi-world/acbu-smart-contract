@@ -608,3 +608,117 @@ fn test_loan_lifecycle_emits_events() {
     assert_eq!(repayment_event_data.borrower, borrower);
     assert_eq!(repayment_event_data.amount, borrow_amount - repay_amount);
 }
+
+// ── SC-018: same-asset collateral removal ────────────────────────────────────
+
+/// The pool is single-asset and uncollateralized: `borrow` must not pull any
+/// ACBU from the borrower, and a borrower holding no ACBU at all must still be
+/// able to take out a loan. The recorded `collateral_amount` stays `0`, which is
+/// the reserved value for the future distinct-asset collateral extension.
+#[test]
+fn test_borrow_takes_no_collateral_from_borrower() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    let contract_id = env.register_contract(None, LendingPool);
+    let client = LendingPoolClient::new(&env, &contract_id);
+    client.initialize(&admin, &acbu_token, &0);
+
+    let token_admin = StellarAssetClient::new(&env, &acbu_token);
+    let token_client = TokenClient::new(&env, &acbu_token);
+
+    let lender = Address::generate(&env);
+    let pool_liquidity: i128 = 1_000_000;
+    token_admin.mint(&lender, &pool_liquidity);
+    client.deposit(&lender, &pool_liquidity);
+
+    // Borrower starts with zero ACBU — under the old same-asset collateral rule
+    // (collateral_amount >= amount) this borrow would have been impossible.
+    let borrower = Address::generate(&env);
+    assert_eq!(token_client.balance(&borrower), 0, "borrower must start with no ACBU");
+
+    let borrow_amount: i128 = 400_000;
+    let loan_id: u64 = 700;
+    client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
+
+    // The borrower nets the full principal: nothing was locked as collateral.
+    assert_eq!(
+        token_client.balance(&borrower),
+        borrow_amount,
+        "borrower must receive the full principal with no collateral withheld"
+    );
+    assert_eq!(
+        token_client.balance(&contract_id),
+        pool_liquidity - borrow_amount,
+        "pool must hold exactly the unlent liquidity"
+    );
+
+    let loan = client
+        .get_loan(&borrower, &loan_id)
+        .expect("loan must exist");
+    assert_eq!(
+        loan.collateral_amount, 0,
+        "collateral_amount is reserved and must remain 0"
+    );
+}
+
+/// Because the loan is unsecured, depositing liquidity is not an open offer to
+/// lend it to anyone: `borrow` requires the lender's authorization as well as
+/// the borrower's. Without it a borrower could drain a depositor's balance.
+#[test]
+fn test_borrow_without_lender_auth_fails() {
+    use soroban_sdk::testutils::MockAuth;
+    use soroban_sdk::testutils::MockAuthInvoke;
+    use soroban_sdk::IntoVal;
+
+    let env = Env::default();
+
+    let admin = Address::generate(&env);
+    let acbu_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    let contract_id = env.register_contract(None, LendingPool);
+    let client = LendingPoolClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &acbu_token, &0);
+
+    let lender = Address::generate(&env);
+    let pool_liquidity: i128 = 1_000_000;
+    let token_admin = StellarAssetClient::new(&env, &acbu_token);
+    let token_client = TokenClient::new(&env, &acbu_token);
+    token_admin.mint(&lender, &pool_liquidity);
+    client.deposit(&lender, &pool_liquidity);
+
+    // Only the borrower signs — the lender never consented to this loan.
+    let borrower = Address::generate(&env);
+    let borrow_amount: i128 = 400_000;
+    let loan_id: u64 = 701;
+    env.mock_auths(&[MockAuth {
+        address: &borrower,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "borrow",
+            args: (&borrower, &lender, borrow_amount, loan_id).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_borrow(&borrower, &lender, &borrow_amount, &loan_id);
+    assert!(
+        result.is_err(),
+        "unsecured borrow without the lender's authorization must be rejected"
+    );
+
+    // The lender's liquidity is untouched and no loan was recorded.
+    assert_eq!(client.get_balance(&lender), pool_liquidity);
+    assert_eq!(token_client.balance(&contract_id), pool_liquidity);
+    assert_eq!(token_client.balance(&borrower), 0);
+    assert!(client.get_loan(&borrower, &loan_id).is_none());
+}

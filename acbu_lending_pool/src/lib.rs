@@ -69,6 +69,18 @@ pub struct LoanData {
     pub borrower: Address,
     pub lender: Address,
     pub amount: i128,
+    /// Reserved for a future multi-asset collateral extension; always `0` today.
+    ///
+    /// The pool is single-asset: both the liquidity and the loan principal are
+    /// ACBU. Posting ACBU as collateral for an ACBU loan is a no-op — it locks
+    /// at least as much of the borrowed asset as it releases and provides no
+    /// credit protection — so no collateral is pulled on [`LendingPool::borrow`].
+    /// See [`LendingPool::borrow`] for the full rationale (SC-018).
+    ///
+    /// The field is retained rather than removed so that already-stored
+    /// [`LoanData`] entries keep decoding across a contract upgrade, and so that
+    /// a real (distinct-asset) collateral implementation can populate it without
+    /// another storage migration.
     pub collateral_amount: i128,
     pub interest_rate_bps: u32,
     pub loan_start_timestamp: u64,
@@ -151,6 +163,12 @@ pub enum Error {
     AlreadyInitialized = 2011,
     InvalidAmount = 2012,
     InsufficientBalance = 2013,
+    // Reserved. Never returned by the current single-asset pool, which takes no
+    // collateral (see `LoanData::collateral_amount` and `LendingPool::borrow`).
+    // Kept so error code 2014 stays stable for clients and remains available to a
+    // future distinct-asset collateral implementation. Note: `//` and not `///` —
+    // a doc comment here would replace the short `Display` wording in the
+    // generated docs/ERROR_CODES.md table.
     InsufficientCollateral = 2014,
     InsufficientLiquidity = 2015,
     DustBalance = 2016,
@@ -339,9 +357,34 @@ impl LendingPool {
     /// Borrow `amount` of ACBU from a specific `lender`'s liquidity, creating
     /// a new loan keyed by `(borrower, loan_id)`.
     ///
-    /// Requires `borrower`'s authorization and that the pool is not paused.
-    /// The lender must have enough unborrowed balance. `loan_id` must be unique
-    /// for the borrower. Emits [`BorrowEvent`] and [`LoanCreatedEvent`].
+    /// Requires authorization from **both** `borrower` and `lender`, and that the
+    /// pool is not paused. The lender must have enough unborrowed balance.
+    /// `loan_id` must be unique for the borrower. Emits [`BorrowEvent`] and
+    /// [`LoanCreatedEvent`].
+    ///
+    /// # Design: this pool is uncollateralized by construction (SC-018)
+    ///
+    /// An earlier iteration pulled a `collateral_amount` of ACBU from the
+    /// borrower and required `collateral_amount >= amount` before paying out
+    /// `amount` of the *same* ACBU token. That is a degenerate arrangement: the
+    /// borrower had to already hold — and give up control of — at least as much
+    /// ACBU as they received, so the loan extended no purchasing power, and the
+    /// "collateral" gave the lender no protection they did not already have.
+    /// There was also no liquidation path that could seize it. It was leftover
+    /// from an earlier design rather than an intended placeholder, and the
+    /// collateral leg has been removed.
+    ///
+    /// Because nothing secures the principal, credit risk sits entirely with the
+    /// lender, so the lender must consent to each individual loan: `borrow`
+    /// requires `lender.require_auth()` in addition to `borrower.require_auth()`.
+    /// Depositing liquidity is *not* an open offer to lend it to anyone — without
+    /// the lender's signature, any address could drain a depositor's balance as
+    /// an unsecured loan. Both parties therefore sign the same borrow
+    /// transaction, making each loan an explicit peer-to-peer agreement.
+    ///
+    /// Meaningful collateral requires a *distinct* asset plus oracle pricing and
+    /// a liquidation path; that is a separate feature, and
+    /// [`LoanData::collateral_amount`] is reserved for it.
     pub fn borrow(
         env: Env,
         borrower: Address,
@@ -353,6 +396,9 @@ impl LendingPool {
         reentrancy_guard::acquire_guard(&env);
 
         borrower.require_auth();
+        // The loan is unsecured (see the function docs), so the lender bears the
+        // full credit risk and must approve this specific loan.
+        lender.require_auth();
         Self::check_paused(&env);
 
         if amount <= 0 {
@@ -408,6 +454,8 @@ impl LendingPool {
             borrower: borrower.clone(),
             lender: lender.clone(),
             amount,
+            // No collateral is taken; the field is reserved for a future
+            // distinct-asset collateral extension (SC-018).
             collateral_amount: 0,
             interest_rate_bps: u32::try_from(fee_rate_bps)
                 .unwrap_or_else(|_| env.panic_with_error(Error::InvalidAmount)),
