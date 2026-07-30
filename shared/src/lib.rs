@@ -298,6 +298,11 @@ pub enum ContractError {
     /// WASM upgrade rejected: `new_version` must be greater than the stored version.
     InvalidVersion = 12,
 
+    /// The computed output amount is below the caller-supplied minimum acceptable
+    /// output (`min_*_out`), indicating that same-block oracle movement would
+    /// cause unacceptable slippage for this transaction.
+    SlippageExceeded = 13,
+
     Unknown = 9999,
 }
 
@@ -316,6 +321,7 @@ impl core::fmt::Display for ContractError {
             ContractError::InsufficientBalance => write!(f, "insufficient balance"),
             ContractError::InvalidRecipient => write!(f, "invalid recipient"),
             ContractError::InvalidVersion => write!(f, "invalid version"),
+            ContractError::SlippageExceeded => write!(f, "output below minimum: slippage exceeded"),
             ContractError::Unknown => write!(f, "unknown error"),
         }
     }
