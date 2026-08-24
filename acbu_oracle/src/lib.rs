@@ -151,32 +151,28 @@ const VERSION: u32 = 9;
 /// prevent stale votes from trickling into a later genuine crisis.
 const EMERGENCY_VOTE_TTL_SECONDS: u64 = 3_600;
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct AdminTransferInitiatedEvent {
     pub current_admin: Address,
     pub pending_admin: Address,
     pub eligible_at: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct AdminTransferCompletedEvent {
     pub old_admin: Address,
     pub new_admin: Address,
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct AdminTransferCancelledEvent {
     pub admin: Address,
     pub cancelled_pending: Address,
     pub timestamp: u64,
 }
 
-#[contracttype]
-#[derive(Clone, Debug)]
+#[contractevent]
 pub struct StaleRateEvent {
     pub currency: CurrencyCode,
     pub stored_ledger: u32,
