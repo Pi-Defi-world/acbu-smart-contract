@@ -7,7 +7,7 @@ use soroban_sdk::{
 
 use shared::{
     calculate_deviation, median, CurrencyCode, DataKey as SharedDataKey, OutlierDetectionEvent,
-    RateData, RateUpdateEvent, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, EMERGENCY_THRESHOLD_BPS,
+    RateData, RateUpdateEvent, BASIS_POINTS, CONTRACT_VERSION, EMERGENCY_THRESHOLD_BPS,
     MAX_VALIDATORS, OUTLIER_THRESHOLD_BPS, STALE_RATE_MAX_LEDGERS, UPDATE_INTERVAL_SECONDS,
 };
 
