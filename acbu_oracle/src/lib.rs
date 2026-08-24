@@ -1,7 +1,7 @@
 #![no_std]
 use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Map, Symbol, Vec,
 };
 
@@ -135,28 +135,28 @@ const DATA_KEY: DataKey = DataKey {
 
 const VERSION: u32 = 9;
 
-#[contractevent]
+#[contracttype]
 pub struct AdminTransferInitiatedEvent {
     pub current_admin: Address,
     pub pending_admin: Address,
     pub eligible_at: u64,
 }
 
-#[contractevent]
+#[contracttype]
 pub struct AdminTransferCompletedEvent {
     pub old_admin: Address,
     pub new_admin: Address,
     pub timestamp: u64,
 }
 
-#[contractevent]
+#[contracttype]
 pub struct AdminTransferCancelledEvent {
     pub admin: Address,
     pub cancelled_pending: Address,
     pub timestamp: u64,
 }
 
-#[contractevent]
+#[contracttype]
 pub struct StaleRateEvent {
     pub currency: CurrencyCode,
     pub stored_ledger: u32,
