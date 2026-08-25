@@ -123,32 +123,32 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 
 | Code | Variant | Description |
 | ---: | --- | --- |
-| 5001 | `AlreadyInitialized` | minting contract already initialized |
-| 5002 | `InvalidFeeRate` | invalid fee rate |
-| 5003 | `InvalidMintAmount` | invalid mint amount |
-| 5004 | `InsufficientReserves` | insufficient reserves |
-| 5005 | `ProofAlreadyUsed` | proof already used |
-| 5006 | `InvalidOracleRate` | invalid oracle rate |
-| 5007 | `UnauthorizedOperator` | unauthorized operator |
-| 5008 | `DuplicateFintechTxId` | duplicate fintech transaction id |
-| 5009 | `InvalidDripAmount` | invalid drip amount |
-| 5010 | `DripExceedsCap` | drip exceeds cap |
-| 5011 | `InsufficientDemoCustody` | insufficient demo custody |
-| 5012 | `Paused` | minting contract is paused |
-| 5013 | `OracleStale` | oracle rate is stale |
-| 5014 | `FintechTxIdEmpty` | fintech transaction id is empty |
-| 5015 | `FintechTxIdTooShort` | fintech transaction id is too short |
-| 5016 | `FintechTxIdTooLong` | fintech transaction id is too long |
-| 5017 | `FintechTxIdInvalidChar` | fintech transaction id contains invalid characters |
-| 5018 | `InvalidVersion` | invalid contract version |
-| 5019 | `MaxSupplyExceeded` | maximum supply exceeded |
-| 5020 | `NoPendingAdmin` | no pending admin |
-| 5021 | `AdminTimelockNotElapsed` | admin timelock has not elapsed |
-| 5022 | `NoPendingAdminToCancel` | no pending admin to cancel |
-| 5023 | `InvalidRecipient` | invalid recipient |
-| 5024 | `InvalidRoleSeparation` | admin and operator must be different addresses |
-| 5025 | `SupplyMismatch` | supplied value does not match on-chain supply |
-| 5999 | `Unknown` | unknown minting error |
+| 5001 | `AlreadyInitialized` | Minting contract already initialized |
+| 5002 | `InvalidFeeRate` | Invalid fee rate |
+| 5003 | `InvalidMintAmount` | Invalid mint amount |
+| 5004 | `InsufficientReserves` | Insufficient reserves |
+| 5005 | `ProofAlreadyUsed` | Proof already used |
+| 5006 | `InvalidOracleRate` | Invalid oracle rate |
+| 5007 | `UnauthorizedOperator` | Unauthorized operator |
+| 5008 | `DuplicateFintechTxId` | Duplicate fintech transaction ID |
+| 5009 | `InvalidDripAmount` | Invalid drip amount |
+| 5010 | `DripExceedsCap` | Drip exceeds cap |
+| 5011 | `InsufficientDemoCustody` | Insufficient demo custody |
+| 5012 | `Paused` | Minting contract is paused |
+| 5013 | `OracleStale` | Oracle rate is stale |
+| 5014 | `FintechTxIdEmpty` | Fintech transaction ID is empty |
+| 5015 | `FintechTxIdTooShort` | Fintech transaction ID is too short |
+| 5016 | `FintechTxIdTooLong` | Fintech transaction ID is too long |
+| 5017 | `FintechTxIdInvalidChar` | Fintech transaction ID contains invalid characters |
+| 5018 | `InvalidVersion` | Invalid contract version |
+| 5019 | `MaxSupplyExceeded` | Maximum supply exceeded |
+| 5020 | `NoPendingAdmin` | No pending admin |
+| 5021 | `AdminTimelockNotElapsed` | Admin timelock has not elapsed |
+| 5022 | `NoPendingAdminToCancel` | No pending admin to cancel |
+| 5023 | `InvalidRecipient` | Invalid recipient |
+| 5024 | `InvalidRoleSeparation` | Admin and operator must be different addresses |
+| 5025 | `SupplyMismatch` | Supplied value does not match on-chain supply |
+| 5999 | `Unknown` | Unknown minting error |
 
 ## `acbu_oracle` - `OracleError`
 
