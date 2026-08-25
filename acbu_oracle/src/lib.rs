@@ -336,11 +336,7 @@ impl OracleContract {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         env.events().publish(
             (symbol_short!("adm_cncl"),),
-            AdminTransferCancelledEvent {
-                admin,
-                cancelled_pending: pending_admin,
-                timestamp: env.ledger().timestamp(),
-            },
+            (admin, pending_admin, env.ledger().timestamp()),
         );
     }
 
@@ -1055,12 +1051,7 @@ impl OracleContract {
         if age > STALE_RATE_MAX_LEDGERS {
             env.events().publish(
                 (symbol_short!("stale_rt"),),
-                StaleRateEvent {
-                    currency: currency.clone(),
-                    stored_ledger: rate_data.ledger,
-                    current_ledger,
-                    max_stale_ledgers: STALE_RATE_MAX_LEDGERS,
-                },
+                (currency.clone(), rate_data.ledger, current_ledger, STALE_RATE_MAX_LEDGERS),
             );
             env.panic_with_error(OracleError::RateStaleLedger);
         }
