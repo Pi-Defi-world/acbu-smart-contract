@@ -5,7 +5,10 @@ use soroban_sdk::{
     BytesN, Env, Symbol, Vec,
 };
 
-use shared::{calculate_fee, ContractPhase, DataKey as SharedDataKey, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION};
+use shared::{
+    calculate_fee, reentrancy_guard, ContractPhase, DataKey as SharedDataKey, BASIS_POINTS,
+    CONTRACT_VERSION,
+};
 
 // ---------------------------------------------------------------------------
 // Error codes
@@ -252,11 +255,19 @@ impl SavingsVault {
             env.panic_with_error(Error::InvalidYieldRate);
         }
         env.storage().instance().set(&DATA_KEY.admin, &admin);
-        env.storage().instance().set(&DATA_KEY.acbu_token, &acbu_token);
-        env.storage().instance().set(&DATA_KEY.fee_rate, &fee_rate_bps);
-        env.storage().instance().set(&DATA_KEY.yield_rate, &yield_rate_bps);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.acbu_token, &acbu_token);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.fee_rate, &fee_rate_bps);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.yield_rate, &yield_rate_bps);
         env.storage().instance().set(&DATA_KEY.paused, &false);
-        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &CONTRACT_VERSION);
         Self::extend_instance_ttl(&env);
     }
 
@@ -458,13 +469,7 @@ impl SavingsVault {
 
         env.events().publish(
             (symbol_short!("Withdraw"), user.clone()),
-            WithdrawEvent {
-                user,
-                amount,
-                fee_amount: 0,
-                yield_amount,
-                timestamp: now,
-            },
+            (user, amount, 0i128, yield_amount, now),
         );
 
         reentrancy_guard::release_guard(&env);
@@ -599,14 +604,18 @@ impl SavingsVault {
     pub fn pause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Paused);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.phase, &ContractPhase::Paused);
     }
 
     /// Unpause the vault, re-enabling deposits and withdrawals (admin only).
     pub fn unpause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.phase, &ContractPhase::Active);
     }
 
     /// Update the ACBU token contract address (admin only).
@@ -775,10 +784,8 @@ impl SavingsVault {
         env.storage()
             .instance()
             .set(&DATA_KEY.pending_admin_eligible_at, &eligible_at);
-        env.events().publish(
-            (symbol_short!("adm_init"),),
-            (admin, new_admin, eligible_at),
-        );
+        env.events()
+            .publish((symbol_short!("adm_init"),), (admin, new_admin, eligible_at));
     }
 
     /// Step 2 of admin rotation — the nominated address claims ownership after the
@@ -802,7 +809,9 @@ impl SavingsVault {
         }
 
         let old_admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
-        env.storage().instance().set(&DATA_KEY.admin, &pending_admin);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.admin, &pending_admin);
         env.storage().instance().remove(&DATA_KEY.pending_admin);
         env.storage()
             .instance()
@@ -881,7 +890,9 @@ impl SavingsVault {
             return Ok(0);
         }
         let elapsed_i128: i128 = i128::from(elapsed_seconds);
-        let divisor = BASIS_POINTS.checked_mul(SECONDS_PER_YEAR).ok_or(Error::Overflow)?;
+        let divisor = BASIS_POINTS
+            .checked_mul(SECONDS_PER_YEAR)
+            .ok_or(Error::Overflow)?;
         if divisor == 0 {
             return Err(Error::Overflow);
         }
