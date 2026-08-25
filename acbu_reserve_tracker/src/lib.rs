@@ -75,6 +75,8 @@ pub struct DataKey {
     pub pending_upgrade_wasm: Symbol,
     pub pending_upgrade_version: Symbol,
     pub pending_upgrade_eligible_at: Symbol,
+    pub attested_root: Symbol,
+    pub attestation_ts: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -92,6 +94,8 @@ const DATA_KEY: DataKey = DataKey {
     pending_upgrade_wasm: symbol_short!("PU_WASM"),
     pending_upgrade_version: symbol_short!("PU_VER"),
     pending_upgrade_eligible_at: symbol_short!("PU_ETA"),
+    attested_root: symbol_short!("ATTS_RT"),
+    attestation_ts: symbol_short!("ATTS_TS"),
 };
 
 /// Admin rotation timelock: the pending admin must wait this long before
