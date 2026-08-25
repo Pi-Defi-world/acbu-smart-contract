@@ -44,8 +44,16 @@ trap "rm -rf $TEMP_DIR" EXIT
 # Clone the soroban-examples repo at the pinned tag
 git clone --depth 1 --branch "$SOROBAN_EXAMPLES_TAG" "$SOROBAN_EXAMPLES_REPO" "$TEMP_DIR/soroban-examples" 2>&1 | grep -v "^Cloning" || true
 
+# Verify the token contract directory exists
+TOKEN_CONTRACT_DIR="$TEMP_DIR/soroban-examples/contracts/tokens/stellar_asset"
+if [[ ! -d "$TOKEN_CONTRACT_DIR" ]]; then
+  echo -e "${RED}[FAIL]${NC} Token contract directory not found in soroban-examples@${SOROBAN_EXAMPLES_TAG}"
+  echo "The repository structure may have changed. Please verify SOROBAN_EXAMPLES_TAG."
+  exit 1
+fi
+
 # Build the token contract
-cd "$TEMP_DIR/soroban-examples/contracts/tokens/stellar_asset"
+cd "$TOKEN_CONTRACT_DIR"
 if cargo build --release --target wasm32-unknown-unknown >/dev/null 2>&1; then
   :
 else
