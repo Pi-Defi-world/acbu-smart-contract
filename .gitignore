@@ -36,3 +36,7 @@ test_snapshots/
 # surface and should not be committed to source control.
 /ISSUES.md
 /SECURITY_FIX_SUMMARY.md
+
+# Python
+__pycache__/
+*.pyc
