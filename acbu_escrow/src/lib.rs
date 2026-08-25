@@ -1,11 +1,11 @@
 #![no_std]
 use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env, Symbol,
 };
 
-use shared::{ContractPhase, DataKey as SharedDataKey, CONTRACT_VERSION, reentrancy_guard};
+use shared::{reentrancy_guard, ContractPhase, DataKey as SharedDataKey, CONTRACT_VERSION};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -92,7 +92,7 @@ const MAX_ESCROW_LIFETIME: u64 = 30 * 86_400; // 30 days
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EscrowId(pub Address, pub u64);
 
-#[contractevent]
+#[contracttype]
 pub struct EscrowCreatedEvent {
     pub escrow_id: u64,
     pub payer: Address,
@@ -101,7 +101,7 @@ pub struct EscrowCreatedEvent {
     pub timestamp: u64,
 }
 
-#[contractevent]
+#[contracttype]
 pub struct EscrowReleasedEvent {
     pub escrow_id: u64,
     pub payee: Address,
@@ -109,7 +109,7 @@ pub struct EscrowReleasedEvent {
     pub timestamp: u64,
 }
 
-#[contractevent]
+#[contracttype]
 pub struct EscrowRefundedEvent {
     pub escrow_id: u64,
     pub payer: Address,
@@ -163,7 +163,9 @@ impl Escrow {
         env.storage()
             .instance()
             .set(&DATA_KEY.acbu_token, &acbu_token);
-        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.phase, &ContractPhase::Active);
         env.storage()
             .instance()
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
@@ -174,11 +176,7 @@ impl Escrow {
     ///
     /// Keeping the return order consistent with the creation parameters prevents
     /// off-by-field bugs in client code that destructures the response tuple.
-    pub fn get_escrow(
-        env: Env,
-        payer: Address,
-        escrow_id: u64,
-    ) -> (Address, Address, i128) {
+    pub fn get_escrow(env: Env, payer: Address, escrow_id: u64) -> (Address, Address, i128) {
         let key = EscrowId(payer, escrow_id);
         env.storage()
             .temporary()
@@ -188,13 +186,7 @@ impl Escrow {
 
     /// Create escrow: payer deposits ACBU, payee can claim after release
     /// Escrow ID is unique per payer and provided by caller to prevent collisions
-    pub fn create(
-        env: Env,
-        payer: Address,
-        payee: Address,
-        amount: i128,
-        escrow_id: u64,
-    ) {
+    pub fn create(env: Env, payer: Address, payee: Address, amount: i128, escrow_id: u64) {
         // Re-entrancy guard
         reentrancy_guard::acquire_guard(&env);
 
@@ -221,7 +213,7 @@ impl Escrow {
 
         // CEI: write state before the external token transfer so any token-level
         // callback observes the escrow as already recorded.
-       env.storage()
+        env.storage()
             .temporary()
             .set(&key, &(payer.clone(), payee.clone(), amount, expiry));
 
@@ -349,14 +341,18 @@ impl Escrow {
     pub fn pause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Paused);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.phase, &ContractPhase::Paused);
     }
 
     /// Unpause the contract, re-enabling state-changing operations (admin only).
     pub fn unpause(env: Env) {
         let admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.phase, &ContractPhase::Active);
     }
 
     /// Update the ACBU token contract address (admin only).
@@ -388,10 +384,8 @@ impl Escrow {
         env.storage()
             .instance()
             .set(&DATA_KEY.pending_admin_eligible_at, &eligible_at);
-        env.events().publish(
-            (symbol_short!("adm_init"),),
-            (admin, new_admin, eligible_at),
-        );
+        env.events()
+            .publish((symbol_short!("adm_init"),), (admin, new_admin, eligible_at));
     }
 
     /// Step 2 — the nominated address claims ownership after the timelock.
@@ -413,7 +407,9 @@ impl Escrow {
         }
 
         let old_admin = Self::load_admin(&env).unwrap_or_else(|e| env.panic_with_error(e));
-        env.storage().instance().set(&DATA_KEY.admin, &pending_admin);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.admin, &pending_admin);
         env.storage().instance().remove(&DATA_KEY.pending_admin);
         env.storage()
             .instance()
@@ -539,4 +535,3 @@ impl Escrow {
             .remove(&DATA_KEY.pending_upgrade_eligible_at);
     }
 }
-
