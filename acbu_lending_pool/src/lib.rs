@@ -445,15 +445,15 @@ impl LendingPool {
         );
         env.events().publish(
             (symbol_short!("loan_cr"),),
-            LoanCreatedEvent {
+            (
                 loan_id,
                 lender,
                 borrower,
                 amount,
-                interest_bps: fee_rate,
-                term_seconds: 0,
+                fee_rate,
+                0u64,
                 timestamp,
-            },
+            ),
         );
 
         // Release re-entrancy guard
@@ -606,13 +606,13 @@ impl LendingPool {
         let timestamp = env.ledger().timestamp();
         env.events().publish(
             (symbol_short!("repay"), borrower.clone()),
-            RepayEvent {
-                creator: borrower.clone(),
+            (
+                borrower.clone(),
                 amount,
-                token: acbu_token,
+                acbu_token,
                 loan_id,
                 timestamp,
-            },
+            ),
         );
         env.events().publish(
             (symbol_short!("repaymt"),),
