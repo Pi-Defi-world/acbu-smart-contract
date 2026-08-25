@@ -447,7 +447,7 @@ impl ReserveTrackerContract {
         buf.append(&val_bytes);
         let ts_bytes = Bytes::from_slice(env, &leaf.timestamp.to_be_bytes()[..]);
         buf.append(&ts_bytes);
-        env.crypto().keccak256(&buf)
+        env.crypto().keccak256(&buf).to_bytes()
     }
 
     /// Walk up the Merkle tree from `leaf_hash` using `proof` and `index`.
@@ -470,7 +470,7 @@ impl ReserveTrackerContract {
                 combined.append(&sib_bytes);
                 combined.append(&cur_bytes);
             }
-            current = env.crypto().keccak256(&combined);
+            current = env.crypto().keccak256(&combined).to_bytes();
         }
         current
     }
