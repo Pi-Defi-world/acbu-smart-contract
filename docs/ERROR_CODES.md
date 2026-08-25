@@ -20,6 +20,7 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 10 | `InsufficientBalance` | The account's token balance is too low to complete the transfer/operation. |
 | 11 | `InvalidRecipient` | The recipient address is invalid for this operation (e.g. a contract address where a classic account is required). |
 | 12 | `InvalidVersion` | WASM upgrade rejected: `new_version` must be greater than the stored version. |
+| 13 | `SlippageExceeded` | The computed output amount is below the caller-supplied minimum acceptable output (`min_*_out`), indicating that same-block oracle movement would cause unacceptable slippage for this transaction. |
 | 9999 | `Unknown` | unknown error |
 
 ## `shared / reentrancy guard` - `ReentrancyError`
@@ -148,6 +149,7 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 5023 | `InvalidRecipient` | Invalid recipient |
 | 5024 | `InvalidRoleSeparation` | Admin and operator must be different addresses |
 | 5025 | `SupplyMismatch` | Supplied value does not match on-chain supply |
+| 5026 | `SlippageExceeded` | The computed ACBU output is below the caller-supplied `min_acbu_out` floor, indicating that same-block oracle movement would cause unacceptable slippage. The transaction should be retried with updated parameters. |
 | 5999 | `Unknown` | Unknown minting error |
 
 ## `acbu_oracle` - `OracleError`
@@ -178,6 +180,7 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 7022 | `TimestampRollback` | timestamp rollback |
 | 7023 | `RateNotInitialized` | rate not initialized - no submissions yet |
 | 7024 | `CurrencyNotRegistered` | currency not registered |
+| 7025 | `InsufficientEmergencyVotes` | Emergency vote cast but consensus not yet reached — caller must wait for more validators to submit corroborating emergency rates. |
 | 7999 | `Unknown` | unknown oracle error |
 
 ## `acbu_reserve_tracker` - `ReserveTrackerError`
