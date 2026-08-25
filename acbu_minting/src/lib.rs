@@ -18,7 +18,7 @@ use shared::{
 pub mod token_contract {
     soroban_sdk::contractimport!(
         file = "../soroban_token_contract.wasm",
-        sha256 = "fff46d90821401584414ee6afc5ef36d99e95ef7e37d8652ad3e6c4a4e099dc0"
+        sha256 = "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"
     );
 }
 
@@ -289,7 +289,7 @@ impl MintingContract {
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        assert_recipient_is_account(&recipient);
+        Self::assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -402,7 +402,7 @@ impl MintingContract {
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        assert_recipient_is_account(&recipient);
+        Self::assert_recipient_is_account(&recipient);
 
         if !check_proof_unused(&env, &proof_id) {
             env.panic_with_error(MintingError::ProofAlreadyUsed);
@@ -579,7 +579,7 @@ impl MintingContract {
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        assert_recipient_is_account(&recipient);
+        Self::assert_recipient_is_account(&recipient);
 
         let min_amount: i128 = env
             .storage()
@@ -1060,7 +1060,7 @@ impl MintingContract {
     /// `InvalidRoleSeparation`.
     pub fn set_operator(env: Env, new_operator: Address) {
         Self::check_admin(&env);
-        let admin = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         if admin == new_operator {
             env.panic_with_error(MintingError::InvalidRoleSeparation);
         }
@@ -1093,8 +1093,11 @@ impl MintingContract {
         Self::check_supply_cap(&env, new_supply);
 
         let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
-        let token = soroban_sdk::token::Client::new(&env, &acbu_token);
-        let on_chain_supply = token.total_supply();
+        let on_chain_supply: i128 = env.invoke_contract(
+            &acbu_token,
+            &Symbol::new(&env, "total_supply"),
+            soroban_sdk::vec![&env],
+        );
         if new_supply != on_chain_supply {
             env.panic_with_error(MintingError::SupplyMismatch);
         }
@@ -1442,12 +1445,30 @@ impl MintingContract {
         env.storage().instance().get(&DATA_KEY.admin).unwrap()
     }
 
-    /// Check if the contract has been initialized.
+/// Check if the contract has been initialized.
     ///
     /// Backend services can call this before invoking other functions to avoid
     /// cryptic storage-not-found errors from uninitialized contracts.
     pub fn is_initialized(env: Env) -> bool {
         env.storage().instance().has(&SharedDataKey::Version)
+    }
+
+    fn check_admin(env: &Env) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+    }
+
+    fn assert_recipient_is_account(address: &Address) {
+        let env = address.env();
+        let strkey = address.to_string();
+        if strkey.len() != 56 {
+            env.panic_with_error(MintingError::InvalidRecipient);
+        }
+        let mut buf = [0u8; 56];
+        strkey.copy_into_slice(&mut buf);
+        if buf[0] != b'G' {
+            env.panic_with_error(MintingError::InvalidRecipient);
+        }
     }
 
     /// Pending successor, if a transfer is in progress.
@@ -1564,31 +1585,6 @@ fn next_tx_nonce(env: &Env) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: assert that an address belongs to an account (not a contract).
-// C-058 — minting to a contract address that has no token-receipt logic would
-// permanently strand funds.
-//
-// soroban-sdk 21 does not expose an `is_account()` predicate on `Address`, but
-// the strkey encoding returned by `Address::to_string()` reveals the address
-// kind: standard Stellar account (ed25519 public key) strkeys start with 'G',
-// while contract strkeys start with 'C'. Both encodings are 56 characters
-// long, so any address that doesn't decode to a 56-byte 'G...' string is
-// rejected.
-// ---------------------------------------------------------------------------
-fn assert_recipient_is_account(address: &Address) {
-    let env = address.env();
-    let strkey = address.to_string();
-    if strkey.len() != 56 {
-        env.panic_with_error(MintingError::InvalidRecipient);
-    }
-    let mut buf = [0u8; 56];
-    strkey.copy_into_slice(&mut buf);
-    if buf[0] != b'G' {
-        env.panic_with_error(MintingError::InvalidRecipient);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Proof-replay helpers: used by mint_from_demo_fiat to prevent double-spend.
 // ---------------------------------------------------------------------------
 fn check_proof_unused(env: &Env, proof_id: &SorobanString) -> bool {
@@ -1669,5 +1665,6 @@ fn normalize_fintech_tx_id(env: &Env, id: &SorobanString) -> SorobanString {
         }
     }
 
-    SorobanString::from_slice(env, slice)
+    let s = core::str::from_utf8(slice).expect("fintech tx id must be valid UTF-8");
+    SorobanString::from_str(env, s)
 }
