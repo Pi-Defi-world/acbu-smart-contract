@@ -20,7 +20,6 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 10 | `InsufficientBalance` | The account's token balance is too low to complete the transfer/operation. |
 | 11 | `InvalidRecipient` | The recipient address is invalid for this operation (e.g. a contract address where a classic account is required). |
 | 12 | `InvalidVersion` | WASM upgrade rejected: `new_version` must be greater than the stored version. |
-| 13 | `SlippageExceeded` | The computed output amount is below the caller-supplied minimum acceptable output (`min_*_out`), indicating that same-block oracle movement would cause unacceptable slippage for this transaction. |
 | 9999 | `Unknown` | unknown error |
 
 ## `shared / reentrancy guard` - `ReentrancyError`
@@ -124,33 +123,32 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 
 | Code | Variant | Description |
 | ---: | --- | --- |
-| 5001 | `AlreadyInitialized` | Minting contract already initialized |
-| 5002 | `InvalidFeeRate` | Invalid fee rate |
-| 5003 | `InvalidMintAmount` | Invalid mint amount |
-| 5004 | `InsufficientReserves` | Insufficient reserves |
-| 5005 | `ProofAlreadyUsed` | Proof already used |
-| 5006 | `InvalidOracleRate` | Invalid oracle rate |
-| 5007 | `UnauthorizedOperator` | Unauthorized operator |
-| 5008 | `DuplicateFintechTxId` | Duplicate fintech transaction ID |
-| 5009 | `InvalidDripAmount` | Invalid drip amount |
-| 5010 | `DripExceedsCap` | Drip exceeds cap |
-| 5011 | `InsufficientDemoCustody` | Insufficient demo custody |
-| 5012 | `Paused` | Minting contract is paused |
-| 5013 | `OracleStale` | Oracle rate is stale |
-| 5014 | `FintechTxIdEmpty` | Fintech transaction ID is empty |
-| 5015 | `FintechTxIdTooShort` | Fintech transaction ID is too short |
-| 5016 | `FintechTxIdTooLong` | Fintech transaction ID is too long |
-| 5017 | `FintechTxIdInvalidChar` | Fintech transaction ID contains invalid characters |
-| 5018 | `InvalidVersion` | Invalid contract version |
-| 5019 | `MaxSupplyExceeded` | Maximum supply exceeded |
-| 5020 | `NoPendingAdmin` | No pending admin |
-| 5021 | `AdminTimelockNotElapsed` | Admin timelock has not elapsed |
-| 5022 | `NoPendingAdminToCancel` | No pending admin to cancel |
-| 5023 | `InvalidRecipient` | Invalid recipient |
-| 5024 | `InvalidRoleSeparation` | Admin and operator must be different addresses |
-| 5025 | `SupplyMismatch` | Supplied value does not match on-chain supply |
-| 5026 | `SlippageExceeded` | The computed ACBU output is below the caller-supplied `min_acbu_out` floor, indicating that same-block oracle movement would cause unacceptable slippage. The transaction should be retried with updated parameters. |
-| 5999 | `Unknown` | Unknown minting error |
+| 5001 | `AlreadyInitialized` | minting contract already initialized |
+| 5002 | `InvalidFeeRate` | invalid fee rate |
+| 5003 | `InvalidMintAmount` | invalid mint amount |
+| 5004 | `InsufficientReserves` | insufficient reserves |
+| 5005 | `ProofAlreadyUsed` | proof already used |
+| 5006 | `InvalidOracleRate` | invalid oracle rate |
+| 5007 | `UnauthorizedOperator` | unauthorized operator |
+| 5008 | `DuplicateFintechTxId` | duplicate fintech transaction id |
+| 5009 | `InvalidDripAmount` | invalid drip amount |
+| 5010 | `DripExceedsCap` | drip exceeds cap |
+| 5011 | `InsufficientDemoCustody` | insufficient demo custody |
+| 5012 | `Paused` | minting contract is paused |
+| 5013 | `OracleStale` | oracle rate is stale |
+| 5014 | `FintechTxIdEmpty` | fintech transaction id is empty |
+| 5015 | `FintechTxIdTooShort` | fintech transaction id is too short |
+| 5016 | `FintechTxIdTooLong` | fintech transaction id is too long |
+| 5017 | `FintechTxIdInvalidChar` | fintech transaction id contains invalid characters |
+| 5018 | `InvalidVersion` | invalid contract version |
+| 5019 | `MaxSupplyExceeded` | maximum supply exceeded |
+| 5020 | `NoPendingAdmin` | no pending admin |
+| 5021 | `AdminTimelockNotElapsed` | admin timelock has not elapsed |
+| 5022 | `NoPendingAdminToCancel` | no pending admin to cancel |
+| 5023 | `InvalidRecipient` | invalid recipient |
+| 5024 | `InvalidRoleSeparation` | admin and operator must be different addresses |
+| 5025 | `SupplyMismatch` | supplied value does not match on-chain supply |
+| 5999 | `Unknown` | unknown minting error |
 
 ## `acbu_oracle` - `OracleError`
 
@@ -180,7 +178,6 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 7022 | `TimestampRollback` | timestamp rollback |
 | 7023 | `RateNotInitialized` | rate not initialized - no submissions yet |
 | 7024 | `CurrencyNotRegistered` | currency not registered |
-| 7025 | `InsufficientEmergencyVotes` | Emergency vote cast but consensus not yet reached — caller must wait for more validators to submit corroborating emergency rates. |
 | 7999 | `Unknown` | unknown oracle error |
 
 ## `acbu_reserve_tracker` - `ReserveTrackerError`
