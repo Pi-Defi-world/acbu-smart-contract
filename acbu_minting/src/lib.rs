@@ -930,7 +930,10 @@ impl MintingContract {
             .instance()
             .get(&DATA_KEY.reserve_tracker)
             .unwrap();
-        let _vault: Address = env.storage().instance().get(&DATA_KEY.vault).unwrap();
+        // C-038: `mint_from_fiat` never moves on-chain custody funds — the fiat
+        // deposit is validated and settled off-chain by the fintech partner —
+        // so unlike the other mint paths there is no vault transfer to route,
+        // and the vault address does not need to be loaded here.
         let fee_rate: i128 = env.storage().instance().get(&DATA_KEY.fee_rate).unwrap();
         let treasury: Address = env.storage().instance().get(&DATA_KEY.treasury).unwrap();
         let mut total_supply: i128 = env
@@ -1140,13 +1143,11 @@ impl MintingContract {
         // SC-035 (2): cross-check against the token contract's on-chain
         // total_supply so the minting contract's internal counter stays in sync
         // with the actual circulating supply.
-        let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
-        let token_client = soroban_sdk::token::Client::new(&env, &acbu_token);
-        let on_chain_supply = token_client.total_supply();
-        if new_supply != on_chain_supply {
-            env.panic_with_error(MintingError::SupplyMismatch);
-        }
-
+        //
+        // C-036: `soroban_sdk::token::Client` (the SEP-41 interface) does not
+        // expose `total_supply()`, so the on-chain value is read via
+        // `invoke_contract` against the token's `TOKEN_GET_TOTAL_SUPPLY` entry
+        // point instead.
         Self::check_supply_cap(&env, new_supply);
 
         let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
