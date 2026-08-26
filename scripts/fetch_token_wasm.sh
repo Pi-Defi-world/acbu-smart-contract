@@ -6,12 +6,12 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEST="$PROJECT_ROOT/soroban_token_contract.wasm"
 
 # SHA-256 of the expected artifact — must match contractimport! sha256 fields.
-EXPECTED_HASH="eb1a53948744e12a6b00ec891b301ebc78a06deb984d3726c9cbc315392aedec"
+EXPECTED_HASH="8331ad752af7ff986f2b9497ac7383c57020bfc80ba19541f4142fc94d1348c1"
 
 # Stellar / soroban-examples release that ships this exact token contract.
 # The soroban-examples repo does not publish pre-built WASM binaries;
 # we must clone and build the token contract from source.
-SOROBAN_EXAMPLES_TAG="v21.6.0"
+SOROBAN_EXAMPLES_TAG="v22.0.0"
 SOROBAN_EXAMPLES_REPO="https://github.com/stellar/soroban-examples.git"
 
 RED='\033[0;31m'
@@ -44,8 +44,23 @@ trap "rm -rf $TEMP_DIR" EXIT
 # Clone the soroban-examples repo at the pinned tag
 git clone --depth 1 --branch "$SOROBAN_EXAMPLES_TAG" "$SOROBAN_EXAMPLES_REPO" "$TEMP_DIR/soroban-examples" 2>&1 | grep -v "^Cloning" || true
 
+# Verify the token contract directory exists (try both old and new paths)
+TOKEN_CONTRACT_DIR="$TEMP_DIR/soroban-examples/token"
+if [[ ! -d "$TOKEN_CONTRACT_DIR" ]]; then
+  # Fall back to older path structure for compatibility with older tags
+  TOKEN_CONTRACT_DIR="$TEMP_DIR/soroban-examples/contracts/tokens/stellar_asset"
+  if [[ ! -d "$TOKEN_CONTRACT_DIR" ]]; then
+    echo -e "${RED}[FAIL]${NC} Token contract directory not found in soroban-examples@${SOROBAN_EXAMPLES_TAG}"
+    echo "Checked paths:"
+    echo "  - $TEMP_DIR/soroban-examples/token"
+    echo "  - $TEMP_DIR/soroban-examples/contracts/tokens/stellar_asset"
+    echo "The repository structure may have changed. Please verify SOROBAN_EXAMPLES_TAG."
+    exit 1
+  fi
+fi
+
 # Build the token contract
-cd "$TEMP_DIR/soroban-examples/contracts/tokens/stellar_asset"
+cd "$TOKEN_CONTRACT_DIR"
 if cargo build --release --target wasm32-unknown-unknown >/dev/null 2>&1; then
   :
 else

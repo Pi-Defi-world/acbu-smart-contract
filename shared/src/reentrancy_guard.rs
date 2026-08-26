@@ -38,9 +38,14 @@ pub fn acquire_guard(env: &Env) {
 }
 
 /// Release the re-entrancy guard
-/// This must be called at the end of any function that acquired the guard
-/// Typically called in a drop guard or at the end of the function
+/// This must be called at the end of any function that acquired the guard.
+/// Panics if the guard is not currently held, preventing a caller from
+/// accidentally releasing a guard it never acquired (which would clear a
+/// legitimate outer guard prematurely).
 pub fn release_guard(env: &Env) {
+    if !env.storage().instance().has(&REENTRANCY_GUARD_KEY) {
+        env.panic_with_error(ReentrancyError::ReentrantCall);
+    }
     env.storage().instance().remove(&REENTRANCY_GUARD_KEY);
 }
 

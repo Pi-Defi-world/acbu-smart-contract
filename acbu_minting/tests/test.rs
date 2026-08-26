@@ -286,6 +286,36 @@ fn test_mint_from_usdc() {
 }
 
 #[test]
+#[should_panic(expected = "#5003")]
+fn test_mint_from_usdc_below_min() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(&env);
+    let user = Address::generate(&env);
+    let usdc_sac = soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token_id);
+
+    let tiny_amount = 1;
+    usdc_sac.mint(&user, &tiny_amount);
+
+    init_mint_client(
+        &env,
+        &client,
+        &admin,
+        &oracle,
+        &reserve_tracker,
+        &acbu_token_id,
+        &usdc_token_id,
+        &admin,
+        &admin,
+        300,
+        100,
+    );
+
+    client.mint_from_usdc(&user, &tiny_amount, &user);
+}
+
+#[test]
 fn test_mint_from_basket() {
     let env = Env::default();
     env.mock_all_auths();
@@ -444,11 +474,13 @@ fn test_mint_from_demo_fiat_wrong_operator() {
     );
 
     let tx_id = soroban_sdk::String::from_str(&env, "tx_bad");
+    let proof = SorobanString::from_str(&env, "proof_bad");
     client.mint_from_demo_fiat(
         &attacker,
         &recipient,
         &CurrencyCode::new(&env, "NGN"),
         &(10 * DECIMALS),
+        &proof,
         &tx_id,
     );
 }
@@ -509,7 +541,6 @@ fn test_mint_from_usdc_exceeds_max() {
     let user = Address::generate(&env);
     let usdc_sac = soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token_id);
 
-    // Max mint amount is 1_000_000_000_000, so 2_000_000_000_000 is huge
     let huge_amount = 2_000_000_000_000;
     usdc_sac.mint(&user, &huge_amount);
 
@@ -629,6 +660,52 @@ fn test_storage_state_intact_across_upgrade_boundary() {
     assert!(!client.is_paused());
 }
 
+// --- SC-034: single-step upgrade enforcement ---
+
+/// Skipping a version (current=1, new=3) must be rejected with InvalidVersion (5018).
+#[test]
+#[should_panic(expected = "#5018")]
+fn test_upgrade_rejects_skipping_version() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
+        &acbu_token, &usdc_token, &admin, &admin, 300, 100);
+    // current version is 1; jumping to 3 skips v2 migration → must panic.
+    let dummy_hash: BytesN<32> = bytesn!(&env, 0x0000000000000000000000000000000000000000000000000000000000000000);
+    client.upgrade(&dummy_hash, &3u32);
+}
+
+/// Skipping many versions at once (current=1, new=100) must also be rejected.
+#[test]
+#[should_panic(expected = "#5018")]
+fn test_upgrade_rejects_large_version_jump() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
+        &acbu_token, &usdc_token, &admin, &admin, 300, 100);
+    let dummy_hash: BytesN<32> = bytesn!(&env, 0x0000000000000000000000000000000000000000000000000000000000000000);
+    client.upgrade(&dummy_hash, &100u32);
+}
+
+/// Upgrading by exactly one step (current=1, new=2) must be accepted and
+/// the stored version updated accordingly.
+#[test]
+fn test_upgrade_accepts_single_step() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker,
+        &acbu_token, &usdc_token, &admin, &admin, 300, 100);
+    assert_eq!(client.get_version(), 1);
+    // Use the current contract's own WASM hash — valid for testing the version
+    // guard; the WASM itself doesn't change in the test environment.
+    let current_hash = env.deployer().get_contract_wasm_hash(&client.address);
+    client.upgrade(&current_hash, &2u32);
+    assert_eq!(client.get_version(), 2);
+}
+
 #[test]
 fn test_update_oracle_by_admin() {
     let env = Env::default();
@@ -716,7 +793,6 @@ fn test_update_oracle_requires_admin_minting() {
     let treasury = Address::generate(&env);
     init_mint_client(&env, &client, &admin, &oracle, &reserve_tracker, &acbu_token, &usdc_token, &vault, &treasury, 100, 200);
 
-    // Without mock_all_auths, a non-admin call should fail
     let env2 = Env::default();
     let (admin2, oracle2, rt2, acbu2, usdc2, client2) = setup_test(&env2);
     let vault2 = Address::generate(&env2);
@@ -724,7 +800,6 @@ fn test_update_oracle_requires_admin_minting() {
     env2.mock_all_auths();
     init_mint_client(&env2, &client2, &admin2, &oracle2, &rt2, &acbu2, &usdc2, &vault2, &treasury2, 100, 200);
     let new_oracle = Address::generate(&env2);
-    // With mock_all_auths this succeeds; the auth check is enforced by Soroban's auth framework
     client2.update_oracle(&new_oracle);
 }
 

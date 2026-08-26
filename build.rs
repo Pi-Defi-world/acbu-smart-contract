@@ -2,10 +2,10 @@
 // Verifies WASM artifact integrity before compilation.
 // Fails fast if hash mismatches to prevent supply chain attacks.
 //
-// The WASM file is NOT stored in git — only its SHA-256 hash is pinned
-// in source (inside each contractimport! macro and in this script).
-// Run  ./scripts/fetch_token_wasm.sh  to download the artifact before
-// your first build.
+// The WASM file is committed to the repository with its SHA-256 hash
+// pinned in source (inside each contractimport! macro and in this script).
+// If the file is missing (e.g. after a partial clone), build.rs will
+// automatically run ./scripts/fetch_token_wasm.sh to obtain it.
 //
 // Post-build WASM optimisation (wasm-opt / wasm-strip)
 // ─────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ use std::process::Command;
 /// Expected SHA-256 of soroban_token_contract.wasm.
 /// Must match the sha256 field in every contractimport! that references
 /// this artifact (acbu_minting, acbu_burning, acbu_reserve_tracker).
-const EXPECTED_HASH: &str = "8759e8ea16c858a6d3b743dd0be8b580e363d0097538fb77b375965619288d95";
+const EXPECTED_HASH: &str = "8331ad752af7ff986f2b9497ac7383c57020bfc80ba19541f4142fc94d1348c1";
 
 const WASM_PATH: &str = "soroban_token_contract.wasm";
 
@@ -52,15 +52,18 @@ fn main() {
     println!("cargo:rerun-if-env-changed=WASM_POST_OPT");
 
     if !Path::new(WASM_PATH).exists() {
-        eprintln!("error[build]: {} not found.", WASM_PATH);
-        eprintln!();
-        eprintln!("  The WASM artifact is not stored in the repository.");
-        eprintln!("  Run the fetch script to download it before building:");
-        eprintln!();
-        eprintln!("      ./scripts/fetch_token_wasm.sh");
-        eprintln!();
-        eprintln!("  Expected SHA-256: {}", EXPECTED_HASH);
-        process::exit(1);
+        eprintln!("info[build]: {} not found — attempting automatic fetch.", WASM_PATH);
+        auto_fetch_wasm();
+        if !Path::new(WASM_PATH).exists() {
+            eprintln!("error[build]: Automatic fetch failed. {} still missing.", WASM_PATH);
+            eprintln!();
+            eprintln!("  Manually run the fetch script to obtain the artifact:");
+            eprintln!();
+            eprintln!("      ./scripts/fetch_token_wasm.sh");
+            eprintln!();
+            eprintln!("  Expected SHA-256: {}", EXPECTED_HASH);
+            process::exit(1);
+        }
     }
 
     let data = fs::read(WASM_PATH).unwrap_or_else(|e| {
@@ -276,6 +279,52 @@ fn run_tool(tool: &str, args: &[&str]) {
             status.code().unwrap_or(-1)
         );
         process::exit(1);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Automatic WASM fetch
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Attempt to obtain the WASM artifact automatically by running the fetch script.
+///
+/// This is a best-effort operation: if git, cargo, or the network are unavailable
+/// the function prints a warning and returns, letting the caller produce a clear
+/// actionable error.
+fn auto_fetch_wasm() {
+    // Resolve the fetch script relative to the workspace root.
+    // build.rs runs with cwd = workspace root, so "scripts/..." works directly.
+    let fetch_script = Path::new("scripts/fetch_token_wasm.sh");
+
+    if !fetch_script.exists() {
+        eprintln!(
+            "info[build]: Fetch script {} not found — skipping auto-fetch.",
+            fetch_script.display()
+        );
+        return;
+    }
+
+    // Make the script executable (may not be set after a partial clone).
+    let _ = Command::new("chmod").arg("+x").arg(fetch_script).status();
+
+    eprintln!("info[build]: Running {} ...", fetch_script.display());
+
+    let status = match Command::new("sh").arg(fetch_script).status() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "info[build]: Could not spawn fetch script: {} — skipping auto-fetch.",
+                e
+            );
+            return;
+        }
+    };
+
+    if !status.success() {
+        eprintln!(
+            "info[build]: Fetch script exited with status {} — auto-fetch failed.",
+            status.code().unwrap_or(-1)
+        );
     }
 }
 

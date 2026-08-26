@@ -18,7 +18,7 @@ At a high level, the system is a stablecoin-like protocol that supports:
 - **Reserve tracking** to enforce an overcollateralization policy.
 - Additional optional protocol components:
   - **Savings vault** (term-based deposits with yield accrual).
-  - **Lending pool** (a basic collateralized lending protocol).
+  - **Lending pool** (a basic peer-to-peer, uncollateralized ACBU lending protocol).
   - **Escrow** (merchant/e-commerce style payment escrow).
 - **Multisig administration** to protect privileged actions (pause, upgrades, parameter changes).
 
@@ -410,7 +410,7 @@ This contract provides simplified lending features:
 - `initialize(admin, acbu_token, fee_rate_bps)`
 - `deposit(lender, amount)`
 - `withdraw(lender, amount)`
-- `borrow(borrower, amount, collateral_amount, loan_id)`
+- `borrow(borrower, lender, amount, loan_id)`
 - `repay(borrower, amount, loan_id)`
 - pause/unpause and upgrades.
 
@@ -420,9 +420,23 @@ The contract stores:
 - active loans (as `LoanData` keyed by `(borrower, loan_id)`)
 - accrued interest and repayment due
 
-Collateralization enforcement (in the borrow entrypoint):
+Collateral policy (in the borrow entrypoint):
 
-- requires `collateral_amount >= amount`
+- The pool is **single-asset and uncollateralized**. Both the liquidity and the
+  loan principal are ACBU, and no collateral is taken.
+- An earlier iteration pulled a `collateral_amount` of ACBU and required
+  `collateral_amount >= amount` before paying out the same ACBU token. That is a
+  degenerate arrangement — it locks at least as much of the borrowed asset as it
+  releases, so it extends no purchasing power and offers the lender no protection
+  — and there was no liquidation path able to seize it. It has been removed.
+- Because the loan is unsecured, `borrow` requires authorization from **both**
+  the borrower and the lender: depositing liquidity is not an open offer to lend
+  it to anyone, so each loan is an explicit peer-to-peer agreement signed by both
+  parties.
+- `LoanData.collateral_amount` is retained (always `0`) and error code `2014`
+  (`InsufficientCollateral`) is reserved for a future *distinct-asset* collateral
+  extension, which additionally needs oracle pricing and a liquidation path.
+- There is no `liquidate()` entrypoint yet; an unrepaid loan simply stays open.
 
 ### 10.3 Escrow (`acbu_escrow/`)
 
@@ -601,7 +615,7 @@ The output of contracts (events) is intended to drive backend and off-chain proc
 - `acbu_oracle`: stores and publishes currency rates and basket ACBU/USD.
 - `acbu_reserve_tracker`: stores reserves and enforces minimum reserve ratio.
 - `acbu_savings_vault`: term deposits with yield.
-- `acbu_lending_pool`: collateralized lending.
+- `acbu_lending_pool`: peer-to-peer, uncollateralized ACBU lending.
 - `acbu_escrow`: escrow create/release/refund.
 - `acbu_multisig`: emergency M-of-N admin guard.
 - `shared`: shared event payloads, constants, and math.

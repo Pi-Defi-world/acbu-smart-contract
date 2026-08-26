@@ -253,9 +253,14 @@ fn test_update_rate_before_interval_fails() {
 
 #[test]
 fn test_update_rate_with_emergency_deviation_bypasses_interval() {
+    // SC-025: A single validator can no longer unilaterally bypass the update interval.
+    // The bypass now requires N-of-M (min_signatures) validators to first call
+    // cast_emergency_vote, and then any validator may call update_rate to commit.
+    // setup() initialises min_signatures = 2, so two validators must agree.
     let (env, client, _contract_id, _admin, validators) = setup();
 
     let validator = validators.get(0).unwrap();
+    let validator2 = validators.get(1).unwrap();
     let ngn = CurrencyCode::new(&env, "NGN");
     let initial_rate = 1_000_000i128;
     let mut sources = Vec::new(&env);
@@ -263,7 +268,7 @@ fn test_update_rate_with_emergency_deviation_bypasses_interval() {
     sources.push_back(1_000_000i128);
     sources.push_back(1_000_000i128);
 
-    // First update
+    // Seed an initial rate.
     client.update_rate(
         &validator,
         &ngn,
@@ -272,15 +277,19 @@ fn test_update_rate_with_emergency_deviation_bypasses_interval() {
         &env.ledger().timestamp(),
     );
 
-    // Try to update with emergency deviation (>5%)
-    env.ledger().with_mut(|l| l.timestamp += 1000); // Only 1000 seconds later
-    let emergency_rate = 1_060_000i128; // 6% higher
+    // Advance only 1000 seconds — well within the 6h update interval.
+    env.ledger().with_mut(|l| l.timestamp += 1000);
+    let emergency_rate = 1_060_000i128; // 6% above threshold (>5%)
     let mut emergency_sources = Vec::new(&env);
     emergency_sources.push_back(1_060_000i128);
     emergency_sources.push_back(1_060_000i128);
     emergency_sources.push_back(1_060_000i128);
 
-    // Should succeed despite interval not met
+    // Step 1: Both validators cast emergency votes.
+    client.cast_emergency_vote(&validator, &ngn, &emergency_rate);
+    client.cast_emergency_vote(&validator2, &ngn, &emergency_rate);
+
+    // Step 2: Now consensus is met (2-of-3) — update_rate grants the bypass.
     client.update_rate(
         &validator,
         &ngn,
@@ -290,7 +299,7 @@ fn test_update_rate_with_emergency_deviation_bypasses_interval() {
     );
 
     let stored_rate = client.get_rate(&ngn);
-    assert_eq!(stored_rate, 1_060_000, "stored_rate should equal 1_060_000");
+    assert_eq!(stored_rate, 1_060_000, "stored_rate should equal 1_060_000 after 2-of-3 consensus");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

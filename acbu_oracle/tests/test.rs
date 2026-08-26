@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use acbu_oracle::{OracleContract, OracleContractClient};
+use acbu_oracle::{OracleContract, OracleContractClient, StaleRateEvent};
 use shared::{CurrencyCode, OutlierDetectionEvent, RateUpdateEvent};
 use soroban_sdk::{
     symbol_short,
@@ -177,6 +177,51 @@ fn test_admin_set_rate_emits_rate_update_event() {
         }
     }
     assert!(found, "expected rate_upd event");
+}
+
+#[test]
+fn test_stale_rate_event_decodes_from_event_payload() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| {
+        l.timestamp = 1_000_000;
+        l.sequence_number = 1;
+    });
+
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn.clone(), 10000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &validators, &1u32, &currencies, &basket_weights);
+    client.set_rate_admin(&ngn, &1_000_000i128);
+
+    advance_ledger_to(&env, &contract_id, 20_000);
+    let _ = client.try_get_rate(&ngn);
+
+    let stale_event = env
+        .events()
+        .all()
+        .iter()
+        .rev()
+        .find(|event| {
+            event.0 == contract_id
+                && Symbol::from_val(&env, &event.1.get(0).unwrap()) == symbol_short!("stale_rt")
+        })
+        .expect("get_rate must emit stale_rt before returning stale error");
+
+    let decoded: StaleRateEvent = stale_event.2.into_val(&env);
+    assert_eq!(decoded.currency, ngn);
+    assert_eq!(decoded.current_ledger, env.ledger().sequence());
 }
 
 #[test]
