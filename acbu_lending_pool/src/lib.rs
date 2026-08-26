@@ -1,7 +1,7 @@
 #![no_std]
 use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contractmeta, contracttype, symbol_short, Address,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
     BytesN, Env,
 };
 
@@ -95,14 +95,16 @@ pub struct LoanData {
 /// The `lender` address is carried in the event **payload** (not only the
 /// topic) so off-chain indexers can attribute a deposit to a specific user
 /// without having to parse the originating transaction envelope. See #369.
-#[contractevent]
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DepositEvent {
     pub lender: Address,
     pub amount: i128,
     pub timestamp: u64,
 }
 
-#[contractevent]
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BorrowEvent {
     pub creator: Address,
     pub amount: i128,
@@ -111,7 +113,8 @@ pub struct BorrowEvent {
     pub timestamp: u64,
 }
 
-#[contractevent]
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RepayEvent {
     pub creator: Address,
     pub amount: i128,
@@ -120,7 +123,8 @@ pub struct RepayEvent {
     pub timestamp: u64,
 }
 
-#[contractevent]
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoanCreatedEvent {
     pub loan_id: u64,
     pub lender: Address,
@@ -131,7 +135,8 @@ pub struct LoanCreatedEvent {
     pub timestamp: u64,
 }
 
-#[contractevent]
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoanRepaidEvent {
     pub loan_id: u64,
     pub borrower: Address,
@@ -139,7 +144,8 @@ pub struct LoanRepaidEvent {
     pub timestamp: u64,
 }
 
-#[contractevent]
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RepaymentEvent {
     pub borrower: Address,
     pub amount: i128,
