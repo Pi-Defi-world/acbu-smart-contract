@@ -3,18 +3,19 @@ name: Validate Test Snapshots
 on:
   pull_request:
     paths:
-      - 'acbu_minting/src/**'
-      - 'acbu_minting/tests/**'
-      - 'acbu_minting/test_snapshots/**'
+      - '**/src/**'
+      - '**/tests/**'
+      - '**/test_snapshots/**'
       - 'shared/src/**'
   push:
     branches:
       - main
       - develop
+      - dev
     paths:
-      - 'acbu_minting/src/**'
-      - 'acbu_minting/tests/**'
-      - 'acbu_minting/test_snapshots/**'
+      - '**/src/**'
+      - '**/tests/**'
+      - '**/test_snapshots/**'
       - 'shared/src/**'
 
 jobs:
@@ -36,23 +37,29 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
 
       - name: Cache cargo index
         uses: actions/cache@v3
         with:
           path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-index-
 
       - name: Cache target directory
         uses: actions/cache@v3
         with:
           path: target
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-target-
 
       - name: Validate snapshots
         run: |
-          cargo test test_snapshot_validation --package acbu_minting -- --nocapture
+          cargo test --workspace test_snapshot_validation -- --nocapture
         continue-on-error: false
 
       - name: Check for snapshot staleness
