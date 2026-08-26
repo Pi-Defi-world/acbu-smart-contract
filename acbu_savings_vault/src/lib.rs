@@ -125,6 +125,7 @@ pub struct DepositLot {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DepositEvent {
     pub user: Address,
     pub gross_amount: i128,
@@ -136,6 +137,7 @@ pub struct DepositEvent {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WithdrawEvent {
     pub user: Address,
     pub amount: i128,

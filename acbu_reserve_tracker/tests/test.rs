@@ -552,7 +552,7 @@ fn test_submit_attestation_without_custodian_identity_fails() {
 
     let mut root_buf = Bytes::new(&env);
     root_buf.extend_from_slice(&[0xabu8; 32][..]);
-    let root = env.crypto().keccak256(&root_buf);
+    let root = env.crypto().keccak256(&root_buf).to_bytes();
 
     env.mock_auths(&[]);
     let result = client.try_submit_attestation(&root);
@@ -683,7 +683,7 @@ fn test_verify_merkle_proof_invalid_proof_panics() {
 
     let mut fake_buf = Bytes::new(&env);
     fake_buf.extend_from_slice(&[0xabu8; 32][..]);
-    let fake_sibling = env.crypto().keccak256(&fake_buf);
+    let fake_sibling = env.crypto().keccak256(&fake_buf).to_bytes();
     let bad_proof = vec![&env, fake_sibling];
 
     let result = client.try_verify_merkle_proof(&leaf, &bad_proof, &0u32);

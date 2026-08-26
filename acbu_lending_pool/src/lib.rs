@@ -96,7 +96,6 @@ pub struct LoanData {
 /// topic) so off-chain indexers can attribute a deposit to a specific user
 /// without having to parse the originating transaction envelope. See #369.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DepositEvent {
     pub lender: Address,
     pub amount: i128,
@@ -104,7 +103,6 @@ pub struct DepositEvent {
 }
 
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BorrowEvent {
     pub creator: Address,
     pub amount: i128,
@@ -114,7 +112,6 @@ pub struct BorrowEvent {
 }
 
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RepayEvent {
     pub creator: Address,
     pub amount: i128,
@@ -124,7 +121,6 @@ pub struct RepayEvent {
 }
 
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoanCreatedEvent {
     pub loan_id: u64,
     pub lender: Address,
@@ -136,7 +132,6 @@ pub struct LoanCreatedEvent {
 }
 
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoanRepaidEvent {
     pub loan_id: u64,
     pub borrower: Address,
@@ -145,7 +140,6 @@ pub struct LoanRepaidEvent {
 }
 
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RepaymentEvent {
     pub borrower: Address,
     pub amount: i128,
