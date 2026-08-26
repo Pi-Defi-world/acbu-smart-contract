@@ -80,6 +80,19 @@ pub struct DataKey {
     pub attestation_ts: Symbol,
 }
 
+/// A single reserve entry committed in the Merkle attestation tree.
+///
+/// Each leaf encodes the currency code, the reserve amount, its USD value,
+/// and the timestamp at which the custodian attested to the balance.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttestationLeaf {
+    pub currency: CurrencyCode,
+    pub amount: i128,
+    pub value_usd: i128,
+    pub timestamp: u64,
+}
+
 const DATA_KEY: DataKey = DataKey {
     admin: symbol_short!("ADMIN"),
     oracle: symbol_short!("ORACLE"),
