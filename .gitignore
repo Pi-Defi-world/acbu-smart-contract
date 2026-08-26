@@ -4,11 +4,10 @@
 # Cargo.lock is committed for reproducible, MSRV-pinned builds (see
 # rust-toolchain.toml). Do not re-add it here.
 
-# WASM artifacts — binary blobs must not be committed to source control.
-# The sha256 hash is already pinned in contractimport! macros; obtain the
-# file locally by running:  ./scripts/fetch_token_wasm.sh
-soroban_token_contract.wasm
+# WASM build output — only the pinned token artifact is committed.
+# Other WASM artifacts must not be committed to source control.
 *.wasm
+!soroban_token_contract.wasm
 
 # Editor/IDE files
 .idea/
@@ -35,3 +34,7 @@ test_snapshots/
 # surface and should not be committed to source control.
 /ISSUES.md
 /SECURITY_FIX_SUMMARY.md
+
+# Python
+__pycache__/
+*.pyc

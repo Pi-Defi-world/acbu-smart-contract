@@ -148,6 +148,7 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 5023 | `InvalidRecipient` | invalid recipient |
 | 5024 | `InvalidRoleSeparation` | admin and operator must be different addresses |
 | 5025 | `SupplyMismatch` | supplied value does not match on-chain supply |
+| 5026 | `SlippageExceeded` | The computed ACBU output is below the caller-supplied `min_acbu_out` floor, indicating that same-block oracle movement would cause unacceptable slippage. The transaction should be retried with updated parameters. |
 | 5999 | `Unknown` | unknown minting error |
 
 ## `acbu_oracle` - `OracleError`
