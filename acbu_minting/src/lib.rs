@@ -18,7 +18,7 @@ use shared::{
 pub mod token_contract {
     soroban_sdk::contractimport!(
         file = "../soroban_token_contract.wasm",
-        sha256 = "8331ad752af7ff986f2b9497ac7383c57020bfc80ba19541f4142fc94d1348c1"
+        sha256 = "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"
     );
 }
 
@@ -125,6 +125,7 @@ pub enum MintingError {
     InvalidRecipient = 5023,
     InvalidRoleSeparation = 5024,
     SupplyMismatch = 5025,
+    NegativeSupply = 5027,
     /// The computed ACBU output is below the caller-supplied `min_acbu_out`
     /// floor, indicating that same-block oracle movement would cause unacceptable
     /// slippage. The transaction should be retried with updated parameters.
@@ -161,6 +162,7 @@ impl Display for MintingError {
             Self::InvalidRoleSeparation => "admin and operator must be different addresses",
             Self::SupplyMismatch => "supplied value does not match on-chain supply",
             Self::SlippageExceeded => "output below minimum: slippage exceeded",
+            Self::NegativeSupply => "negative supply",
             Self::Unknown => "unknown minting error",
         };
         f.write_str(message)
@@ -309,7 +311,7 @@ impl MintingContract {
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        assert_recipient_is_account(&recipient);
+        Self::assert_recipient_is_account(&recipient);
         env.storage().instance().extend_ttl(5184000, 5184000);
 
         let min_amount: i128 = env
@@ -430,7 +432,7 @@ impl MintingContract {
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        assert_recipient_is_account(&recipient);
+        Self::assert_recipient_is_account(&recipient);
 
         if !check_proof_unused(&env, &proof_id) {
             env.panic_with_error(MintingError::ProofAlreadyUsed);
@@ -608,7 +610,7 @@ impl MintingContract {
         user.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        assert_recipient_is_account(&recipient);
+        Self::assert_recipient_is_account(&recipient);
         env.storage().instance().extend_ttl(5184000, 5184000);
 
         let min_amount: i128 = env
@@ -747,7 +749,7 @@ impl MintingContract {
         operator.require_auth();
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        assert_recipient_is_account(&recipient);
+        Self::assert_recipient_is_account(&recipient);
         env.storage().instance().extend_ttl(5184000, 5184000);
 
         if !check_proof_unused(&env, &proof_id) {
@@ -893,7 +895,7 @@ impl MintingContract {
 
         // C-058: reject contract-type recipients — minting to a contract address
         // that has no token-receipt logic would permanently strand the funds.
-        assert_recipient_is_account(&recipient);
+        Self::assert_recipient_is_account(&recipient);
 
         // C-039: Strict input validation — enforce length bounds and charset
         // before touching any storage, so garbage IDs are rejected cheaply.
@@ -1058,7 +1060,7 @@ impl MintingContract {
         admin.require_auth();
 
         // C-058: reject contract-type recipients to prevent stranded token transfers.
-        assert_recipient_is_account(&recipient);
+        Self::assert_recipient_is_account(&recipient);
         if amount <= 0 {
             env.panic_with_error(MintingError::InvalidDripAmount);
         }
@@ -1522,12 +1524,30 @@ impl MintingContract {
         env.storage().instance().get(&DATA_KEY.admin).unwrap()
     }
 
-    /// Check if the contract has been initialized.
+/// Check if the contract has been initialized.
     ///
     /// Backend services can call this before invoking other functions to avoid
     /// cryptic storage-not-found errors from uninitialized contracts.
     pub fn is_initialized(env: Env) -> bool {
         env.storage().instance().has(&SharedDataKey::Version)
+    }
+
+    fn check_admin(env: &Env) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+    }
+
+    fn assert_recipient_is_account(address: &Address) {
+        let env = address.env();
+        let strkey = address.to_string();
+        if strkey.len() != 56 {
+            env.panic_with_error(MintingError::InvalidRecipient);
+        }
+        let mut buf = [0u8; 56];
+        strkey.copy_into_slice(&mut buf);
+        if buf[0] != b'G' {
+            env.panic_with_error(MintingError::InvalidRecipient);
+        }
     }
 
     /// Pending successor, if a transfer is in progress.
@@ -1647,31 +1667,6 @@ fn next_tx_nonce(env: &Env) -> u64 {
         .expect("transaction nonce overflow");
     env.storage().instance().set(&DATA_KEY.tx_nonce, &nonce);
     nonce
-}
-
-// ---------------------------------------------------------------------------
-// Helper: assert that an address belongs to an account (not a contract).
-// C-058 — minting to a contract address that has no token-receipt logic would
-// permanently strand funds.
-//
-// soroban-sdk 21 does not expose an `is_account()` predicate on `Address`, but
-// the strkey encoding returned by `Address::to_string()` reveals the address
-// kind: standard Stellar account (ed25519 public key) strkeys start with 'G',
-// while contract strkeys start with 'C'. Both encodings are 56 characters
-// long, so any address that doesn't decode to a 56-byte 'G...' string is
-// rejected.
-// ---------------------------------------------------------------------------
-fn assert_recipient_is_account(address: &Address) {
-    let env = address.env();
-    let strkey = address.to_string();
-    if strkey.len() != 56 {
-        env.panic_with_error(MintingError::InvalidRecipient);
-    }
-    let mut buf = [0u8; 56];
-    strkey.copy_into_slice(&mut buf);
-    if buf[0] != b'G' {
-        env.panic_with_error(MintingError::InvalidRecipient);
-    }
 }
 
 // ---------------------------------------------------------------------------

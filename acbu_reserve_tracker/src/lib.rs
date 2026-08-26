@@ -1,8 +1,8 @@
 #![no_std]
 use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,
-    Bytes, BytesN, Env, IntoVal, Map, Symbol, Vec, vec,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, vec, Address,
+    Bytes, BytesN, Env, IntoVal, Map, Symbol, Vec,
 };
 
 use shared::{
@@ -108,10 +108,20 @@ const DATA_KEY: DataKey = DataKey {
     pending_upgrade_wasm: symbol_short!("PU_WASM"),
     pending_upgrade_version: symbol_short!("PU_VER"),
     pending_upgrade_eligible_at: symbol_short!("PU_ETA"),
-    custodian: symbol_short!("CUSTODN"),
-    attested_root: symbol_short!("ATR_ROOT"),
-    attestation_ts: symbol_short!("ATR_TS"),
+    custodian: symbol_short!("CUSTODIN"),
+    attested_root: symbol_short!("ATT_ROOT"),
+    attestation_ts: symbol_short!("ATT_TS"),
 };
+
+/// A single currency attestation entry in a Merkle tree, submitted by the custodian.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttestationLeaf {
+    pub currency: CurrencyCode,
+    pub amount: i128,
+    pub value_usd: i128,
+    pub timestamp: u64,
+}
 
 /// Admin rotation timelock: the pending admin must wait this long before
 /// claiming ownership, giving the current admin a window to cancel a mistaken
@@ -454,9 +464,9 @@ impl ReserveTrackerContract {
     fn hash_leaf(env: &Env, leaf: &AttestationLeaf) -> BytesN<32> {
         let mut buf = Bytes::new(env);
         let code = leaf.currency.code();
-        let code_len = code.len() as usize;
         let mut code_buf = [0u8; 32];
-        code.copy_into_slice(&mut code_buf[..code_len]);
+        code.copy_into_slice(&mut code_buf);
+        let code_len = code.len() as usize;
         let code_bytes = Bytes::from_slice(env, &code_buf[..code_len]);
         buf.append(&code_bytes);
         let amt_bytes = Bytes::from_slice(env, &leaf.amount.to_be_bytes()[..]);
