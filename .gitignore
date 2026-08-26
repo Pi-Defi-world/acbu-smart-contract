@@ -35,6 +35,17 @@ test_snapshots/
 /ISSUES.md
 /SECURITY_FIX_SUMMARY.md
 
+# Diagnostic / build dumps — never commit machine-specific artifacts
+error.txt
+error2.txt
+final.txt
+
+# Node tooling (not relevant to Rust repo)
+nodemon.json
+
+# Stray test files at repo root
+test_comprehensive.rs
+
 # Python
 __pycache__/
 *.pyc
