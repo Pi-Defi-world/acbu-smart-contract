@@ -1,5 +1,5 @@
 # Rustfmt configuration for ACBU smart contract workspace
-# This ensures consistent formatting across all developers
+# Restricted to stable options only — compatible with `cargo +stable fmt --check`
 
 # Maximum line width
 max_width = 100
@@ -16,9 +16,6 @@ use_field_init_shorthand = true
 
 # Use try shorthand
 use_try_shorthand = true
-
-# Force explicit types in public items
-# public_item_fields = false  # Disabled to allow inference where sensible
 
 # Format comments
 comment_width = 100
@@ -64,9 +61,6 @@ remove_nested_parens = true
 # Reorder impl items
 reorder_impl_items = true
 
-# Skip children
-# skip_children = false
-
 # Space after colon
 space_after_colon = true
 space_before_colon = false
@@ -74,16 +68,12 @@ space_before_colon = false
 # Spaces around ranges
 spaces_around_ranges = false
 
-# Trailing comma
+# Trailing comma — "Vertical" is stable
 trailing_comma = "Vertical"
 trailing_semicolon = true
 
 # Type punctuation density
 type_punctuation_density = "Wide"
-
-# Blank lines
-blank_lines_upper_bound = 1
-blank_lines_lower_bound = 0
 
 # Brace style
 brace_style = "SameLineWhere"
@@ -94,8 +84,8 @@ control_brace_style = "AlwaysSameLine"
 # Empty item single line
 empty_item_single_line = true
 
-# Fn args layout
-fn_args_layout = "Tall"
+# fn_params_layout replaces the deprecated fn_args_layout
+fn_params_layout = "Tall"
 
 # Fn call width
 fn_call_width = 80
@@ -109,31 +99,11 @@ where_single_line = false
 # Indent style
 indent_style = "Block"
 
-# Format strings
-format_strings = true
-
-# Format macro matchers
-format_macro_matchers = true
-format_macro_bodies = true
-
 # Hex literal case
 hex_literal_case = "Lower"
 
-# Overflow delimited expr
-overflow_delimited_expr = true
-
-# Preserve block start blank lines
-preserve_block_start_blank_lines = false
-
-# Preserve closure block formatting
-preserve_closure_blockFormatting = false
-
 # Reorder modules
 reorder_modules = true
-
-# Report fixme
-report_fixme = "Always"
-report_todo = "Always"
 
 # Short array element width threshold
 short_array_element_width_threshold = 10
@@ -143,6 +113,3 @@ struct_lit_single_line = true
 
 # Struct variant width
 struct_variant_width = 35
-
-# Condense wildcard suffixes
-condense_wildcard_suffixes = true
