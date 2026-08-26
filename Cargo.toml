@@ -25,6 +25,12 @@ build = "build.rs"
 #
 # To upgrade: bump *both* fields below (and run `cargo update` to regenerate
 # Cargo.lock), then rebuild + re-test every contract before deploying.
+#
+# Supply chain (W2-Z-020): no dependency — the Soroban SDK, the ledger-snapshot
+# verifier lib, or anything transitive — may be sourced from a git URL. Every
+# crate must resolve from a registry with a checksum recorded in the committed
+# Cargo.lock, so `cargo build --locked` resolves without live GitHub access.
+# `.github/workflows/deps-guard.yml` fails the build if this regresses.
 # ---------------------------------------------------------------------------
 [workspace.dependencies]
 # Exact pin — caret (`^`) is intentionally *not* used here.
