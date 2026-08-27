@@ -3,14 +3,18 @@
 SHELL := /bin/bash
 MAKEFLAGS += --silent
 
-.PHONY: help build build-minting test test-minting deploy-testnet deploy-mainnet setup-hooks validate-snapshots clean-snapshots docs-error-codes check-error-codes
+.PHONY: help build build-minting test test-minting deploy-testnet deploy-mainnet \
+        update-registry setup-hooks validate-snapshots clean-snapshots \
+        docs-error-codes check-error-codes
 
 help:
 	@printf "Usage:\n"
 	@printf "  make build              Build all contracts\n"
 	@printf "  make test               Run all workspace tests\n"
-	@printf "  make deploy-testnet     Deploy to Stellar testnet\n"
-	@printf "  make deploy-mainnet     Deploy to Stellar mainnet\n"
+	@printf "  make deploy-testnet     Deploy all 8 contracts to Stellar testnet\n"
+	@printf "  make deploy-mainnet     Deploy all 8 contracts to Stellar mainnet\n"
+	@printf "                            (requires DEPLOY_CONFIRM=deploy)\n"
+	@printf "  make update-registry    Rebuild deployments/registry.json from per-network snapshots\n"
 	@printf "  make setup-hooks        Install git hooks for the repository\n"
 	@printf "  make build-minting      Build the acbu_minting contract\n"
 	@printf "  make test-minting       Run tests for the acbu_minting contract\n"
@@ -38,18 +42,35 @@ test-minting:
 deploy-testnet:
 	@if [ -z "$$STELLAR_SECRET_KEY" ]; then \
 		echo "ERROR: STELLAR_SECRET_KEY must be set for deployment."; \
+		echo "  export STELLAR_SECRET_KEY=\"<your-testnet-secret-key>\""; \
 		exit 1; \
 	fi
-	@printf "Deploying to testnet...\n"
-	bash scripts/deploy_testnet.sh
+	@printf "Deploying all 8 contracts to testnet...\n"
+	bash scripts/deploy.sh testnet
 
 deploy-mainnet:
 	@if [ -z "$$STELLAR_SECRET_KEY" ]; then \
 		echo "ERROR: STELLAR_SECRET_KEY must be set for deployment."; \
+		echo "  export STELLAR_SECRET_KEY=\"<your-mainnet-secret-key>\""; \
 		exit 1; \
 	fi
-	@printf "Deploying to mainnet...\n"
-	bash scripts/deploy_mainnet.sh
+	@if [ "$$DEPLOY_CONFIRM" != "deploy" ]; then \
+		echo "ERROR: Mainnet deploy requires DEPLOY_CONFIRM=deploy."; \
+		echo "  export DEPLOY_CONFIRM=deploy"; \
+		exit 1; \
+	fi
+	@printf "Deploying all 8 contracts to mainnet...\n"
+	bash scripts/deploy.sh mainnet
+
+update-registry:
+	@printf "Rebuilding deployments/registry.json from per-network snapshots...\n"
+	@for net in testnet mainnet; do \
+		file="deployments/$${net}.json"; \
+		if [ -f "$$file" ]; then \
+			bash scripts/update_registry.sh "$$net" "$$file"; \
+		fi; \
+	done
+	@printf "Registry updated.\n"
 
 setup-hooks:
 	@printf "Setting up git hooks...\n"
