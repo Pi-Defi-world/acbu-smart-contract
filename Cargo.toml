@@ -9,6 +9,7 @@ members = [
     "acbu_escrow",
     "acbu_multisig",
     "shared",
+    "verifier",
 ]
 resolver = "2"
 
