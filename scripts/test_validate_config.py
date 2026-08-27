@@ -21,7 +21,13 @@ class ValidateConfigTests(unittest.TestCase):
             root = Path(tmpdir)
             self.write_files(
                 root,
-                ["GDHO63RZEUNDRVF6WA7HD4D7PLNLUMSK5H74ONW3MEF3VKF4BZJ6GDML"],
+                [
+                    "GDHO63RZEUNDRVF6WA7HD4D7PLNLUMSK5H74ONW3MEF3VKF4BZJ6GDML",
+                    "GDHO63RZEUNDRVF6WA7HD4D7PLNLUMSK5H74ONW3MEF3VKF4BZJ6GDMA",
+                    "GDHO63RZEUNDRVF6WA7HD4D7PLNLUMSK5H74ONW3MEF3VKF4BZJ6GDMB",
+                    "GDHO63RZEUNDRVF6WA7HD4D7PLNLUMSK5H74ONW3MEF3VKF4BZJ6GDMC",
+                    "GDHO63RZEUNDRVF6WA7HD4D7PLNLUMSK5H74ONW3MEF3VKF4BZJ6GDMD",
+                ],
                 [{"SorobanString": "USD"}],
                 [{"key": {"SorobanString": "USD"}, "val": 100}],
             )
