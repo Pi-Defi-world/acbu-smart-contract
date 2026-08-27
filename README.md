@@ -250,7 +250,7 @@ shared/
 
 ## Prerequisites
 
-- Rust 1.87.0 (pinned in `rust-toolchain.toml`)
+- Rust 1.88.0 (pinned in `rust-toolchain.toml`)
 - `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`)
 - Soroban CLI (`cargo install --locked soroban-cli`)
 - Stellar account with XLM for deployment fees
