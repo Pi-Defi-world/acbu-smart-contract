@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # validate_json.sh – validate config JSON files against their schemas.
-# Requires: ajv-cli  (npm install -g ajv-cli)
+# Requires: Node 20 LTS (see .nvmrc / .node-version)
+# Uses npx to run ajv-cli on-demand; no global install needed.
 # Usage: ./scripts/validate_json.sh
 
 set -euo pipefail
@@ -8,8 +9,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 check_dep() {
-    if ! command -v ajv &>/dev/null; then
-        echo "ERROR: ajv not found. Install with: npm install -g ajv-cli"
+    if ! command -v npx &>/dev/null; then
+        echo "ERROR: npx not found. Install Node 20 LTS (https://nodejs.org)."
         exit 1
     fi
 }
@@ -18,7 +19,7 @@ validate() {
     local schema="$1"
     local data="$2"
     echo "Validating $(basename "$data") ..."
-    if ajv validate -s "$schema" -d "$data" --spec=draft7 2>&1; then
+    if npx --yes ajv-cli validate -s "$schema" -d "$data" --spec=draft7 2>&1; then
         echo "  ✓ $(basename "$data") is valid"
     else
         echo "  ✗ $(basename "$data") FAILED validation"
