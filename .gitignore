@@ -4,8 +4,10 @@
 # Cargo.lock is committed for reproducible, MSRV-pinned builds (see
 # rust-toolchain.toml). Do not re-add it here.
 
-# WASM build output — only the pinned token artifact is committed.
-# Other WASM artifacts must not be committed to source control.
+# WASM build output — the vendored token contract is committed because
+# acbu_minting/acbu_burning/acbu_reserve_tracker import it at compile time
+# via contractimport!.  Its integrity is verified by build.rs (SHA-256).
+# Other WASM artifacts must not be committed.
 *.wasm
 !soroban_token_contract.wasm
 

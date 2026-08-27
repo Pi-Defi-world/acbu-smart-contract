@@ -251,20 +251,33 @@ shared/
 ## Prerequisites
 
 - Rust 1.87.0 (pinned in `rust-toolchain.toml`)
+- `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`)
 - Soroban CLI (`cargo install --locked soroban-cli`)
 - Stellar account with XLM for deployment fees
 
-## Building
+## Vendored WASM Artifact
 
-You can use the `Makefile` for common commands.
+The file `soroban_token_contract.wasm` at the repository root is a **vendored dependency** — it is committed to the repo and required at compile time by the minting, burning, and reserve-tracker contracts via `contractimport!`. Its SHA-256 integrity is verified automatically by `build.rs` during every `cargo build`.
+
+Fresh clones receive this file via `git clone`. If it is ever missing or corrupted, `build.rs` will attempt to re-fetch it automatically via `scripts/fetch_token_wasm.sh`. You can also run the fetch script manually:
+
+```bash
+./scripts/fetch_token_wasm.sh
+```
+
+## Building
 
 ```bash
 # Build all contracts in the workspace
 make build
+# or
+cargo build
 
 # Build a specific contract
 make build-minting
 ```
+
+You can use the `Makefile` for common commands. Run `make help` to see all targets.
 
 ## Testing
 
