@@ -1,0 +1,63 @@
+name: Circuit Tests
+
+# W2-Z-007: Enforce that Noir/Nargo circuit tests run on every PR that
+# touches the zk/ directory so constraint logic (KYC tier + country
+# checks) is always verified before merge.
+
+on:
+  push:
+    branches: [main, develop, dev]
+    paths:
+      - "zk/**"
+      - ".github/workflows/circuit-tests.yml"
+  pull_request:
+    branches: [main, develop, dev]
+    paths:
+      - "zk/**"
+      - ".github/workflows/circuit-tests.yml"
+
+jobs:
+  nargo-test:
+    name: Nargo circuit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Install the Nargo toolchain.
+      # The version is pinned so CI is reproducible; bump here when the
+      # circuits require a newer compiler feature.
+      - name: Install Nargo
+        run: |
+          set -euo pipefail
+          NARGO_VERSION="0.38.0"
+          echo "Installing Nargo ${NARGO_VERSION}..."
+          curl -sSL \
+            "https://github.com/noir-lang/noir/releases/download/v${NARGO_VERSION}/nargo-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C /usr/local/bin
+          nargo --version
+
+      # Cache the Nargo download / compilation artifacts.
+      - name: Cache Nargo artifacts
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.nargo
+            zk/circuits/**/target
+          key: ${{ runner.os }}-nargo-${{ hashFiles('zk/**/Nargo.toml', 'zk/**/*.nr') }}
+          restore-keys: |
+            ${{ runner.os }}-nargo-
+
+      # Run `nargo test` for every circuit package under zk/circuits/.
+      # Each package is tested independently so failure messages are
+      # clearly scoped to the offending circuit.
+      - name: Run kyc_verifier circuit tests
+        working-directory: zk/circuits/kyc_verifier
+        run: nargo test --show-output
+
+      # If more circuits are added under zk/circuits/, add a step here:
+      #
+      # - name: Run <circuit_name> circuit tests
+      #   working-directory: zk/circuits/<circuit_name>
+      #   run: nargo test --show-output
