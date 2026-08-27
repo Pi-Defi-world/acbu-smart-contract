@@ -89,6 +89,9 @@ jobs:
           if [[ ${#packages[@]} -eq 0 ]]; then
             echo "workspace=false" >> "$GITHUB_OUTPUT"
             echo "packages=" >> "$GITHUB_OUTPUT"
+          elif [[ ${#packages[@]} -ge 2 ]]; then
+            echo "Multiple crates changed (${#packages[@]}); running full workspace"
+            echo "workspace=true" >> "$GITHUB_OUTPUT"
           else
             printf -v package_args ' -p %s' "${packages[@]}"
             echo "workspace=false" >> "$GITHUB_OUTPUT"
