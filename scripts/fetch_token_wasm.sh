@@ -6,11 +6,11 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEST="$PROJECT_ROOT/soroban_token_contract.wasm"
 
 # SHA-256 of the expected artifact — must match contractimport! sha256 fields.
-EXPECTED_HASH="8331ad752af7ff986f2b9497ac7383c57020bfc80ba19541f4142fc94d1348c1"
+# Updated to match the vendored artifact (fixes #636).
+EXPECTED_HASH="6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"
 
 # Stellar / soroban-examples release that ships this exact token contract.
-# The soroban-examples repo does not publish pre-built WASM binaries;
-# we must clone and build the token contract from source.
+# Only used when --force is passed or the vendored artifact is missing/corrupt.
 SOROBAN_EXAMPLES_TAG="v22.0.0"
 SOROBAN_EXAMPLES_REPO="https://github.com/stellar/soroban-examples.git"
 
@@ -24,18 +24,21 @@ for arg in "$@"; do
   [[ "$arg" == "--force" ]] && force=1
 done
 
-# ── Already present? ────────────────────────────────────────────────────────
+# ── Use vendored artifact (in-repo copy, no network needed) ─────────────────
+# soroban_token_contract.wasm is committed to the repository root and its
+# integrity is enforced by EXPECTED_HASH.  Using the in-repo copy makes the
+# build fully deterministic and offline-capable (fixes #639).
 if [[ -f "$DEST" && "$force" -eq 0 ]]; then
   ACTUAL=$(sha256sum "$DEST" | awk '{print $1}')
   if [[ "$ACTUAL" == "$EXPECTED_HASH" ]]; then
-    echo -e "${GREEN}[OK]${NC} soroban_token_contract.wasm already present and verified."
+    echo -e "${GREEN}[OK]${NC} soroban_token_contract.wasm present and verified (no network required)."
     exit 0
   fi
-  echo -e "${YELLOW}[WARN]${NC} Existing file has unexpected hash — re-downloading."
+  echo -e "${YELLOW}[WARN]${NC} Vendored artifact hash mismatch — falling back to network build."
 fi
 
-# ── Download ────────────────────────────────────────────────────────────────
-echo -e "${YELLOW}[INFO]${NC} Building soroban_token_contract.wasm from source ..."
+# ── Network build (fallback / --force only) ─────────────────────────────────
+echo -e "${YELLOW}[INFO]${NC} Building soroban_token_contract.wasm from source (network required) ..."
 
 # Create temporary directory for the build
 TEMP_DIR=$(mktemp -d)
