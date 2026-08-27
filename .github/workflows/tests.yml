@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Verify error-code docs are generated
         run: python scripts/generate_error_codes.py --check
@@ -44,7 +46,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          git fetch --no-tags origin "${{ github.base_ref }}"
           changed_files="$(git diff --name-only "origin/${{ github.base_ref }}"...HEAD)"
 
           packages=()
