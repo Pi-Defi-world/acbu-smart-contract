@@ -1,0 +1,102 @@
+name: Deploy Contracts
+
+# W2-Z-014: deployment must be scripted and recorded, not a manual runbook.
+# This workflow drives scripts/deploy.sh end to end, then archives the resulting
+# .soroban/deployment_<network>.json so every deploy is reproducible and auditable.
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: Target Stellar network
+        type: choice
+        required: true
+        default: testnet
+        options:
+          - testnet
+          - mainnet
+      confirm:
+        description: Type "deploy" to confirm (required for mainnet)
+        type: string
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-${{ github.event.inputs.network }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to ${{ github.event.inputs.network }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.network }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Guard mainnet deploys
+        if: github.event.inputs.network == 'mainnet' && github.event.inputs.confirm != 'deploy'
+        run: |
+          echo "::error::Mainnet deploy requires the confirm input to be set to \"deploy\"."
+          exit 1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-deploy-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-deploy-
+
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli --version 21.5.0 || cargo install --locked soroban-cli
+
+      - name: Fetch token WASM artifact
+        run: bash scripts/fetch_token_wasm.sh
+
+      - name: Build contracts (locked)
+        run: cargo build --locked --target wasm32-unknown-unknown --release
+
+      - name: Verify build artifacts
+        run: bash scripts/verify_deployment.sh "${{ github.event.inputs.network }}" || true
+
+      - name: Deploy
+        env:
+          STELLAR_SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+        run: |
+          if [ -z "${STELLAR_SECRET_KEY:-}" ]; then
+            echo "::error::STELLAR_SECRET_KEY secret is not configured for the ${{ github.event.inputs.network }} environment."
+            exit 1
+          fi
+          # deploy.sh prompts before mainnet; feed the confirmation non-interactively.
+          echo "yes" | bash scripts/deploy.sh "${{ github.event.inputs.network }}"
+
+      - name: Record deployment
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-${{ github.event.inputs.network }}-${{ github.run_id }}
+          path: .soroban/deployment_${{ github.event.inputs.network }}.json
+          if-no-files-found: warn
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          FILE=".soroban/deployment_${{ github.event.inputs.network }}.json"
+          if [ -f "$FILE" ]; then
+            {
+              echo "### Deployment recorded (${{ github.event.inputs.network }})"
+              echo ""
+              echo '```json'
+              cat "$FILE"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

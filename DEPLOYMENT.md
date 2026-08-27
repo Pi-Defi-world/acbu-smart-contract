@@ -2,6 +2,24 @@
 
 This guide walks you through deploying ACBU Soroban smart contracts to Stellar testnet and mainnet.
 
+## Automated deployment (preferred)
+
+Deployment is scripted and recorded — you do not have to run the steps below by hand:
+
+| Path | What it does |
+| --- | --- |
+| **CI:** `.github/workflows/deploy.yml` | `Actions → Deploy Contracts → Run workflow`, pick `testnet`/`mainnet` (mainnet also needs `confirm: deploy`). Builds with `--locked`, runs `scripts/deploy.sh`, and uploads `.soroban/deployment_<network>.json` as a run artifact plus a job-summary record. Needs the `STELLAR_SECRET_KEY` secret on the matching GitHub Environment. |
+| **Local:** `./scripts/deploy.sh testnet` / `mainnet` | Same script the workflow calls. Wrappers: `scripts/deploy_testnet.sh`, `scripts/deploy_mainnet.sh`. Verify afterwards with `scripts/verify_deployment.sh`. |
+
+The recorded `.soroban/deployment_<network>.json` (network, timestamp, per-contract IDs) is the source of truth for every deploy.
+
+## Reproducible builds
+
+`Cargo.lock` is committed and every dependency resolves from a registry with a
+recorded checksum — no crate is pulled from a git URL. Always build with
+`cargo build --locked` so the pinned graph is used, and the build resolves
+without live GitHub access. `.github/workflows/deps-guard.yml` enforces this.
+
 ## Prerequisites
 
 1. **Rust Toolchain** (1.70+)
