@@ -30,9 +30,11 @@ cargo install --locked soroban-cli
 
 ### 2. Build Contracts
 
+The vendored token WASM (`soroban_token_contract.wasm`) is committed to the repo root and verified automatically by `build.rs`.
+
 ```bash
-cd contracts
-cargo build --target wasm32-unknown-unknown --release
+# From the repository root
+cargo build
 ```
 
 ### 3. Deploy to Testnet
