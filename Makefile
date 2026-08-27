@@ -41,7 +41,7 @@ deploy-testnet:
 		exit 1; \
 	fi
 	@printf "Deploying to testnet...\n"
-	./scripts/deploy_testnet.sh
+	bash scripts/deploy_testnet.sh
 
 deploy-mainnet:
 	@if [ -z "$$STELLAR_SECRET_KEY" ]; then \
@@ -49,11 +49,11 @@ deploy-mainnet:
 		exit 1; \
 	fi
 	@printf "Deploying to mainnet...\n"
-	./scripts/deploy_mainnet.sh
+	bash scripts/deploy_mainnet.sh
 
 setup-hooks:
 	@printf "Setting up git hooks...\n"
-	./scripts/setup-git-hooks.sh
+	bash scripts/setup-git-hooks.sh
 
 validate-snapshots:
 	@printf "Validating test snapshots...\n"
