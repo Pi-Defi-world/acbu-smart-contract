@@ -13,9 +13,6 @@ members = [
 ]
 resolver = "2"
 
-# Build script for WASM integrity verification
-build = "build.rs"
-
 # ---------------------------------------------------------------------------
 # Workspace-wide dependency versions
 #
@@ -37,7 +34,7 @@ build = "build.rs"
 # Exact pin — caret (`^`) is intentionally *not* used here.
 # (Note: 21.0.0 was yanked from crates.io, using latest 21.x version)
 soroban-sdk = "=21.7.7"
-# Pin serde_with to version compatible with rustc 1.87.0
+# Pin serde_with to version compatible with rustc 1.88.0
 serde_with = "=3.9.0"
 
 [profile.release]
