@@ -50,6 +50,131 @@ pub const KYC_TIER2_DAILY_CAP: i128 = 10_000 * DECIMALS;
 pub const KYC_TIER3_DAILY_CAP: i128 = i128::MAX;
 
 // ---------------------------------------------------------------------------
+// ZK proof verification constants
+// ---------------------------------------------------------------------------
+
+/// Expected byte length of a serialised Noir/Barretenberg KYC proof.
+///
+/// A Barretenberg UltraPlonk proof for the `kyc_verifier` circuit serialises to
+/// 2 144 bytes (standard Plonk proof without recursive aggregation). This
+/// constant is the single source of truth used by [`verify_proof`] to reject
+/// proofs of the wrong size before any cryptographic work is performed.
+pub const PROOF_BYTES: usize = 2_144;
+
+/// Number of public inputs committed to by the `kyc_verifier` circuit.
+///
+/// The circuit exposes exactly **5** public inputs, in order:
+///
+/// | Index | Field              | Type    | Description                              |
+/// |-------|--------------------|---------|------------------------------------------|
+/// | 0     | `min_tier`         | `u8`    | Minimum KYC tier required (0–3)          |
+/// | 1     | `country_code`     | `Field` | ISO 3166-1 numeric country code          |
+/// | 2     | `requested_amount` | `Field` | Transaction amount (7-decimal units)     |
+/// | 3     | `daily_cap`        | `Field` | Per-tier daily cap (`u64::MAX` = unlimited) |
+/// | 4     | `already_used`     | `Field` | Window total already consumed            |
+///
+/// Any call to [`verify_proof`] that supplies a `public_inputs` slice of a
+/// different length is rejected immediately with
+/// [`VerifierError::InvalidPublicInputsLength`], preventing resource/gas abuse
+/// from oversized or undersized input vectors.
+pub const PUBLIC_INPUTS_LEN: usize = 5;
+
+// ---------------------------------------------------------------------------
+// ZK proof verification
+// ---------------------------------------------------------------------------
+
+/// Validates a serialised KYC proof together with its public inputs.
+///
+/// This function acts as the **host-side gate** before any cryptographic
+/// verification: it enforces structural invariants that must hold regardless
+/// of proof contents, allowing callers to fail fast without paying the cost of
+/// a full proof check on malformed inputs.
+///
+/// # Checks performed
+///
+/// 1. `proof_bytes.len() == PROOF_BYTES` — rejects proofs that are too short
+///    or too long ([`VerifierError::InvalidProofLength`]).
+/// 2. `public_inputs.len() == PUBLIC_INPUTS_LEN` — rejects inputs vectors that
+///    do not match the circuit's exact public-input count
+///    ([`VerifierError::InvalidPublicInputsLength`]).  This is the fix for
+///    **W2-Z-017**: without this check a caller could pass an arbitrarily large
+///    `public_inputs` slice, causing unbounded memory/gas consumption during
+///    downstream cryptographic processing.
+///
+/// # Note on cryptographic verification
+///
+/// Full on-chain cryptographic proof verification (Barretenberg / Noir
+/// recursive verifier) is performed by the Soroban contract layer, which
+/// imports this crate. The checks here are pre-validation guards that run in
+/// pure Rust with no runtime overhead.
+///
+/// # Errors
+///
+/// | Condition                                         | Error                         |
+/// |---------------------------------------------------|-------------------------------|
+/// | `proof_bytes.len() != PROOF_BYTES`                | `InvalidProofLength`          |
+/// | `public_inputs.len() != PUBLIC_INPUTS_LEN`        | `InvalidPublicInputsLength`   |
+///
+/// # Examples
+///
+/// ```
+/// use verifier::{verify_proof, PROOF_BYTES, PUBLIC_INPUTS_LEN, VerifierError};
+///
+/// // Correct sizes — structural validation passes.
+/// let proof = vec![0u8; PROOF_BYTES];
+/// let inputs = vec![0u128; PUBLIC_INPUTS_LEN];
+/// assert!(verify_proof(&proof, &inputs).is_ok());
+///
+/// // Wrong proof length — rejected immediately.
+/// let short_proof = vec![0u8; 10];
+/// assert_eq!(
+///     verify_proof(&short_proof, &inputs).unwrap_err(),
+///     VerifierError::InvalidProofLength,
+/// );
+///
+/// // Oversized public_inputs — rejected immediately (W2-Z-017 fix).
+/// let oversized_inputs = vec![0u128; PUBLIC_INPUTS_LEN + 100];
+/// assert_eq!(
+///     verify_proof(&proof, &oversized_inputs).unwrap_err(),
+///     VerifierError::InvalidPublicInputsLength,
+/// );
+///
+/// // Undersized public_inputs — also rejected.
+/// let undersized_inputs = vec![0u128; PUBLIC_INPUTS_LEN - 1];
+/// assert_eq!(
+///     verify_proof(&proof, &undersized_inputs).unwrap_err(),
+///     VerifierError::InvalidPublicInputsLength,
+/// );
+/// ```
+pub fn verify_proof(
+    proof_bytes: &[u8],
+    public_inputs: &[u128],
+) -> Result<(), VerifierError> {
+    // Guard 1: proof must be exactly the expected byte length.
+    if proof_bytes.len() != PROOF_BYTES {
+        return Err(VerifierError::InvalidProofLength);
+    }
+
+    // Guard 2 (W2-Z-017 fix): public inputs must be exactly PUBLIC_INPUTS_LEN.
+    //
+    // The KYC verifier circuit has a fixed number of public inputs (5). Any
+    // deviation — whether an oversized slice injected by a malicious caller or
+    // an undersized slice from a buggy integration — is rejected here before
+    // the inputs are passed to the cryptographic verifier. This prevents
+    // unbounded resource consumption and ensures the verifier always operates
+    // on a well-formed input vector.
+    if public_inputs.len() != PUBLIC_INPUTS_LEN {
+        return Err(VerifierError::InvalidPublicInputsLength);
+    }
+
+    // Structural validation passed. Full cryptographic proof verification is
+    // delegated to the Soroban contract layer (Barretenberg / Noir verifier).
+    // This function is intentionally kept pure-Rust so it can be exhaustively
+    // unit-tested without a Soroban runtime.
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -119,6 +244,13 @@ pub enum VerifierError {
     InvalidAmount,
     /// The provided KYC score is out of the valid range `[0, 100]`.
     InvalidScore,
+    /// The proof byte slice does not match the expected length.
+    InvalidProofLength,
+    /// The public-inputs slice does not match the expected length.
+    ///
+    /// The KYC verifier circuit always produces exactly [`PUBLIC_INPUTS_LEN`]
+    /// public inputs. Passing more or fewer is a protocol error.
+    InvalidPublicInputsLength,
 }
 
 // ---------------------------------------------------------------------------
@@ -771,5 +903,107 @@ mod tests {
         // Third call: 21 ACBU — would push total to 101, exceeds cap
         let result = check_rate_gate(tier, CC_KE, after_second, 21 * DECIMALS);
         assert_eq!(result.unwrap_err(), VerifierError::DailyCapExceeded);
+    }
+
+    // ── verify_proof — structural validation (W2-Z-017) ────────────────────
+
+    /// Helper: returns a valid-sized proof byte slice.
+    fn valid_proof() -> Vec<u8> {
+        vec![0u8; PROOF_BYTES]
+    }
+
+    /// Helper: returns a valid-sized public-inputs slice.
+    fn valid_inputs() -> Vec<u128> {
+        vec![0u128; PUBLIC_INPUTS_LEN]
+    }
+
+    #[test]
+    fn verify_proof_correct_sizes_ok() {
+        // Both sizes are exact — structural validation must pass.
+        assert!(verify_proof(&valid_proof(), &valid_inputs()).is_ok());
+    }
+
+    #[test]
+    fn verify_proof_short_proof_rejected() {
+        let short = vec![0u8; PROOF_BYTES - 1];
+        assert_eq!(
+            verify_proof(&short, &valid_inputs()).unwrap_err(),
+            VerifierError::InvalidProofLength
+        );
+    }
+
+    #[test]
+    fn verify_proof_long_proof_rejected() {
+        let long = vec![0u8; PROOF_BYTES + 1];
+        assert_eq!(
+            verify_proof(&long, &valid_inputs()).unwrap_err(),
+            VerifierError::InvalidProofLength
+        );
+    }
+
+    #[test]
+    fn verify_proof_empty_proof_rejected() {
+        assert_eq!(
+            verify_proof(&[], &valid_inputs()).unwrap_err(),
+            VerifierError::InvalidProofLength
+        );
+    }
+
+    /// W2-Z-017: oversized public_inputs must be rejected before any
+    /// cryptographic work is performed.
+    #[test]
+    fn verify_proof_oversized_public_inputs_rejected() {
+        let oversized = vec![0u128; PUBLIC_INPUTS_LEN + 1];
+        assert_eq!(
+            verify_proof(&valid_proof(), &oversized).unwrap_err(),
+            VerifierError::InvalidPublicInputsLength
+        );
+    }
+
+    /// W2-Z-017: a significantly oversized public_inputs slice (resource/gas
+    /// abuse vector) must be rejected at the length check, not during
+    /// cryptographic processing.
+    #[test]
+    fn verify_proof_massively_oversized_public_inputs_rejected() {
+        let huge = vec![0u128; 10_000];
+        assert_eq!(
+            verify_proof(&valid_proof(), &huge).unwrap_err(),
+            VerifierError::InvalidPublicInputsLength
+        );
+    }
+
+    #[test]
+    fn verify_proof_undersized_public_inputs_rejected() {
+        let undersized = vec![0u128; PUBLIC_INPUTS_LEN - 1];
+        assert_eq!(
+            verify_proof(&valid_proof(), &undersized).unwrap_err(),
+            VerifierError::InvalidPublicInputsLength
+        );
+    }
+
+    #[test]
+    fn verify_proof_empty_public_inputs_rejected() {
+        assert_eq!(
+            verify_proof(&valid_proof(), &[]).unwrap_err(),
+            VerifierError::InvalidPublicInputsLength
+        );
+    }
+
+    #[test]
+    fn verify_proof_wrong_proof_takes_priority_over_bad_inputs() {
+        // Even if public_inputs are wrong size, proof length is checked first.
+        let short_proof = vec![0u8; 10];
+        let bad_inputs: Vec<u128> = vec![];
+        assert_eq!(
+            verify_proof(&short_proof, &bad_inputs).unwrap_err(),
+            VerifierError::InvalidProofLength
+        );
+    }
+
+    #[test]
+    fn public_inputs_len_constant_matches_circuit() {
+        // The KYC circuit has exactly 5 public inputs: min_tier, country_code,
+        // requested_amount, daily_cap, already_used.
+        assert_eq!(PUBLIC_INPUTS_LEN, 5);
     }
 }
