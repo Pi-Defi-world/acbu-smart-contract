@@ -22,13 +22,16 @@ The token WASM contract (`soroban_token_contract.wasm`) is imported by three cri
 
 ### 1. Hash Pinning
 
-**Token WASM Hash**: `6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d`
+**Token WASM Hash**: `8331ad752af7ff986f2b9497ac7383c57020bfc80ba19541f4142fc94d1348c1`
 
-This hash is pinned in three locations:
+This hash is pinned in two locations:
 
-- `acbu_minting/src/lib.rs` - contractimport! macro
-- `acbu_burning/src/lib.rs` - contractimport! macro
-- `acbu_reserve_tracker/src/lib.rs` - contractimport! macro
+- `build.rs` - `EXPECTED_HASH` constant (verified at compile time)
+- `acbu_minting/src/lib.rs` - `contractimport!` macro sha256 field
+
+Note: `acbu_burning` and `acbu_reserve_tracker` interact with the token contract
+via cross-contract call interfaces and do not embed the WASM directly, so they
+do not carry a `contractimport!` sha256 pin.
 
 ### 2. Build-Time Verification
 
@@ -116,9 +119,14 @@ If the token contract is intentionally updated:
 sha256sum soroban_token_contract.wasm
 ```
 
-### 2. Update All Three Locations
+### 2. Update All Locations
 
-**acbu_minting/src/lib.rs**:
+**`build.rs`** — `EXPECTED_HASH` constant:
+```rust
+const EXPECTED_HASH: &str = "NEW_HASH_HERE";
+```
+
+**`acbu_minting/src/lib.rs`** — `contractimport!` macro:
 ```rust
 #[allow(dead_code)]
 pub mod token_contract {
@@ -129,27 +137,8 @@ pub mod token_contract {
 }
 ```
 
-**acbu_burning/src/lib.rs**:
-```rust
-#[allow(dead_code)]
-pub mod token_contract {
-    soroban_sdk::contractimport!(
-        file = "../soroban_token_contract.wasm",
-        sha256 = "NEW_HASH_HERE"
-    );
-}
-```
-
-**acbu_reserve_tracker/src/lib.rs**:
-```rust
-#[allow(dead_code)]
-pub mod token_contract {
-    soroban_sdk::contractimport!(
-        file = "../soroban_token_contract.wasm",
-        sha256 = "NEW_HASH_HERE"
-    );
-}
-```
+Note: `acbu_burning` and `acbu_reserve_tracker` do not embed the WASM via
+`contractimport!`, so no changes are needed in those contracts.
 
 ### 3. Update Verification Scripts
 
@@ -191,10 +180,10 @@ CI will re-run the same checks automatically via `.github/workflows/verify-wasm-
 - CI/CD pipeline verifies WASM hash on every push/PR
 - Deployment script verifies hash before deployment
 
-✅ **Hash is pinned in all three contracts**
-- acbu_minting: `sha256 = "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"`
-- acbu_burning: `sha256 = "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"`
-- acbu_reserve_tracker: `sha256 = "6b14997b915dee21082884cd5a2f1f2f0aef0073d1dcb9c5b3c674cf487fb41d"`
+✅ **Hash is pinned and consistent**
+- `build.rs` `EXPECTED_HASH`: `8331ad752af7ff986f2b9497ac7383c57020bfc80ba19541f4142fc94d1348c1`
+- `acbu_minting/src/lib.rs` `contractimport!` sha256: `8331ad752af7ff986f2b9497ac7383c57020bfc80ba19541f4142fc94d1348c1`
+- `acbu_burning` and `acbu_reserve_tracker` do not use `contractimport!` and are not affected
 
 ✅ **Verification happens at multiple stages**
 - Build time: `build.rs`
