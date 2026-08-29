@@ -255,6 +255,15 @@ shared/
 - Soroban CLI (`cargo install --locked soroban-cli`)
 - Stellar account with XLM for deployment fees
 
+> **WASM target** — this project exclusively targets `wasm32-unknown-unknown`.
+> Do **not** use `wasm32v1-none` or any other WASM target; Soroban contracts
+> require `wasm32-unknown-unknown` and the CI pipeline, `rust-toolchain.toml`,
+> `Makefile`, and all build scripts are pinned to that target.
+>
+> ```bash
+> rustup target add wasm32-unknown-unknown
+> ```
+
 ## Vendored WASM Artifact
 
 The file `soroban_token_contract.wasm` at the repository root is a **vendored dependency** — it is committed to the repo and required at compile time by the minting, burning, and reserve-tracker contracts via `contractimport!`. Its SHA-256 integrity is verified automatically by `build.rs` during every `cargo build`.
