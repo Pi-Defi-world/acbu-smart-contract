@@ -772,4 +772,271 @@ mod tests {
         let result = check_rate_gate(tier, CC_KE, after_second, 21 * DECIMALS);
         assert_eq!(result.unwrap_err(), VerifierError::DailyCapExceeded);
     }
+
+    // ── W2-Z-022: Adversarial / budget regression tests ─────────────────────
+    //
+    // These tests exercise extreme, malformed, or boundary inputs across all
+    // pure-Rust verifier functions.  Because there is no Soroban budget here,
+    // we verify correctness and the absence of panics / undesirable behaviour
+    // rather than CPU/memory counts.
+
+    // -- check_rate_gate adversarial ------------------------------------------
+
+    /// already_used = i128::MAX - 1, requested = 1 → exactly at tier-3 "cap".
+    /// Tier 3 has no hard cap (i128::MAX sentinel); saturating_add must not panic.
+    #[test]
+    fn adversarial_rate_gate_tier3_already_used_near_max() {
+        let already_used = i128::MAX - 1;
+        let result = check_rate_gate(KycTier::Three, CC_NG, already_used, 1);
+        // saturating_add(i128::MAX - 1, 1) = i128::MAX — no panic, no error.
+        assert_eq!(result.unwrap(), i128::MAX);
+    }
+
+    /// already_used = i128::MAX, requested = i128::MAX → saturating_add stays
+    /// at i128::MAX for tier 3 instead of overflowing.
+    #[test]
+    fn adversarial_rate_gate_tier3_saturating_overflow() {
+        let result = check_rate_gate(KycTier::Three, CC_NG, i128::MAX, i128::MAX);
+        assert_eq!(result.unwrap(), i128::MAX);
+    }
+
+    /// Tier 2: already_used + requested would overflow i128 — checked_add must
+    /// return DailyCapExceeded, not a panic.
+    #[test]
+    fn adversarial_rate_gate_tier2_addition_overflow_is_cap_exceeded() {
+        // i128::MAX + 1 overflows → checked_add returns None → DailyCapExceeded.
+        let result = check_rate_gate(KycTier::Two, CC_NG, i128::MAX, 1);
+        assert_eq!(result.unwrap_err(), VerifierError::DailyCapExceeded);
+    }
+
+    /// Tier 1: already_used = cap - 1, requested = 2 → exactly one unit over
+    /// the daily cap.
+    #[test]
+    fn adversarial_rate_gate_tier1_one_unit_over_exact_cap() {
+        let result =
+            check_rate_gate(KycTier::One, CC_NG, KYC_TIER1_DAILY_CAP - 1, 2);
+        assert_eq!(result.unwrap_err(), VerifierError::DailyCapExceeded);
+    }
+
+    /// Tier 2: already_used = cap, requested = 1 → one over.
+    #[test]
+    fn adversarial_rate_gate_tier2_already_at_cap_any_request_blocked() {
+        let result =
+            check_rate_gate(KycTier::Two, CC_NG, KYC_TIER2_DAILY_CAP, 1);
+        assert_eq!(result.unwrap_err(), VerifierError::DailyCapExceeded);
+    }
+
+    /// Negative already_used (would not happen in production, but the function
+    /// must not panic — it uses arithmetic so the check still passes as long
+    /// as the cap is respected).
+    #[test]
+    fn adversarial_rate_gate_negative_already_used_does_not_panic() {
+        // already_used = -1, requested = 1 → new_total = 0, within any cap.
+        let result = check_rate_gate(KycTier::One, CC_NG, -1, 1);
+        assert!(result.is_ok());
+    }
+
+    /// Tier 3 with maximum possible requested amount — no cap check runs,
+    /// must not panic.
+    #[test]
+    fn adversarial_rate_gate_tier3_max_requested_no_panic() {
+        let result = check_rate_gate(KycTier::Three, CC_NG, 0, i128::MAX);
+        assert!(result.is_ok());
+    }
+
+    // -- median_of_slice adversarial ------------------------------------------
+
+    /// 100-element slice with monotonically increasing values.  The median of
+    /// elements [0..100] is the average of elements 49 and 50.
+    #[test]
+    fn adversarial_median_100_element_slice() {
+        let values: Vec<i128> = (0i128..100).collect();
+        // sorted even-length: mid-1=49, mid=50 → (49+50)/2 = 49
+        assert_eq!(median_of_slice(&values), Some(49));
+    }
+
+    /// 100-element slice where all values are the same.
+    #[test]
+    fn adversarial_median_100_all_same() {
+        let values = vec![999_999_999i128; 100];
+        assert_eq!(median_of_slice(&values), Some(999_999_999));
+    }
+
+    /// Alternating very large and very small values — tests that sort is stable
+    /// and median picks the true middle, not the first or last element.
+    #[test]
+    fn adversarial_median_alternating_extremes() {
+        let mut values = Vec::new();
+        for i in 0..50 {
+            values.push(i128::MAX - i);
+            values.push(i);
+        }
+        // After sort: 0,1,2,...,49, MAX-49,...,MAX-0
+        // n=100, mid=50: elements at 49 and 50 → (49 + (MAX-49)) / 2 = MAX/2
+        let result = median_of_slice(&values);
+        assert!(result.is_some(), "alternating-extremes median must not overflow");
+        let m = result.unwrap();
+        // Should be close to i128::MAX / 2.
+        assert!(m > 0 && m < i128::MAX, "median of alternating extremes must be mid-range");
+    }
+
+    /// Already-sorted descending slice — sort_unstable handles this.
+    #[test]
+    fn adversarial_median_descending_input() {
+        let values: Vec<i128> = (0i128..11).rev().collect(); // [10,9,...,0]
+        // After sort: [0,1,...,10], mid=5 → median = 5
+        assert_eq!(median_of_slice(&values), Some(5));
+    }
+
+    /// Single very large positive value.
+    #[test]
+    fn adversarial_median_single_max_value() {
+        assert_eq!(median_of_slice(&[i128::MAX]), Some(i128::MAX));
+    }
+
+    /// Single very large negative value.
+    #[test]
+    fn adversarial_median_single_min_value() {
+        assert_eq!(median_of_slice(&[i128::MIN]), Some(i128::MIN));
+    }
+
+    /// Two-element slice where average overflows (both i128::MAX) — must return
+    /// None rather than panic.
+    #[test]
+    fn adversarial_median_two_max_values_overflow_returns_none() {
+        assert_eq!(median_of_slice(&[i128::MAX, i128::MAX]), None);
+    }
+
+    /// Mix of positive, negative, and zero values.
+    #[test]
+    fn adversarial_median_mixed_sign_values() {
+        let values = [-1_000_000i128, 0, 1_000_000, -500_000, 500_000];
+        // Sorted: [-1_000_000, -500_000, 0, 500_000, 1_000_000]
+        assert_eq!(median_of_slice(&values), Some(0));
+    }
+
+    // -- calculate_fee adversarial --------------------------------------------
+
+    /// Near-max i128 amount with zero fee rate → fee = 0.
+    #[test]
+    fn adversarial_fee_zero_rate_on_huge_amount() {
+        assert_eq!(calculate_fee(i128::MAX / 2, 0), 0);
+    }
+
+    /// Amount = 1, fee_rate = BASIS_POINTS - 1 (9 999 bps = 99.99%) → fee
+    /// truncates to 0 (integer division rounds down).
+    #[test]
+    fn adversarial_fee_almost_100_percent_on_unit_amount() {
+        assert_eq!(calculate_fee(1, BASIS_POINTS - 1), 0);
+    }
+
+    /// Amount = BASIS_POINTS, fee_rate = 1 bps → fee = 1 (exact integer result).
+    #[test]
+    fn adversarial_fee_1_bps_exact_integer_result() {
+        assert_eq!(calculate_fee(BASIS_POINTS, 1), 1);
+    }
+
+    /// fee + net must always equal the original amount for a range of inputs.
+    #[test]
+    fn adversarial_fee_plus_net_equals_amount_for_various_inputs() {
+        let cases: &[(i128, i128)] = &[
+            (1_000_000 * DECIMALS, 30),   // 0.3% fee
+            (1, 10_000),                  // 100% fee on 1 unit
+            (i128::MAX / 10_000, 10_000), // 100% on large amount
+            (999_999_999, 333),           // odd numbers
+        ];
+        for &(amount, rate) in cases {
+            let fee = calculate_fee(amount, rate);
+            let net = calculate_amount_after_fee(amount, rate);
+            assert_eq!(
+                fee + net,
+                amount,
+                "fee+net must equal amount for amount={amount}, rate={rate}"
+            );
+        }
+    }
+
+    // -- calculate_deviation_bps adversarial ----------------------------------
+
+    /// value and base both equal i128::MAX — deviation is 0.
+    #[test]
+    fn adversarial_deviation_both_i128_max() {
+        assert_eq!(calculate_deviation_bps(i128::MAX, i128::MAX), 0);
+    }
+
+    /// value = 0, base = i128::MAX → deviation = 10_000 bps (100%).
+    #[test]
+    fn adversarial_deviation_zero_value_max_base() {
+        // diff = i128::MAX, base = i128::MAX → diff * BASIS_POINTS / base = BASIS_POINTS
+        assert_eq!(calculate_deviation_bps(0, i128::MAX), BASIS_POINTS);
+    }
+
+    /// value = i128::MAX, base = 1 → diff * BASIS_POINTS overflows checked_mul
+    /// path (this is plain arithmetic, not checked).  We document the expected
+    /// result: (i128::MAX - 1) * 10_000 / 1 may overflow in i128, wrapping.
+    /// The important contract is: no *panic*, and the function returns *some*
+    /// value.
+    #[test]
+    fn adversarial_deviation_max_value_unit_base_no_panic() {
+        // This should not panic even with extreme values.
+        let _ = calculate_deviation_bps(i128::MAX, 1);
+    }
+
+    /// value = base + 1 when base is large — deviation should be very small but
+    /// non-zero.
+    #[test]
+    fn adversarial_deviation_near_equal_large_values() {
+        let base = 1_000_000_000_000i128;
+        let value = base + 1;
+        // diff=1, deviation = 1 * 10_000 / 1_000_000_000_000 = 0 (rounds to 0)
+        assert_eq!(calculate_deviation_bps(value, base), 0);
+    }
+
+    /// Symmetric check: deviation(base+d, base) == deviation(base-d, base).
+    #[test]
+    fn adversarial_deviation_symmetric_for_large_delta() {
+        let base = 1_000_000i128;
+        let delta = 123_456i128;
+        assert_eq!(
+            calculate_deviation_bps(base + delta, base),
+            calculate_deviation_bps(base - delta, base),
+            "deviation must be symmetric around base"
+        );
+    }
+
+    // -- kyc_tier_from_score adversarial --------------------------------------
+
+    /// All boundary scores produce the correct tier without panic.
+    #[test]
+    fn adversarial_kyc_tier_all_exact_boundaries() {
+        let cases: &[(u32, KycTier)] = &[
+            (0, KycTier::Zero),
+            (29, KycTier::Zero),
+            (30, KycTier::One),
+            (59, KycTier::One),
+            (60, KycTier::Two),
+            (89, KycTier::Two),
+            (90, KycTier::Three),
+            (100, KycTier::Three),
+        ];
+        for &(score, expected) in cases {
+            assert_eq!(
+                kyc_tier_from_score(score).unwrap(),
+                expected,
+                "score {score} must map to {expected:?}"
+            );
+        }
+    }
+
+    /// Every score in [101, u32::MAX] must return InvalidScore without panic.
+    #[test]
+    fn adversarial_kyc_tier_out_of_range_never_panics() {
+        for score in [101u32, 255, 1_000, u32::MAX / 2, u32::MAX] {
+            assert_eq!(
+                kyc_tier_from_score(score).unwrap_err(),
+                VerifierError::InvalidScore,
+                "score {score} must return InvalidScore"
+            );
+        }
+    }
 }
