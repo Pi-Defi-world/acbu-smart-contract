@@ -505,7 +505,6 @@ impl LendingPool {
             .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP);
 
         let timestamp = env.ledger().timestamp();
-        let fee_rate: i128 = env.storage().instance().get(&DataKey::FeeRate).unwrap_or(0);
 
         env.events().publish(
             (symbol_short!("borrow"), borrower.clone()),
@@ -524,7 +523,7 @@ impl LendingPool {
                 lender,
                 borrower,
                 amount,
-                interest_bps: fee_rate,
+                interest_bps: fee_rate_bps,
                 term_seconds: LOAN_TERM_SECONDS,
                 timestamp,
             },
