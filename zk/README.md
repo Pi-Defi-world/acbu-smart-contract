@@ -12,12 +12,23 @@ revealing the underlying private data (KYC score).
 
 ## Prerequisites
 
-Install [Nargo](https://noir-lang.org/docs/getting_started/installation/):
+Install [Nargo](https://noir-lang.org/docs/getting_started/installation/) **v0.38.0** (pinned).
+
+> **Version requirement** — The circuits declare `compiler_version = "=0.38.0"` in
+> `Nargo.toml`. Using a different Nargo version may produce incompatible proofs or
+> fail to compile. Always use the pinned version to ensure reproducible builds.
+>
+> If you need to upgrade, bump `NARGO_VERSION` in
+> `.github/workflows/circuit-tests.yml` **and** update `compiler_version` in every
+> `zk/circuits/*/Nargo.toml` to match.
 
 ```bash
-# Linux / macOS
+# Linux / macOS — install the pinned Nargo v0.38.0
 curl -sSL https://github.com/noir-lang/noir/releases/download/v0.38.0/nargo-x86_64-unknown-linux-gnu.tar.gz \
   | tar -xz -C /usr/local/bin
+
+# Verify the installed version matches the pin
+nargo --version   # expected: nargo version = 0.38.0
 ```
 
 ## Running circuit tests
