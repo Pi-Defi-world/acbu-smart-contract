@@ -4,12 +4,13 @@ This document summarizes the fixes applied to resolve SDK 21 compatibility issue
 
 ## Summary of Issues Resolved
 
-This PR resolves 4 Wave-8 issues related to Soroban SDK 21.7.7 compatibility:
+This PR resolves 6 Wave-8 issues related to Soroban SDK 21.7.7 compatibility:
 
 | Issue | Title | Contract | Status |
 |-------|-------|----------|--------|
 | #581 (W2-C-001) | `soroban_sdk::contractevent` does not exist in SDK 21 | acbu_escrow | ✅ FIXED |
 | #582 (W2-C-002) | `EscrowCreatedEvent` fails `Val: TryFromVal` bound | acbu_escrow | ✅ FIXED |
+| #591 (W2-C-011) | `soroban_sdk::contractevent` does not exist in SDK 21 | acbu_lending_pool | ✅ FIXED |
 | #601 (W2-C-021) | `DepositEvent` fails `Val: TryFromVal` | acbu_savings_vault | ✅ FIXED |
 | #603 (W2-C-023) | `vec!` macro not in scope (no_std) | acbu_reserve_tracker | ✅ FIXED |
 
@@ -48,6 +49,16 @@ The key aspects:
 - ✅ `EscrowCreatedEvent` uses `#[contracttype]` attribute (line 109)
 - ✅ `EscrowReleasedEvent` uses `#[contracttype]` attribute (line 119)
 - ✅ `EscrowRefundedEvent` uses `#[contracttype]` attribute (line 128)
+- ✅ All events properly published via `env.events().publish((topics...), event)`
+
+#### acbu_lending_pool/src/lib.rs (Issue #591 / W2-C-011)
+- ✅ No `contractevent` import present (SDK 21 does not provide this)
+- ✅ `DepositEvent` uses `#[contracttype]` attribute
+- ✅ `BorrowEvent` uses `#[contracttype]` attribute
+- ✅ `RepayEvent` uses `#[contracttype]` attribute
+- ✅ `LoanCreatedEvent` uses `#[contracttype]` attribute
+- ✅ `LoanRepaidEvent` uses `#[contracttype]` attribute
+- ✅ `RepaymentEvent` uses `#[contracttype]` attribute
 - ✅ All events properly published via `env.events().publish((topics...), event)`
 
 #### acbu_savings_vault/src/lib.rs (Issue #601)
