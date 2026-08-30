@@ -25,7 +25,6 @@
 # OS files
 .DS_Store
 Thumbs.db
-target/
 **/*.rs.bk
 .soroban/
 .stellar/
