@@ -2,6 +2,6 @@
 name = "kyc_verifier"
 type = "bin"
 authors = ["ACBU Protocol"]
-compiler_version = ">=0.38.0"
+compiler_version = "=0.38.0"
 
 [dependencies]

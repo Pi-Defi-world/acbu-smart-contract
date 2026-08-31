@@ -254,6 +254,19 @@ shared/
 - `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`)
 - Soroban CLI (`cargo install --locked soroban-cli`)
 - Stellar account with XLM for deployment fees
+- **Nargo 0.38.0** (pinned — required to build/test ZK circuits in `zk/`)
+
+  ```bash
+  # Install the pinned Nargo version (Linux/macOS)
+  curl -sSL https://github.com/noir-lang/noir/releases/download/v0.38.0/nargo-x86_64-unknown-linux-gnu.tar.gz \
+    | tar -xz -C /usr/local/bin
+  nargo --version   # expected: nargo version = 0.38.0
+  ```
+
+  > The Nargo version is enforced by `compiler_version = "=0.38.0"` in
+  > `zk/circuits/*/Nargo.toml` and by `NARGO_VERSION` in
+  > `.github/workflows/circuit-tests.yml`. See [`zk/README.md`](zk/README.md)
+  > for details on upgrading.
 
 > **WASM target** — this project exclusively targets `wasm32-unknown-unknown`.
 > Do **not** use `wasm32v1-none` or any other WASM target; Soroban contracts
