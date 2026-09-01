@@ -147,7 +147,7 @@ pub struct LoanRepaidEvent {
 }
 
 #[contracttype]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct RepaymentEvent {
     pub borrower: Address,
     pub amount: i128,
