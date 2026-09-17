@@ -13,14 +13,11 @@ soroban_token_contract.wasm
 
 # Editor/IDE files
 .idea/
-.vscode/
 *.swp
 *.swo
 *~
 
 # Environment files
-.env
-.env.*
 
 # OS files
 .DS_Store
@@ -36,3 +33,5 @@ test_snapshots/
 # surface and should not be committed to source control.
 /ISSUES.md
 /SECURITY_FIX_SUMMARY.md
+config.bat
+node_modules
