@@ -13,14 +13,11 @@
 
 # Editor/IDE files
 .idea/
-.vscode/
 *.swp
 *.swo
 *~
 
 # Environment files
-.env
-.env.*
 
 # OS files
 .DS_Store
@@ -50,3 +47,5 @@ test_comprehensive.rs
 # Python
 __pycache__/
 *.pyc
+config.bat
+node_modules
