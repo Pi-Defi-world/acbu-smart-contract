@@ -436,7 +436,9 @@ Collateral policy (in the borrow entrypoint):
 - `LoanData.collateral_amount` is retained (always `0`) and error code `2014`
   (`InsufficientCollateral`) is reserved for a future *distinct-asset* collateral
   extension, which additionally needs oracle pricing and a liquidation path.
-- There is no `liquidate()` entrypoint yet; an unrepaid loan simply stays open.
+- An overdue loan can be written off by its lender through `liquidate()`; the
+  outstanding principal is removed from the lender's tracked balance and the
+  loan remains auditable with `LoanStatus::Defaulted`.
 
 ### 10.3 Escrow (`acbu_escrow/`)
 

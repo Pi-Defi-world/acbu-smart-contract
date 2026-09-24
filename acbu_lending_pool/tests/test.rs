@@ -374,14 +374,8 @@ fn test_repay_wrong_loan_id_fails() {
     );
 }
 
-/// 5. Loan default scenario.
-///
-/// The contract does not implement a liquidation or default function in the current
-/// MVP — there is no `liquidate()`, `mark_default()`, or time-based enforcement.
-/// This test documents that behaviour: a loan that is never repaid simply remains
-/// open in storage indefinitely.  When a liquidation path is added (tracked in the
-/// issue backlog), this test should be updated to call that function and assert the
-/// correct state transition.
+/// 5. Loan default scenario: an overdue loan can be liquidated by its lender,
+/// writing off the missing principal and releasing the lender's remaining funds.
 #[test]
 fn test_loan_default_scenario() {
     let env = Env::default();
@@ -397,6 +391,7 @@ fn test_loan_default_scenario() {
     client.initialize(&admin, &acbu_token, &0);
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
+    let token_client = TokenClient::new(&env, &acbu_token);
 
     let lender = Address::generate(&env);
     let pool_liquidity: i128 = 1_000_000;
@@ -408,18 +403,20 @@ fn test_loan_default_scenario() {
     let loan_id: u64 = 55;
     client.borrow(&borrower, &lender, &borrow_amount, &loan_id);
 
-    // Borrower never repays — loan remains open.
-    // No liquidation function exists yet; assert the loan is still present and overdue.
-    let loan = client
-        .get_loan(&borrower, &loan_id)
-        .expect("defaulted loan must still be present in storage");
-    assert_eq!(loan.amount, borrow_amount, "loan.amount should equal borrow_amount");
+    env.ledger().with_mut(|ledger| {
+        ledger.timestamp += 30 * 24 * 60 * 60 + 1;
+    });
 
-    // TODO: when a `liquidate(loan_id)` function is implemented, call it here and
-    // assert that:
-    //   - the loan is removed from storage
-    //   - collateral is transferred to the protocol / lender
-    //   - a LiquidationEvent is emitted
+    client.liquidate(&lender, &borrower, &loan_id);
+
+    let loan = client.get_loan(&borrower, &loan_id).expect("loan must remain auditable");
+    assert_eq!(loan.amount, borrow_amount, "defaulted loan retains outstanding principal");
+    assert!(matches!(loan.status, LoanStatus::Defaulted));
+    assert_eq!(client.get_borrowed(&lender), 0);
+    assert_eq!(client.get_available_balance(&lender), pool_liquidity - borrow_amount);
+    assert_eq!(client.get_total_lender_balance(), pool_liquidity - borrow_amount);
+    client.withdraw(&lender, &(pool_liquidity - borrow_amount));
+    assert_eq!(token_client.balance(&lender), pool_liquidity - borrow_amount);
 }
 
 /// 6. Full lifecycle: initialize → deposit → borrow → repay → withdraw.
