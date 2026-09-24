@@ -23,6 +23,8 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 13 | `SlippageExceeded` | The computed output amount is below the caller-supplied minimum acceptable output (`min_*_out`), indicating that same-block oracle movement would cause unacceptable slippage for this transaction. |
 | 14 | `ArithmeticOverflow` | A fee, deviation or amount computation overflowed `i128`. Returned instead of aborting the contract so callers can surface a recoverable error. |
 | 15 | `InvalidCircuitPeer` | A circuit-breaker peer list is invalid: too many entries, a duplicate, or the contract itself. |
+| 16 | `CommitmentAlreadyAttested` | The credential commitment was already attested by the KYC authority (zk_verifier trusted commitment registry, AZ-002). |
+| 17 | `CommitmentNotAttested` | The credential commitment submitted with a proof was never attested by the trusted KYC authority (zk_verifier trusted commitment registry, AZ-002). |
 | 9999 | `Unknown` | unknown error |
 
 ## `shared / reentrancy guard` - `ReentrancyError`
