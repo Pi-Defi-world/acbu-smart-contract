@@ -9,7 +9,7 @@
     "description": "[currency_tuple, weight_bps]",
     "minItems": 2,
     "maxItems": 2,
-    "prefixItems": [
+    "items": [
       {
         "type": "array",
         "description": "Single-element tuple wrapping the currency code",

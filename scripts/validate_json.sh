@@ -19,7 +19,7 @@ validate() {
     local schema="$1"
     local data="$2"
     echo "Validating $(basename "$data") ..."
-    if npx --yes ajv-cli validate -s "$schema" -d "$data" --spec=draft7 2>&1; then
+    if npx --yes ajv-cli@5.0.0 validate -s "$schema" -d "$data" --spec=draft7 2>&1; then
         echo "  ✓ $(basename "$data") is valid"
     else
         echo "  ✗ $(basename "$data") FAILED validation"

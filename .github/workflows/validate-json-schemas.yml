@@ -32,13 +32,13 @@ jobs:
           node-version-file: '.nvmrc'
 
       - name: Validate validators.json
-        run: npx --yes ajv-cli validate -s schemas/validators.schema.json -d validators.json --spec=draft7
+        run: npx --yes ajv-cli@5.0.0 validate -s schemas/validators.schema.json -d validators.json --spec=draft7
 
       - name: Validate weights.json
-        run: npx --yes ajv-cli validate -s schemas/weights.schema.json -d weights.json --spec=draft7
+        run: npx --yes ajv-cli@5.0.0 validate -s schemas/weights.schema.json -d weights.json --spec=draft7
 
       - name: Validate oracle_basket_currencies.json
-        run: npx --yes ajv-cli validate -s schemas/oracle_basket_currencies.schema.json -d scripts/oracle_basket_currencies.json --spec=draft7
+        run: npx --yes ajv-cli@5.0.0 validate -s schemas/oracle_basket_currencies.schema.json -d scripts/oracle_basket_currencies.json --spec=draft7
 
       - name: Validate oracle_basket_weights_bps.json
-        run: npx --yes ajv-cli validate -s schemas/oracle_basket_weights_bps.schema.json -d scripts/oracle_basket_weights_bps.json --spec=draft7
+        run: npx --yes ajv-cli@5.0.0 validate -s schemas/oracle_basket_weights_bps.schema.json -d scripts/oracle_basket_weights_bps.json --spec=draft7
