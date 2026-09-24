@@ -21,6 +21,7 @@ pub enum ReserveTrackerError {
     AdminTimelockNotElapsed = 8005,
     NoPendingAdminToCancel = 8006,
     Unauthorized = 8007,
+    DuplicateCurrency = 8008,
     AttestationNotFound = 8008,
     InvalidMerkleProof = 8009,
     InvalidCustodian = 8010,
