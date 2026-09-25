@@ -30,5 +30,8 @@ jobs:
       - name: Verify committed Cargo lockfile
         run: cargo metadata --locked --format-version 1 > /dev/null
 
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
       - name: Run cargo audit
         run: cargo audit --file Cargo.lock

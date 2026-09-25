@@ -47,7 +47,7 @@ jobs:
 
       # Cache the Nargo download / compilation artifacts.
       - name: Cache Nargo artifacts
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.nargo
