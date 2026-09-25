@@ -7,6 +7,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+AJV_CLI_VERSION="${AJV_CLI_VERSION:-5.0.0}"
 
 check_dep() {
     if ! command -v npx &>/dev/null; then
@@ -19,7 +20,7 @@ validate() {
     local schema="$1"
     local data="$2"
     echo "Validating $(basename "$data") ..."
-    if npx --yes ajv-cli validate -s "$schema" -d "$data" --spec=draft7 2>&1; then
+    if npx --yes "ajv-cli@$AJV_CLI_VERSION" validate -s "$schema" -d "$data" --spec=draft7 2>&1; then
         echo "  ✓ $(basename "$data") is valid"
     else
         echo "  ✗ $(basename "$data") FAILED validation"
