@@ -329,6 +329,13 @@ impl LendingPool {
     /// portion of the balance not currently lent out (balance minus borrowed) may
     /// be withdrawn. A withdrawal must either drain the balance to zero or leave at
     /// least [`MIN_POOL_BALANCE`]; otherwise it fails with [`Error::DustBalance`].
+    ///
+    /// Before transferring tokens, the contract cross-checks that its actual SAC
+    /// token balance is sufficient to cover `amount` (AC-035). This ensures that
+    /// if internal accounting ever diverges from real holdings (e.g., due to
+    /// interest routing or an upgrade bug) the failure is surfaced as an explicit
+    /// [`Error::InsufficientBalance`] from the lending pool rather than an opaque
+    /// error from the token contract.
     pub fn withdraw(env: Env, lender: Address, amount: i128) {
         // Re-entrancy guard
         let _guard = reentrancy_guard::acquire_guard(&env);
@@ -384,12 +391,30 @@ impl LendingPool {
                 PERSISTENT_TTL_BUMP,
             );
         }
+        // AC-035: decrement TotalLenderBalance to keep the pool invariant
+        // (TotalLenderBalance - ActiveLoansLiquidity == SAC balance) intact.
+        // Previously this call was missing, causing TotalLenderBalance to drift
+        // upward after every withdrawal.
+        Self::adjust_total_lender_balance(&env, -amount);
+
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP);
 
         let acbu_token: Address = env.storage().instance().get(&DataKey::AcbuToken).unwrap();
         let token = soroban_sdk::token::Client::new(&env, &acbu_token);
+
+        // AC-035: cross-check the contract's real SAC balance before attempting
+        // the transfer. Internal accounting (Balance - Borrowed) should match,
+        // but if it ever diverges (e.g., interest routing bug, upgrade, or
+        // external direct token send) this guard surfaces the failure with an
+        // explicit InsufficientBalance from the lending pool instead of an
+        // opaque error from the token contract.
+        let contract_balance = token.balance(&env.current_contract_address());
+        if contract_balance < amount {
+            env.panic_with_error(Error::InsufficientBalance);
+        }
+
         token.transfer(&env.current_contract_address(), &lender, &amount);
 
         env.events()
