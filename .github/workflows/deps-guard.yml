@@ -94,6 +94,55 @@ jobs:
           fi
           echo "Cargo.lock is fully registry-sourced with checksums."
 
+      - name: Verify Soroban SDK provenance and versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import pathlib
+          import tomllib
+
+          root = pathlib.Path("Cargo.toml")
+          lock = pathlib.Path("Cargo.lock")
+          manifest = tomllib.loads(root.read_text())
+          lockfile = tomllib.loads(lock.read_text())
+
+          expected = {
+              "soroban-sdk": "21.7.7",
+              "soroban-env-host": "21.2.1",
+          }
+          workspace_deps = manifest.get("workspace", {}).get("dependencies", {})
+          packages = {
+              package["name"]: package
+              for package in lockfile.get("package", [])
+              if package["name"] in expected
+          }
+
+          for name, version in expected.items():
+              declared = workspace_deps.get(name)
+              if declared.lstrip("=") != version:
+                  raise SystemExit(
+                      f"{name} must be pinned to {version} in workspace.dependencies; "
+                      f"found {declared!r}"
+                  )
+
+              package = packages.get(name)
+              if package is None:
+                  raise SystemExit(f"Cargo.lock is missing {name}")
+              if package["version"] != version:
+                  raise SystemExit(
+                      f"Cargo.lock resolves {name} to {package['version']}, expected {version}"
+                  )
+              if not package.get("source", "").startswith(
+                  "registry+https://github.com/rust-lang/crates.io-index"
+              ):
+                  raise SystemExit(
+                      f"{name} must resolve from crates.io, found {package.get('source')!r}"
+                  )
+
+          print("Soroban SDK dependencies use the pinned crates.io versions.")
+          PYEOF
+
   offline-resolve:
     name: Resolve without live GitHub access
     runs-on: ubuntu-latest
