@@ -29,6 +29,17 @@ fn main(
     allowed_country: pub u64,
     nullifier: pub Field,
 ) {
+    // Keep the credential and policy inputs inside their documented domains.
+    // Without these guards, arbitrary u64 values could be committed and
+    // compared successfully even though they are not valid KYC levels or ISO
+    // 3166-1 numeric country codes.
+    assert(kyc_level <= 3);
+    assert(required_kyc <= 3);
+    assert(country_code > 0);
+    assert(country_code <= 999);
+    assert(allowed_country > 0);
+    assert(allowed_country <= 999);
+
     // 1) Prove knowledge of the credential behind the commitment
     let computed: Field = poseidon2_hash_4(
         kyc_level as Field,
@@ -72,5 +83,47 @@ fn test_valid_enterprise_kes() {
         2,
         404,
         poseidon2_hash_2(poseidon2_hash_4(3, 404, 99999, 0), 99999),
+    );
+}
+
+#[test(should_fail)]
+fn test_rejects_kyc_level_outside_documented_range() {
+    let commitment = poseidon2_hash_4(4, 566, 12345, 0);
+    main(
+        1,
+        566,
+        12345,
+        commitment,
+        1,
+        566,
+        poseidon2_hash_2(commitment, 12345),
+    );
+}
+
+#[test(should_fail)]
+fn test_rejects_country_code_outside_iso_numeric_range() {
+    let commitment = poseidon2_hash_4(1, 1000, 12345, 0);
+    main(
+        1,
+        1000,
+        12345,
+        commitment,
+        1,
+        1000,
+        poseidon2_hash_2(commitment, 12345),
+    );
+}
+
+#[test(should_fail)]
+fn test_rejects_zero_country_code() {
+    let commitment = poseidon2_hash_4(1, 0, 12345, 0);
+    main(
+        1,
+        0,
+        12345,
+        commitment,
+        1,
+        0,
+        poseidon2_hash_2(commitment, 12345),
     );
 }
