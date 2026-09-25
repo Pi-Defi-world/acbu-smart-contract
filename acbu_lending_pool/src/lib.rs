@@ -347,14 +347,22 @@ impl LendingPool {
             env.panic_with_error(Error::DustBalance);
         }
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(lender.clone()), &new_balance);
-        env.storage().persistent().extend_ttl(
-            &DataKey::Balance(lender.clone()),
-            PERSISTENT_TTL_THRESHOLD,
-            PERSISTENT_TTL_BUMP,
-        );
+        // If the balance is now exactly zero, remove the storage entry entirely
+        // to avoid unnecessary storage entries for empty positions.
+        if new_balance == 0 {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::Balance(lender.clone()));
+        } else {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Balance(lender.clone()), &new_balance);
+            env.storage().persistent().extend_ttl(
+                &DataKey::Balance(lender.clone()),
+                PERSISTENT_TTL_THRESHOLD,
+                PERSISTENT_TTL_BUMP,
+            );
+        }
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP);
