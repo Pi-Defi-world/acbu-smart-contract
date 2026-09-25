@@ -347,8 +347,8 @@ impl LendingPool {
             env.panic_with_error(Error::DustBalance);
         }
 
-        // If the balance is now exactly zero, remove the storage entry entirely
-        // to avoid unnecessary storage entries for empty positions.
+        // If balance reaches exactly zero, remove the storage entry to avoid
+        // leaving an unnecessary zero-value entry in storage.
         if new_balance == 0 {
             env.storage()
                 .persistent()

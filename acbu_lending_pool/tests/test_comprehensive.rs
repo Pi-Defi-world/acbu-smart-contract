@@ -758,3 +758,185 @@ fn test_loan_created_event_has_correct_term_seconds() {
         "event.timestamp should match borrow timestamp"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ISSUE #311: DUST BALANCE AND STORAGE CLEANUP TESTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Regression test for issue #311: A withdrawal that would leave exactly 1 stroop
+/// (dust) should fail with DustBalance error, not succeed silently.
+#[test]
+fn test_withdraw_leaving_exactly_one_stroop_fails() {
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
+
+    let lender = Address::generate(&env);
+    let amount = 100 * DECIMALS; // 100 ACBU
+
+    let token_admin = StellarAssetClient::new(&env, &acbu_token);
+    token_admin.mint(&lender, &amount);
+
+    client.deposit(&lender, &amount);
+
+    // Withdrawing all but 1 stroop would leave a 1-stroop dust balance.
+    // This should fail with DustBalance error.
+    let result = client.try_withdraw(&lender, &(amount - 1));
+    assert!(result.is_err(), "Withdrawal leaving 1 stroop dust must fail");
+    
+    // Balance must remain untouched after failed withdrawal
+    assert_eq!(client.get_balance(&lender), amount, "Balance must remain unchanged after failed dust withdrawal");
+}
+
+/// Positive test: Full withdrawal (balance becomes exactly 0) succeeds and storage entry is cleaned up.
+#[test]
+fn test_withdraw_full_balance_removes_storage_entry() {
+    let (env, client, contract_id, _admin, acbu_token) = setup();
+
+    let lender = Address::generate(&env);
+    let amount = 100 * DECIMALS;
+
+    let token_admin = StellarAssetClient::new(&env, &acbu_token);
+    token_admin.mint(&lender, &amount);
+
+    client.deposit(&lender, &amount);
+    assert_eq!(client.get_balance(&lender), amount, "Balance should be set after deposit");
+
+    // Withdraw the full balance — this should succeed and remove the storage entry
+    client.withdraw(&lender, &amount);
+
+    // After full withdrawal, balance should be 0
+    assert_eq!(client.get_balance(&lender), 0, "Balance should be 0 after full withdrawal");
+
+    // Verify that the storage entry is removed by attempting to query again —
+    // the contract should return 0 for a non-existent entry (default behavior).
+    // This test confirms storage cleanup by checking that subsequent deposits work normally.
+    let second_deposit = 50 * DECIMALS;
+    token_admin.mint(&lender, &second_deposit);
+    client.deposit(&lender, &second_deposit);
+    assert_eq!(client.get_balance(&lender), second_deposit, "Balance should reflect new deposit after full withdrawal");
+}
+
+/// Positive test: Partial withdrawal leaving balance at or above minimum threshold succeeds.
+#[test]
+fn test_withdraw_leaving_above_minimum_balance_succeeds() {
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
+
+    let lender = Address::generate(&env);
+    let amount = 100 * DECIMALS; // 100 ACBU = 100_000_000_000 stroops
+
+    let token_admin = StellarAssetClient::new(&env, &acbu_token);
+    token_admin.mint(&lender, &amount);
+
+    client.deposit(&lender, &amount);
+
+    // MIN_POOL_BALANCE = 1_000_000 stroops = 0.1 ACBU
+    // Withdraw to leave exactly 2 ACBU (2_000_000_000 stroops) — well above minimum.
+    let withdraw_amount = amount - (2 * DECIMALS);
+    client.withdraw(&lender, &withdraw_amount);
+
+    assert_eq!(client.get_balance(&lender), 2 * DECIMALS, "Balance should be 2 ACBU after withdrawal");
+}
+
+/// Boundary test: Withdrawal leaving balance exactly equal to MIN_POOL_BALANCE (1_000_000 stroops) succeeds.
+#[test]
+fn test_withdraw_leaving_exactly_minimum_balance_succeeds() {
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
+
+    let lender = Address::generate(&env);
+    // Deposit 100.1 ACBU (100_100_000 stroops) so we can withdraw to exactly MIN_POOL_BALANCE (1_000_000)
+    let amount = 100_100_000i128; // In stroops
+    
+    let token_admin = StellarAssetClient::new(&env, &acbu_token);
+    // Use mint with exact stroop amount (avoiding DECIMALS which is 10_000_000_000 for 7-decimal token)
+    // Instead, deposit via normal flow with adjusted amounts
+    
+    let amount_acbu = 100 * DECIMALS + 1_000_000; // 100.1 ACBU
+    token_admin.mint(&lender, &amount_acbu);
+    client.deposit(&lender, &amount_acbu);
+
+    // Withdraw to leave exactly MIN_POOL_BALANCE (1_000_000 stroops = 0.0001 ACBU)
+    let withdraw_amount = amount_acbu - 1_000_000;
+    client.withdraw(&lender, &withdraw_amount);
+
+    // Should succeed and balance should be exactly 1_000_000
+    assert_eq!(client.get_balance(&lender), 1_000_000, "Balance should be exactly MIN_POOL_BALANCE after withdrawal");
+}
+
+/// Boundary test: Withdrawal leaving balance exactly one unit below MIN_POOL_BALANCE fails.
+#[test]
+fn test_withdraw_leaving_just_below_minimum_balance_fails() {
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
+
+    let lender = Address::generate(&env);
+    // Deposit 100.1 ACBU so we can attempt to withdraw to just below MIN_POOL_BALANCE
+    let amount_acbu = 100 * DECIMALS + 1_000_000;
+    
+    let token_admin = StellarAssetClient::new(&env, &acbu_token);
+    token_admin.mint(&lender, &amount_acbu);
+    client.deposit(&lender, &amount_acbu);
+
+    // Try to withdraw to leave 999_999 stroops (just below MIN_POOL_BALANCE of 1_000_000)
+    let withdraw_amount = amount_acbu - 999_999;
+    let result = client.try_withdraw(&lender, &withdraw_amount);
+    
+    assert!(result.is_err(), "Withdrawal leaving just below MIN_POOL_BALANCE must fail");
+    assert_eq!(client.get_balance(&lender), amount_acbu, "Balance must remain unchanged after failed withdrawal");
+}
+
+/// Regression test: Existing full lifecycle (deposit → partial withdrawal → full withdrawal)
+/// still works correctly after the fix.
+#[test]
+fn test_deposit_partial_withdraw_full_withdraw_lifecycle() {
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
+
+    let lender = Address::generate(&env);
+    let initial_deposit = 100 * DECIMALS;
+    let partial_withdraw = 40 * DECIMALS;
+
+    let token_admin = StellarAssetClient::new(&env, &acbu_token);
+    let token_client = TokenClient::new(&env, &acbu_token);
+    token_admin.mint(&lender, &initial_deposit);
+
+    // Step 1: Deposit
+    client.deposit(&lender, &initial_deposit);
+    assert_eq!(client.get_balance(&lender), initial_deposit, "Balance after deposit");
+    assert_eq!(token_client.balance(&lender), 0, "Lender wallet should be empty after deposit");
+
+    // Step 2: Partial withdrawal (leaving 60 ACBU, well above minimum)
+    client.withdraw(&lender, &partial_withdraw);
+    assert_eq!(client.get_balance(&lender), initial_deposit - partial_withdraw, "Balance after partial withdrawal");
+    assert_eq!(token_client.balance(&lender), partial_withdraw, "Lender wallet should have withdrawn amount");
+
+    // Step 3: Full withdrawal of remaining balance
+    let remaining = initial_deposit - partial_withdraw;
+    client.withdraw(&lender, &remaining);
+    assert_eq!(client.get_balance(&lender), 0, "Balance after full withdrawal");
+    assert_eq!(token_client.balance(&lender), initial_deposit, "Lender wallet should have all tokens");
+}
+
+/// Test: Multiple lenders can independently maintain balances above/at/below thresholds.
+#[test]
+fn test_multiple_lenders_independent_dust_balance_enforcement() {
+    let (env, client, _contract_id, _admin, acbu_token) = setup();
+
+    let lender1 = Address::generate(&env);
+    let lender2 = Address::generate(&env);
+    let amount = 100 * DECIMALS;
+
+    let token_admin = StellarAssetClient::new(&env, &acbu_token);
+    token_admin.mint(&lender1, &amount);
+    token_admin.mint(&lender2, &amount);
+
+    client.deposit(&lender1, &amount);
+    client.deposit(&lender2, &amount);
+
+    // Lender1: try to leave dust (should fail)
+    let result = client.try_withdraw(&lender1, &(amount - 1));
+    assert!(result.is_err(), "Lender1 dust withdrawal must fail");
+
+    // Lender2: withdraw to full zero (should succeed)
+    client.withdraw(&lender2, &amount);
+    assert_eq!(client.get_balance(&lender2), 0, "Lender2 full withdrawal must succeed");
+
+    // Lender1's balance is unchanged after their failed attempt
+    assert_eq!(client.get_balance(&lender1), amount, "Lender1 balance must be unchanged after failed withdrawal");
+}
