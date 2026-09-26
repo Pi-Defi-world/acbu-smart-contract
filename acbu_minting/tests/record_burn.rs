@@ -3,7 +3,7 @@
 
 use acbu_minting::{MintingConfig, MintingContract, MintingContractClient, MintingError};
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Error};
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, BytesN, Env, Error};
 
 #[contract]
 pub struct MockToken;
@@ -47,6 +47,7 @@ fn setup() -> Ctx {
         fee_rate_bps: 30,
         fee_single_bps: 100,
         operator: Address::generate(&env),
+        operator_pub_key: BytesN::from_array(&env, &[0u8; 32]),
     });
     Ctx { env, client, token }
 }
