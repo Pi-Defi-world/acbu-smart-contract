@@ -1,4 +1,6 @@
-// Poseidon2 hash helpers using native BN254 permutation
+// Poseidon2 hash helpers operating over Noir's default BN254 scalar field.
+// Note: BN254 and Poseidon2 are NOT natively accelerated by Stellar/Soroban.
+// Proof generation and verification run as pure-WASM Rust (no on-chain precompile).
 // RATE = 3, state size = 4
 
 fn poseidon2_hash_2(a: Field, b: Field) -> Field {
