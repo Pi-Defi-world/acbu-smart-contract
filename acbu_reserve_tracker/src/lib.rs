@@ -403,8 +403,15 @@ impl ReserveTrackerContract {
             .expect("Overflow in ACBU USD calculation")
             .checked_div(DECIMALS)
             .expect("Division by zero in ACBU USD calculation");
+        // AC-042: When total_acbu_usd rounds to zero the oracle rate is either
+        // zero (stale / uninitialized) or the supply is so small that a full
+        // reserve check cannot be performed.  Returning `true` here would be a
+        // trivial bypass — any caller could trigger this path with a tiny
+        // supply and empty reserves.  We return `false` so that minting is
+        // blocked until a valid, positive oracle rate is available and the
+        // reserve-ratio check can proceed properly.
         if total_acbu_usd == 0 {
-            return true;
+            return false;
         }
 
         let min_reserve_ratio = env
