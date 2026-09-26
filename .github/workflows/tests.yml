@@ -103,7 +103,8 @@ jobs:
 
       - name: Run changed contract tests
         if: github.event_name == 'pull_request' && steps.changed.outputs.workspace != 'true' && steps.changed.outputs.packages != ''
-        run: cargo test ${{ steps.changed.outputs.packages }} -- --nocapture
+        # AX-011: --locked pins resolution to the committed Cargo.lock.
+        run: cargo test --locked ${{ steps.changed.outputs.packages }} -- --nocapture
 
       - name: Skip tests for docs-only PR
         if: github.event_name == 'pull_request' && steps.changed.outputs.workspace != 'true' && steps.changed.outputs.packages == ''
@@ -111,4 +112,5 @@ jobs:
 
       - name: Run all tests
         if: github.event_name != 'pull_request' || steps.changed.outputs.workspace == 'true'
-        run: cargo test --workspace -- --nocapture
+        # AX-011: --locked pins resolution to the committed Cargo.lock.
+        run: cargo test --locked --workspace -- --nocapture

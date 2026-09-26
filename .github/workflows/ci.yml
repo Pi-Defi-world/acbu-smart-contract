@@ -41,7 +41,9 @@ jobs:
         run: bash scripts/fetch_token_wasm.sh
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # AX-011: --locked ensures clippy resolves against the committed Cargo.lock,
+        # preventing silent transitive-dependency drift that could change on-chain WASM.
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
         continue-on-error: true
 
   cargo-build:
@@ -73,10 +75,12 @@ jobs:
         run: bash scripts/fetch_token_wasm.sh
 
       - name: Build workspace
-        run: cargo build --workspace
+        # AX-011: --locked pins cargo to the committed Cargo.lock so a transitive
+        # bump can never silently change the on-chain WASM binary.
+        run: cargo build --locked --workspace
 
       - name: Build WASM targets
-        run: cargo build --workspace --target wasm32-unknown-unknown --release
+        run: cargo build --locked --workspace --target wasm32-unknown-unknown --release
 
   cargo-test:
     name: Cargo Test
@@ -106,7 +110,8 @@ jobs:
         run: bash scripts/fetch_token_wasm.sh
 
       - name: Run tests
-        run: cargo test --workspace -- --nocapture
+        # AX-011: --locked ensures tests run against exactly the pinned dependency graph.
+        run: cargo test --locked --workspace -- --nocapture
         continue-on-error: true
 
   nargo-test:
