@@ -7,20 +7,22 @@
 //!
 //! Each protected contract stores the address of **this** multisig contract as
 //! its `ADMIN` key.  When an admin-only function calls `admin.require_auth()`,
-//! Soroban's auth tree requires the multisig contract to have been invoked and
-//! to have produced a valid authorisation — which only happens after M-of-N
-//! signers have approved the proposal via `approve()` and the caller invokes
-//! `execute()`.
+//! Soroban only accepts the multisig as authoriser while the multisig contract
+//! is the caller of that invocation.  `execute()` therefore performs the
+//! approved call itself, after M-of-N signers have approved the proposal via
+//! `approve()`.
 //!
-//! ## Proposal lifecycle
+//! ## Proposal lifecycle (AC-010)
 //!
-//! 1. Any signer calls `propose(action_tag)` → returns `proposal_id`.
+//! 1. Any signer calls `propose(target, action)` → returns `proposal_id`.
+//!    The target contract and the typed [`MultisigAction`] are stored on the
+//!    proposal, so the approval is scoped to one specific call.
 //! 2. Each of the M required signers calls `approve(proposal_id)`.
 //! 3. Once the threshold is reached, any signer calls `execute(proposal_id)`.
-//!    The contract emits `ProposalExecutedEvent` and marks the proposal done.
-//!    The **caller** is then responsible for invoking the target contract's
-//!    admin function in the same transaction, with this contract as the auth
-//!    source in the Soroban auth tree.
+//!    The contract invokes **exactly** the stored `target` + `action` on its
+//!    own behalf, then emits `ProposalExecutedEvent` and marks the proposal
+//!    done.  A proposal approved for e.g. `pause` can therefore never be used
+//!    to reach another admin function.
 //!
 //! ## Self-governance (AC-006)
 //!
@@ -41,13 +43,13 @@
 
 use core::fmt::{self, Display};
 use soroban_sdk::{
-    contract, contractimpl, contractmeta, contracttype, symbol_short, Address, BytesN, Env,
-    String as SorobanString, Vec,
+    contract, contractimpl, contractmeta, contracttype, symbol_short, Address, BytesN, Env, Vec,
 };
 
 use shared::{
-    AdminProposal, DataKey as SharedDataKey, MultisigConfig, ProposalApprovedEvent,
-    ProposalCreatedEvent, ProposalExecutedEvent, CONTRACT_VERSION,
+    AdminProposal, ConfigArgs, DataKey as SharedDataKey, MultisigAction, MultisigConfig,
+    ProposalApprovedEvent, ProposalCreatedEvent, ProposalExecutedEvent, UpgradeArgs,
+    CONTRACT_VERSION,
 };
 
 // ---------------------------------------------------------------------------
@@ -73,20 +75,6 @@ pub enum DataKey {
     NextId,
     /// AdminProposal keyed by proposal_id (u64)
     Proposal(u64),
-    /// GovernanceAction bound to a self-governance proposal, applied by
-    /// `execute` (AC-006).
-    Action(u64),
-}
-
-/// Action on the multisig itself, bound to a proposal at creation time and
-/// applied by `execute` once the threshold is met (AC-006).
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum GovernanceAction {
-    /// Replace the signer list and threshold.
-    UpdateConfig(MultisigConfig),
-    /// Replace this contract's WASM.
-    Upgrade(BytesN<32>),
 }
 
 // ---------------------------------------------------------------------------
@@ -171,11 +159,15 @@ impl MultisigContract {
     // Proposal lifecycle
     // -----------------------------------------------------------------------
 
-    /// Create a new proposal.  The proposer must be a registered signer.
+    /// Create a new proposal authorising `action` on `target`.
+    ///
+    /// The proposer must be a registered signer.  The full `(target, action)`
+    /// pair is stored on the proposal, so later approvals — and the eventual
+    /// execution — are scoped to exactly that call.
     ///
     /// Returns the new `proposal_id`.
-    pub fn propose(env: Env, proposer: Address, action_tag: SorobanString) -> u64 {
-        Self::create_proposal(&env, proposer, action_tag)
+    pub fn propose(env: Env, proposer: Address, target: Address, action: MultisigAction) -> u64 {
+        Self::create_proposal(&env, proposer, target, action)
     }
 
     /// Propose replacing the signer list and threshold (AC-006).
@@ -188,41 +180,50 @@ impl MultisigContract {
         new_signers: Vec<Address>,
         new_threshold: u32,
     ) -> u64 {
-        Self::validate_config(&env, &new_signers, new_threshold);
-        let action = GovernanceAction::UpdateConfig(MultisigConfig {
+        let action = MultisigAction::UpdateConfig(ConfigArgs {
             signers: new_signers,
             threshold: new_threshold,
         });
-        Self::create_action_proposal(&env, proposer, "update_config", action)
+        Self::create_proposal(&env, proposer, env.current_contract_address(), action)
     }
 
     /// Propose upgrading this contract to `new_wasm_hash` (AC-006).
     ///
-    /// `execute` performs the upgrade once the threshold is met. Returns the
+    /// The stored version is bumped by one and bound to the proposal; `execute`
+    /// performs the upgrade once the threshold is met. Returns the
     /// `proposal_id`.
     pub fn propose_upgrade(env: Env, proposer: Address, new_wasm_hash: BytesN<32>) -> u64 {
-        let action = GovernanceAction::Upgrade(new_wasm_hash);
-        Self::create_action_proposal(&env, proposer, "upgrade", action)
+        let current_version: u32 = env
+            .storage()
+            .instance()
+            .get(&SharedDataKey::Version)
+            .unwrap_or(0);
+        let action = MultisigAction::Upgrade(UpgradeArgs {
+            new_wasm_hash,
+            new_version: current_version + 1,
+        });
+        Self::create_proposal(&env, proposer, env.current_contract_address(), action)
     }
 
-    fn create_action_proposal(
+    fn create_proposal(
         env: &Env,
         proposer: Address,
-        action_tag: &str,
-        action: GovernanceAction,
+        target: Address,
+        action: MultisigAction,
     ) -> u64 {
-        let proposal_id =
-            Self::create_proposal(env, proposer, SorobanString::from_str(env, action_tag));
-        env.storage()
-            .instance()
-            .set(&DataKey::Action(proposal_id), &action);
-        proposal_id
-    }
-
-    fn create_proposal(env: &Env, proposer: Address, action_tag: SorobanString) -> u64 {
         proposer.require_auth();
         let config = Self::load_config(env);
         Self::assert_is_signer(env, &proposer, &config);
+
+        // Self-governance actions may only target this contract, and the bound
+        // config must be valid at proposal time so a malformed rotation can
+        // never reach `execute` (AC-006).
+        if let MultisigAction::UpdateConfig(args) = &action {
+            if target != env.current_contract_address() {
+                env.panic_with_error(Error::Unauthorized);
+            }
+            Self::validate_config(env, &args.signers, args.threshold);
+        }
 
         let proposal_id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
 
@@ -233,7 +234,8 @@ impl MultisigContract {
         approvals.push_back(proposer.clone());
 
         let proposal = AdminProposal {
-            action_tag: action_tag.clone(),
+            target: target.clone(),
+            action: action.clone(),
             approvals,
             executed: false,
             expires_at,
@@ -251,7 +253,8 @@ impl MultisigContract {
             ProposalCreatedEvent {
                 proposal_id,
                 proposer,
-                action_tag,
+                target,
+                action,
                 expires_at,
             },
         );
@@ -305,14 +308,11 @@ impl MultisigContract {
 
     /// Execute a proposal that has reached the approval threshold.
     ///
-    /// The executor must be a registered signer.  After this call the proposal
-    /// is marked executed and cannot be re-executed.
-    ///
-    /// If the proposal carries a [`GovernanceAction`] (created via
-    /// `propose_update_config` / `propose_upgrade`), it is applied here.
-    /// Otherwise the caller is responsible for invoking the target contract's
-    /// admin function in the same transaction, using this contract's address
-    /// as the auth source in the Soroban auth tree.
+    /// The executor must be a registered signer.  The contract performs exactly
+    /// the `target` + `action` stored on the proposal, on its own behalf, so
+    /// the call performed is bound to what the signers approved (AC-010).
+    /// After this call the proposal is marked executed and cannot be
+    /// re-executed.
     pub fn execute(env: Env, executor: Address, proposal_id: u64) {
         executor.require_auth();
         let config = Self::load_config(&env);
@@ -337,38 +337,56 @@ impl MultisigContract {
             env.panic_with_error(Error::ThresholdNotMet);
         }
 
+        // Commit the executed flag before applying the action so the proposal
+        // cannot be replayed even if the target re-enters this contract.  A
+        // failure in the applied action reverts the whole transaction,
+        // including this write.
         proposal.executed = true;
         env.storage()
             .instance()
             .set(&DataKey::Proposal(proposal_id), &proposal);
 
-        env.events().publish(
-            (symbol_short!("executed"),),
-            ProposalExecutedEvent {
-                proposal_id,
-                action_tag: proposal.action_tag,
-                executed_by: executor,
-            },
-        );
-
-        let action: Option<GovernanceAction> =
-            env.storage().instance().get(&DataKey::Action(proposal_id));
-        match action {
-            Some(GovernanceAction::UpdateConfig(new_config)) => {
+        // Perform exactly the approved action.  For any other contract the
+        // multisig is the caller, so the target's `admin.require_auth()` —
+        // where `admin` is this contract — is satisfied, and only for this
+        // stored invocation.  Actions that administer the multisig itself are
+        // applied in-process: Soroban forbids contract re-entry, so they
+        // cannot go through a self-directed cross-contract call (AC-006).
+        let self_address = env.current_contract_address();
+        match (&proposal.target, &proposal.action) {
+            (target, MultisigAction::UpdateConfig(args)) if *target == self_address => {
                 // Re-validate: the bound config was checked at proposal time,
                 // but keep the invariant local to the write.
-                Self::validate_config(&env, &new_config.signers, new_config.threshold);
+                Self::validate_config(&env, &args.signers, args.threshold);
+                let new_config = MultisigConfig {
+                    signers: args.signers.clone(),
+                    threshold: args.threshold,
+                };
                 env.storage().instance().set(&DataKey::Config, &new_config);
                 env.events()
                     .publish((symbol_short!("cfg_upd"), proposal_id), new_config);
             }
-            Some(GovernanceAction::Upgrade(new_wasm_hash)) => {
+            (target, MultisigAction::Upgrade(args)) if *target == self_address => {
                 env.events()
-                    .publish((symbol_short!("upgraded"), proposal_id), new_wasm_hash.clone());
-                env.deployer().update_current_contract_wasm(new_wasm_hash);
+                    .publish((symbol_short!("upgraded"), proposal_id), args.new_wasm_hash.clone());
+                env.deployer()
+                    .update_current_contract_wasm(args.new_wasm_hash.clone());
+                env.storage()
+                    .instance()
+                    .set(&SharedDataKey::Version, &args.new_version);
             }
-            None => {}
+            (target, action) => action.invoke(&env, target),
         }
+
+        env.events().publish(
+            (symbol_short!("executed"),),
+            ProposalExecutedEvent {
+                proposal_id,
+                target: proposal.target,
+                action: proposal.action,
+                executed_by: executor,
+            },
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -389,9 +407,15 @@ impl MultisigContract {
             .unwrap_or_else(|| env.panic_with_error(Error::ProposalNotFound))
     }
 
-    /// Return the governance action bound to `proposal_id`, if any.
-    pub fn get_action(env: Env, proposal_id: u64) -> Option<GovernanceAction> {
-        env.storage().instance().get(&DataKey::Action(proposal_id))
+    /// Return the action bound to `proposal_id`, or `None` if no such
+    /// proposal exists.  Every proposal is bound to a typed action at creation
+    /// time (AC-010) — self-governance proposals included.
+    pub fn get_action(env: Env, proposal_id: u64) -> Option<MultisigAction> {
+        let proposal: AdminProposal = env
+            .storage()
+            .instance()
+            .get(&DataKey::Proposal(proposal_id))?;
+        Some(proposal.action)
     }
 
     /// Return the id that will be assigned to the next created proposal.

@@ -103,6 +103,7 @@ The file includes:
 - **DataKey enum**: currently only includes `Version`.
 - **Administration / multisig data types**:
   - `AdminProposal`
+  - `MultisigAction`
   - `MultisigConfig`
   - Event types for proposal creation/approval/execution.
 - **Financial types**:
@@ -463,14 +464,17 @@ Admin protection is critical.
 Other contracts:
 
 - store the multisig contract address in their admin slot.
-- their admin-only functions call `admin.require_auth()`.
-- Soroban auth tree then propagates the multisig approval.
+- their admin-only functions call `admin.require_auth()`, which only
+  authenticates while the multisig contract is the caller of that invocation —
+  so the call is made by `execute()` on the multisig's behalf.
 
 The multisig contract manages proposals with:
 
-- `propose`
+- `propose(target, action)` — stores the target contract and a typed
+  `MultisigAction` (e.g. `Pause`, `Upgrade`, `UpdateConfig`).
 - `approve`
-- `execute`
+- `execute` — can only invoke the `target` + `action` stored on the proposal,
+  so the multisig never performs anything other than what M signers authorised.
 
 It includes TTL/expiration enforcement.
 
