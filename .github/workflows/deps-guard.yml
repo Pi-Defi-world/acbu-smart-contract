@@ -80,6 +80,54 @@ jobs:
           done < <(find . -name 'Cargo.toml' -print0)
           echo "All git dependencies (if any) have a pinned rev."
 
+      # AZ-006: If any manifest in the workspace declares `ultrahonk_rust_verifier`
+      # as a git dependency, it MUST pin exactly the canonical commit
+      # 2a73c4ba11f073f1797d90915ebbb9eb9d09f445.  A different rev means the
+      # on-chain VK/proof serialization format could diverge from the reference
+      # implementation, causing silent verification failures in production.
+      - name: Enforce consistent ultrahonk_rust_verifier rev (AZ-006)
+        shell: bash
+        run: |
+          set -euo pipefail
+          CANONICAL_REV="2a73c4ba11f073f1797d90915ebbb9eb9d09f445"
+          failed=0
+          while IFS= read -r -d '' manifest; do
+            python3 - "$manifest" "$CANONICAL_REV" <<'PYEOF'
+          import sys, re, pathlib
+
+          path = pathlib.Path(sys.argv[1])
+          canonical = sys.argv[2]
+          text = path.read_text()
+
+          # Match any inline-table dep entry that mentions ultrahonk_rust_verifier
+          # and contains a git = "..." field.
+          pattern = re.compile(
+              r'\{[^}]*\bgit\s*=\s*"[^"]*"[^}]*\}',
+          )
+          for m in pattern.finditer(text):
+              block = m.group(0)
+              # Only care about entries for the ultrahonk_rust_verifier crate.
+              before = text[:m.start()]
+              name_match = re.search(r'(\S+)\s*=\s*$', before.rstrip())
+              dep_name = name_match.group(1) if name_match else ''
+              if 'ultrahonk' not in dep_name and 'ultrahonk' not in block:
+                  continue
+              rev_match = re.search(r'\brev\s*=\s*"([^"]+)"', block)
+              if not rev_match:
+                  print(f"::error file={path}::AZ-006: '{dep_name}' has no `rev`; "
+                        f"pin to rev = \"{canonical}\".")
+                  sys.exit(1)
+              actual_rev = rev_match.group(1)
+              if actual_rev != canonical:
+                  print(f"::error file={path}::AZ-006: '{dep_name}' is pinned to "
+                        f"rev = \"{actual_rev}\" but the canonical rev is "
+                        f"\"{canonical}\". All manifests must use the same commit "
+                        f"to avoid mismatched VK/proof serialization.")
+                  sys.exit(1)
+          PYEOF
+          done < <(find . -name 'Cargo.toml' -print0)
+          echo "All ultrahonk_rust_verifier deps (if any) use the canonical rev."
+
       - name: Fail on git sources recorded in Cargo.lock
         shell: bash
         run: |

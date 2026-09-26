@@ -15,6 +15,35 @@ This matches the toolchain of `ultrahonk-soroban-verifier` (see its
 `tests/build_circuits.sh`) and the `ultrahonk_rust_verifier` crate the
 proof format is designed around.
 
+## AZ-006 — Canonical `ultrahonk_rust_verifier` revision
+
+The `ultrahonk_rust_verifier` crate is not sourced from crates.io.  It is
+currently NOT added as a direct Cargo dependency of this contract, because
+the workspace supply-chain policy (W2-Z-020, enforced by
+`.github/workflows/deps-guard.yml`) forbids git-sourced entries in the
+committed `Cargo.lock`.  Proof verification is therefore implemented
+natively in `src/lib.rs`.
+
+**Canonical revision:** `2a73c4ba11f073f1797d90915ebbb9eb9d09f445`
+
+If the policy is ever relaxed and the crate is re-added as a Cargo
+dependency, every manifest in this workspace that declares the crate MUST
+pin this exact commit:
+
+```toml
+ultrahonk_rust_verifier = {
+    git = "https://github.com/noir-lang/ultrahonk-soroban-verifier",
+    rev = "2a73c4ba11f073f1797d90915ebbb9eb9d09f445"
+}
+```
+
+Using a different `rev` — or omitting `rev` entirely — causes the on-chain
+VK/proof serialization to diverge from the reference implementation, leading
+to silent verification failures in production.  The CI step
+`"Enforce consistent ultrahonk_rust_verifier rev (AZ-006)"` in
+`.github/workflows/deps-guard.yml` will reject any manifest that uses a
+different revision.
+
 ## Why the pin matters (AZ-011)
 
 UltraHonk proof/VK serialization and constraint semantics changed between
