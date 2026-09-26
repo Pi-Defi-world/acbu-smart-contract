@@ -1,8 +1,12 @@
 // AC-006: the multisig governs its own signer set and WASM through proposals
 // that `execute` applies — no entry point needs the contract's own auth.
+//
+// AC-010: every proposal carries a typed [`MultisigAction`]; the self-
+// governance actions are the `UpdateConfig` / `Upgrade` variants targeting the
+// multisig contract itself, applied in-process by `execute`.
 
-use acbu_multisig::{Error, GovernanceAction, MultisigContract, MultisigContractClient};
-use shared::MultisigConfig;
+use acbu_multisig::{Error, MultisigContract, MultisigContractClient};
+use shared::{ConfigArgs, MultisigAction, MultisigConfig, UpgradeArgs};
 use soroban_sdk::testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke};
 use soroban_sdk::{vec, Address, BytesN, Env, IntoVal, Vec};
 
@@ -149,10 +153,39 @@ fn action_is_bound_to_proposal() {
     let hash = BytesN::from_array(&env, &[7u8; 32]);
 
     let pid = client.propose_upgrade(&s0, &hash);
-    assert_eq!(client.get_action(&pid), Some(GovernanceAction::Upgrade(hash)));
+    assert_eq!(
+        client.get_action(&pid),
+        Some(MultisigAction::Upgrade(UpgradeArgs {
+            new_wasm_hash: hash,
+            new_version: client.version() + 1,
+        }))
+    );
 
-    let plain = client.propose(&s0, &soroban_sdk::String::from_str(&env, "pause"));
-    assert_eq!(client.get_action(&plain), None);
+    let self_address = client.address.clone();
+    let plain = client.propose(&s0, &self_address, &MultisigAction::Pause);
+    assert_eq!(client.get_action(&plain), Some(MultisigAction::Pause));
+}
+
+#[test]
+fn self_governance_action_cannot_target_another_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (signers, client) = setup(&env, 2, 1);
+    let s0 = signers.get(0).unwrap();
+    let outsider_contract = Address::generate(&env);
+
+    assert_eq!(
+        client.try_propose(
+            &s0,
+            &outsider_contract,
+            &MultisigAction::UpdateConfig(ConfigArgs {
+                signers: vec![&env, s0.clone()],
+                threshold: 1,
+            })
+        ),
+        Err(Ok(Error::Unauthorized.into()))
+    );
+    assert_eq!(client.get_next_id(), 0, "no proposal must be recorded");
 }
 
 #[test]

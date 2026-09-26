@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contracterror, contracttype, Address, Env, String as SorobanString, Symbol, Vec,
+    contracterror, contracttype, Address, BytesN, Env, IntoVal, String as SorobanString, Symbol,
+    Vec,
 };
 
 pub mod reentrancy_guard;
@@ -33,18 +34,112 @@ pub enum DataKey {
 //   • A separate `MultisigContract` holds the signer list and threshold.
 //   • Each protected contract stores the multisig contract address as its
 //     "admin".  Admin-only functions call `admin.require_auth()` as before —
-//     Soroban's auth tree propagates the M-of-N approval automatically when
-//     the multisig contract is the invoker.
+//     which is only satisfied while the multisig contract is the caller, so
+//     `execute` performs the approved call itself.
 //   • The multisig contract exposes `propose` / `approve` / `execute` so that
 //     M signers must independently authorise before any admin action fires.
+//   • A proposal is bound to a concrete [`MultisigAction`] and target, so
+//     `execute` can only ever invoke the exact action the signers approved.
 // ---------------------------------------------------------------------------
+
+/// A concrete administrative action that a multisig proposal authorises.
+///
+/// Proposals used to carry a free-form `action_tag` string that nothing tied
+/// to the call actually made, so a proposal approved for one admin function
+/// could be used to invoke any other. The tag is now a typed action: the
+/// variant stored in the proposal *is* the call `execute` performs, so the
+/// approved tag and the invoked call can never diverge.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MultisigAction {
+    /// Invoke `pause()` on the target contract.
+    Pause,
+    /// Invoke `unpause()` on the target contract.
+    Unpause,
+    /// Invoke `update_acbu_token(new_token)` on the target contract.
+    UpdateAcbuToken(Address),
+    /// Invoke `set_rate_admin(currency, rate)` on the target contract.
+    SetRateAdmin(RateAdminArgs),
+    /// Invoke `upgrade(new_wasm_hash, new_version)` on the target contract.
+    Upgrade(UpgradeArgs),
+    /// Replace the signer list and threshold of the multisig itself.
+    UpdateConfig(ConfigArgs),
+}
+
+/// Arguments for [`MultisigAction::SetRateAdmin`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateAdminArgs {
+    pub currency: CurrencyCode,
+    pub rate: i128,
+}
+
+/// Arguments for [`MultisigAction::Upgrade`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UpgradeArgs {
+    pub new_wasm_hash: BytesN<32>,
+    pub new_version: u32,
+}
+
+/// Arguments for [`MultisigAction::UpdateConfig`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConfigArgs {
+    pub signers: Vec<Address>,
+    pub threshold: u32,
+}
+
+impl MultisigAction {
+    /// Canonical `action_tag` for this action — the symbol of the target
+    /// entrypoint that [`MultisigAction::invoke`] calls.
+    pub fn tag(&self, env: &Env) -> Symbol {
+        match self {
+            Self::Pause => Symbol::new(env, "pause"),
+            Self::Unpause => Symbol::new(env, "unpause"),
+            Self::UpdateAcbuToken(_) => Symbol::new(env, "update_acbu_token"),
+            Self::SetRateAdmin(_) => Symbol::new(env, "set_rate_admin"),
+            Self::Upgrade(_) => Symbol::new(env, "upgrade"),
+            Self::UpdateConfig(_) => Symbol::new(env, "update_config"),
+        }
+    }
+
+    /// Perform this action against `target`.
+    ///
+    /// Must be called by the multisig contract itself: a protected contract
+    /// only accepts the multisig address as admin while the multisig is the
+    /// caller of the invocation.
+    pub fn invoke(&self, env: &Env, target: &Address) {
+        let func = self.tag(env);
+        let mut args = Vec::new(env);
+        match self {
+            Self::Pause | Self::Unpause => {}
+            Self::UpdateAcbuToken(token) => args.push_back(token.clone().into_val(env)),
+            Self::SetRateAdmin(a) => {
+                args.push_back(a.currency.clone().into_val(env));
+                args.push_back(a.rate.into_val(env));
+            }
+            Self::Upgrade(a) => {
+                args.push_back(a.new_wasm_hash.clone().into_val(env));
+                args.push_back(a.new_version.into_val(env));
+            }
+            Self::UpdateConfig(a) => {
+                args.push_back(a.signers.clone().into_val(env));
+                args.push_back(a.threshold.into_val(env));
+            }
+        }
+        env.invoke_contract::<()>(target, &func, args);
+    }
+}
 
 /// On-chain proposal stored inside the multisig contract.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct AdminProposal {
-    /// Arbitrary tag identifying the intended action (e.g. "pause", "upgrade").
-    pub action_tag: SorobanString,
+    /// Contract the approved action will be invoked on.
+    pub target: Address,
+    /// The exact action the signers approved.
+    pub action: MultisigAction,
     /// Addresses that have already approved this proposal.
     pub approvals: Vec<Address>,
     /// Whether the proposal has been executed.
@@ -68,7 +163,8 @@ pub struct MultisigConfig {
 pub struct ProposalCreatedEvent {
     pub proposal_id: u64,
     pub proposer: Address,
-    pub action_tag: SorobanString,
+    pub target: Address,
+    pub action: MultisigAction,
     pub expires_at: u64,
 }
 
@@ -84,7 +180,8 @@ pub struct ProposalApprovedEvent {
 #[contracttype]
 pub struct ProposalExecutedEvent {
     pub proposal_id: u64,
-    pub action_tag: SorobanString,
+    pub target: Address,
+    pub action: MultisigAction,
     pub executed_by: Address,
 }
 
@@ -318,25 +415,6 @@ pub enum ContractError {
     /// the trusted KYC authority (zk_verifier trusted commitment registry,
     /// AZ-002).
     CommitmentNotAttested = 17,
-    /// The submitted nullifier was already consumed for this credential
-    /// commitment and cannot be replayed (zk_verifier, AZ-025).
-    NullifierAlreadySpent = 18,
-
-    /// The nullifier submitted in this verification has already been spent for
-    /// this commitment. Replay attempts are rejected (zk_verifier, AZ-014).
-    NullifierAlreadySpent = 18,
-
-    /// The `public_inputs` vector length does not match the expected constant
-    /// `MAX_PUBLIC_INPUTS_LEN`. Rejects malformed or oversized inputs before
-    /// any proof verification work is performed (zk_verifier, AZ-007).
-    InvalidPublicInputsLength = 19,
-
-    /// The wallet address hash encoded in `public_inputs[5]` (`wallet_address_hash`)
-    /// does not match the address that signed and submitted this transaction.
-    /// Prevents one valid proof from being replayed across different wallets
-    /// (zk_verifier, AZ-032).
-    ProofCallerMismatch = 20,
-
     /// The nullifier submitted in this verification has already been spent for
     /// this commitment. Replay attempts are rejected (zk_verifier, AZ-014).
     NullifierAlreadySpent = 18,
@@ -465,8 +543,7 @@ pub enum ContractPhase {
 pub fn any_circuit_peer_paused(env: &Env, peers: &Vec<Address>) -> bool {
     let func = Symbol::new(env, CIRCUIT_IS_PAUSED);
     for peer in peers.iter() {
-        let res =
-            env.try_invoke_contract::<bool, soroban_sdk::Error>(&peer, &func, Vec::new(env));
+        let res = env.try_invoke_contract::<bool, soroban_sdk::Error>(&peer, &func, Vec::new(env));
         if !matches!(res, Ok(Ok(false))) {
             return true;
         }
@@ -507,10 +584,7 @@ pub fn calculate_fee(amount: i128, fee_rate_bps: i128) -> Result<i128, ContractE
 }
 
 /// `amount` minus [`calculate_fee`]; see there for the error contract.
-pub fn calculate_amount_after_fee(
-    amount: i128,
-    fee_rate_bps: i128,
-) -> Result<i128, ContractError> {
+pub fn calculate_amount_after_fee(amount: i128, fee_rate_bps: i128) -> Result<i128, ContractError> {
     amount
         .checked_sub(calculate_fee(amount, fee_rate_bps)?)
         .ok_or(ContractError::ArithmeticOverflow)
@@ -528,15 +602,30 @@ pub fn median(mut values: soroban_sdk::Vec<i128>) -> Option<i128> {
 
     if n % 2 == 0 {
         // For even count, find two middle elements and average them
-        quickselect_inplace(&mut values, 0, i32::try_from(n - 1).unwrap_or(0), i32::try_from(mid - 1).unwrap_or(0));
+        quickselect_inplace(
+            &mut values,
+            0,
+            i32::try_from(n - 1).unwrap_or(0),
+            i32::try_from(mid - 1).unwrap_or(0),
+        );
         let val1 = values.get(mid - 1)?;
-        quickselect_inplace(&mut values, 0, i32::try_from(n - 1).unwrap_or(0), i32::try_from(mid).unwrap_or(0));
+        quickselect_inplace(
+            &mut values,
+            0,
+            i32::try_from(n - 1).unwrap_or(0),
+            i32::try_from(mid).unwrap_or(0),
+        );
         let val2 = values.get(mid)?;
         // SC-020: use checked arithmetic — (val1 + val2) can overflow i128 for extreme rates.
         val1.checked_add(val2).and_then(|sum| sum.checked_div(2))
     } else {
         // For odd count, find the middle element
-        quickselect_inplace(&mut values, 0, i32::try_from(n - 1).unwrap_or(0), i32::try_from(mid).unwrap_or(0));
+        quickselect_inplace(
+            &mut values,
+            0,
+            i32::try_from(n - 1).unwrap_or(0),
+            i32::try_from(mid).unwrap_or(0),
+        );
         Some(values.get(mid)?)
     }
 }
