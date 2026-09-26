@@ -16,25 +16,37 @@
 //! This implementation uses **persistent** storage keyed *per entry*:
 //!
 //! ```text
-//! DataKey::Nullifier(BytesN<32>)  →  bool      (ledger-TTL-bumped on each verify)
-//! DataKey::Verified(Address)      →  VerificationRecord (fixed validity deadline)
-//! DataKey::AttestedCommitment(BytesN<32>) → bool (ledger-TTL-bumped on register)
-//! DataKey::Admin                  →  Address   (instance — single scalar, bounded)
-//! DataKey::Paused                 →  bool      (instance — single scalar, bounded)
+//! DataKey::ScopedNullifier(BytesN<32>, BytesN<32>) → bool
+//! DataKey::Verified(Address)     → VerificationRecord (fixed validity deadline)
+//! DataKey::AttestedCommitment(BytesN<32>) → bool
+//! DataKey::Policy                → PolicyParams        (instance — bounded scalar)
+//! DataKey::Admin                 → Address             (instance — bounded scalar)
+//! DataKey::Paused                → bool                (instance — bounded scalar)
 //! ```
 //!
-//! Each entry lives in `persistent` storage. Nullifiers and attestations use a
-//! bounded storage TTL, while verification records carry an immutable validity
-//! deadline and can also be revoked by the administrator.
+//! ## AZ-001 fix — server-side compliance policy enforcement
 //!
-//! Instance storage is used **only** for the small, fixed set of contract
-//! configuration fields (admin, paused flag) whose combined size is a known
-//! constant that cannot grow at runtime.
+//! Previously `required_kyc` and `allowed_country` were `pub` inputs supplied
+//! entirely by the prover.  Nothing stopped a prover from setting
+//! `required_kyc = 0` and `allowed_country = <their own value>` to trivially
+//! satisfy both circuit constraints and get a "valid" proof with zero real KYC.
+//!
+//! This implementation adds an admin-controlled `PolicyParams` value stored in
+//! contract instance storage.  During `verify()` the contract independently
+//! reads its own stored policy and enforces:
+//!
+//! * `public_inputs[0]` (min_tier)     **≥** `policy.min_tier`
+//! * `public_inputs[1]` (country_code) **==** `policy.allowed_country`
+//!
+//! A prover cannot satisfy these checks by supplying their own values: the
+//! policy is immutable from the prover's perspective and may only be changed
+//! by the admin via `set_policy`.  Until a policy is set `verify()` rejects
+//! all proofs.
 
 use shared::ContractError;
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address,
-    Bytes, BytesN, Env, Vec,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Bytes, BytesN,
+    Env, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -52,8 +64,13 @@ const NULLIFIER_TTL_LEDGERS: u32 = 1_051_200; // ~60 days
 /// Set to half the full TTL so we don't bump on every single call.
 const NULLIFIER_TTL_THRESHOLD: u32 = NULLIFIER_TTL_LEDGERS / 2;
 
-/// TTL for the instance storage (admin + paused flag).
+/// TTL for the instance storage (admin, paused flag, policy).
 const INSTANCE_TTL_LEDGERS: u32 = 5_256_000; // ~1 year
+
+/// How long a successful verification record is valid.
+///
+/// 1 051 200 ledgers ≈ 60 days.  The admin may revoke earlier.
+const VERIFICATION_VALIDITY_LEDGERS: u32 = 1_051_200; // ~60 days
 
 /// Maximum expected length for public inputs slice.
 ///
@@ -68,6 +85,65 @@ const INSTANCE_TTL_LEDGERS: u32 = 5_256_000; // ~1 year
 const MAX_PUBLIC_INPUTS_LEN: u32 = 6;
 
 // ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+/// Compliance policy stored on-chain by the contract administrator.
+///
+/// AZ-001: these values are the authoritative compliance requirements.
+/// The contract enforces them independently of whatever the prover encodes
+/// in the circuit's public inputs, so a malicious prover cannot self-select
+/// a weaker policy.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyParams {
+    /// Minimum KYC tier required.  Wallets whose proof encodes a tier below
+    /// this value are rejected at the contract level regardless of circuit
+    /// satisfiability.
+    pub min_tier: u128,
+    /// ISO-3166-1 numeric country code that is permitted to transact.
+    /// The prover's `country_code` in `public_inputs[1]` must equal this
+    /// exactly; any other country is denied at the contract level.
+    pub allowed_country: u128,
+}
+
+/// On-chain record created for each successfully verified wallet.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct VerificationRecord {
+    /// The ledger sequence number at which this record expires.
+    pub expires_at_ledger: u32,
+    /// The nullifier that was spent for this verification.
+    pub nullifier: BytesN<32>,
+    /// Snapshot of the policy that was active when the proof was verified.
+    /// Stored for auditability.
+    pub policy: PolicyParams,
+}
+
+/// Event emitted on successful verification.
+#[contracttype]
+pub struct VerifiedEvent {
+    pub user: Address,
+    pub nullifier: BytesN<32>,
+    pub policy: PolicyParams,
+    pub expires_at_ledger: u32,
+}
+
+/// Event emitted when the admin revokes a wallet's verification.
+#[contracttype]
+pub struct VerificationRevokedEvent {
+    pub user: Address,
+    pub revoked_at_ledger: u32,
+}
+
+/// Event emitted when the admin updates the compliance policy.
+#[contracttype]
+pub struct PolicyUpdatedEvent {
+    pub min_tier: u128,
+    pub allowed_country: u128,
+}
+
+// ---------------------------------------------------------------------------
 // Storage keys
 // ---------------------------------------------------------------------------
 
@@ -78,6 +154,8 @@ pub enum DataKey {
     Admin,
     /// Whether the contract is paused.
     Paused,
+    /// AZ-001: on-chain compliance policy (min_tier + allowed_country).
+    Policy,
     /// Spent nullifier — keyed per (commitment, nullifier) pair.
     ///
     /// Stored in *persistent* storage so entries expire individually via TTL
@@ -85,13 +163,12 @@ pub enum DataKey {
     ScopedNullifier(BytesN<32>, BytesN<32>),
     /// Verified wallet record — keyed per address and bounded by its deadline.
     ///
-    /// Stored in *persistent* storage for the same reason as `Nullifier`.
+    /// Stored in *persistent* storage for the same reason as `ScopedNullifier`.
     Verified(Address),
     /// Attested credential commitment — keyed per 32-byte commitment.
     ///
     /// AZ-002: commitments recorded by the trusted KYC authority (the
-    /// admin). Stored in *persistent* storage like `Nullifier`/`Verified`
-    /// so the registry stays bounded.
+    /// admin). Stored in *persistent* storage so the registry stays bounded.
     AttestedCommitment(BytesN<32>),
 }
 
@@ -114,7 +191,47 @@ impl ZkVerifier {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Paused, &false);
+        // Policy starts unconfigured — `verify()` rejects all proofs until
+        // the admin calls `set_policy`.  This prevents the zero-KYC bypass
+        // window that would otherwise exist between deployment and policy setup.
         Self::extend_instance_ttl(&env);
+    }
+
+    // ── Compliance policy (AZ-001) ──────────────────────────────────────────
+
+    /// Configure or update the compliance policy.  Only the admin may call this.
+    ///
+    /// `min_tier` is the minimum KYC tier (0 = none, 1 = basic, 2 = enhanced,
+    /// 3 = enterprise).  Setting it to 0 allows any tier; set it to at least 1
+    /// to require real KYC.
+    ///
+    /// `allowed_country` is the ISO-3166-1 numeric code of the only jurisdiction
+    /// permitted to verify (e.g. 566 = Nigeria, 404 = Kenya).  Set it to 0 to
+    /// allow any country, but note that `public_inputs[1]` must still equal
+    /// exactly 0 in that case.
+    ///
+    /// AZ-001: these values are stored on-chain and enforced server-side in
+    /// `verify()`, so the prover cannot choose weaker values.
+    pub fn set_policy(env: Env, min_tier: u128, allowed_country: u128) {
+        Self::check_admin(&env);
+        let policy = PolicyParams {
+            min_tier,
+            allowed_country,
+        };
+        env.storage().instance().set(&DataKey::Policy, &policy);
+        env.events().publish(
+            (symbol_short!("pol_set"),),
+            PolicyUpdatedEvent {
+                min_tier,
+                allowed_country,
+            },
+        );
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Return the current compliance policy, or `None` if not yet configured.
+    pub fn get_policy(env: Env) -> Option<PolicyParams> {
+        env.storage().instance().get(&DataKey::Policy)
     }
 
     // ── Proof verification ──────────────────────────────────────────────────
@@ -130,7 +247,6 @@ impl ZkVerifier {
     /// user can no longer claim an arbitrary `kyc_level` and produce a valid
     /// proof about a self-asserted credential.
     pub fn register_commitment(env: Env, commitment: BytesN<32>) {
-        // The KYC authority (admin) is the only party allowed to attest.
         Self::check_admin(&env);
         Self::assert_not_paused(&env);
 
@@ -157,8 +273,7 @@ impl ZkVerifier {
         Self::extend_instance_ttl(&env);
     }
 
-    /// Returns `true` if `commitment` was attested by the trusted KYC
-    /// authority.
+    /// Returns `true` if `commitment` was attested by the trusted KYC authority.
     pub fn is_attested(env: Env, commitment: BytesN<32>) -> bool {
         let key = DataKey::AttestedCommitment(commitment);
         if env.storage().persistent().has(&key) {
@@ -173,45 +288,33 @@ impl ZkVerifier {
         }
     }
 
-    /// Record a successful proof verification for `wallet` with the given
-    /// named public inputs, including the nullifier and credential commitment.
+    /// Record a successful proof verification for `wallet`.
+    ///
+    /// # AZ-001 — server-side compliance policy enforcement
+    ///
+    /// The contract reads its stored `PolicyParams` and checks:
+    ///
+    /// * `public_inputs[0]` (the tier the prover claims) **≥** `policy.min_tier`
+    /// * `public_inputs[1]` (the country the prover claims) **==** `policy.allowed_country`
+    ///
+    /// These checks happen *after* the ZK proof passes, so a prover cannot
+    /// choose weaker values in the circuit's public inputs to bypass compliance.
+    /// If no policy has been configured yet, all verifications are rejected.
+    ///
+    /// # AZ-002
+    ///
+    /// The credential `commitment` must have been attested by the KYC authority.
     ///
     /// # AZ-014
     ///
     /// Both the nullifier and the verified-wallet flag are written to
     /// **persistent** storage as individual scalar entries, not appended to a
-    /// shared `Map` in instance storage.  This means:
-    ///
-    /// * Storage cost is proportional to the *number of live entries* that
-    ///   have been accessed within their TTL window — not the total historical
-    ///   call count.
-    /// * Each entry expires independently after `NULLIFIER_TTL_LEDGERS`
-    ///   ledgers of inactivity; the contract cannot be DoS'd by flooding it
-    ///   with valid (or forged) verifications.
-    /// * Instance storage remains a small, fixed-size scalar set that does
-    ///   not grow at runtime.
-    ///
-    /// # AZ-002
-    ///
-    /// The credential `commitment` submitted with the proof must have been
-    /// attested by the trusted KYC authority first. Proofs about commitments
-    /// that were never attested are rejected — the proof would otherwise be
-    /// vacuous (knowledge of *some* preimage for a self-chosen commitment).
+    /// shared `Map` in instance storage.
     ///
     /// # AZ-032 — Caller binding
     ///
     /// `public_inputs[5]` must equal the first 16 bytes of `sha256(wallet_xdr)`
-    /// interpreted as a little-endian `u128`.  This value is also committed
-    /// inside the ZK circuit (see `zk/circuits/kyc_verifier/src/main.nr`,
-    /// parameter `wallet_address_hash`), so the proof is cryptographically
-    /// bound to exactly one wallet address.
-    ///
-    /// Without this binding an attacker who obtains *any* valid proof
-    /// (e.g. from another user) could re-submit it to mark their own address
-    /// as verified, as long as they also hold an unspent nullifier.  The
-    /// binding makes such an attack impossible: the proof can only be
-    /// accepted when `wallet` matches the address that was encoded at proving
-    /// time.
+    /// interpreted as a little-endian `u128`.
     pub fn verify(
         env: Env,
         wallet: Address,
@@ -222,32 +325,51 @@ impl ZkVerifier {
         wallet.require_auth();
         Self::assert_not_paused(&env);
 
-        // AZ-007: Enforce bound on public_inputs length to prevent resource abuse.
+        // AZ-007: Enforce exact bound on public_inputs length.
         if public_inputs.len() != MAX_PUBLIC_INPUTS_LEN {
             panic_with_error!(&env, ContractError::InvalidPublicInputsLength);
         }
 
-        // AZ-032: Verify that public_inputs[5] (wallet_address_hash) matches
-        // the caller.  We compute sha256(wallet.to_xdr()) and take the first
-        // 16 bytes as a little-endian u128.  This must equal what the prover
-        // committed to in the ZK circuit.
+        // AZ-032: Verify wallet_address_hash (public_inputs[5]) matches caller.
         let wallet_xdr: Bytes = wallet.clone().to_xdr(&env);
         let digest: BytesN<32> = env.crypto().sha256(&wallet_xdr);
         let digest_bytes = digest.to_array();
-        // Take bytes [0..16] and pack as little-endian u128.
         let mut hash_u128: u128 = 0u128;
         let mut i: u32 = 0;
         while i < 16 {
             hash_u128 |= (digest_bytes[i as usize] as u128) << (i * 8);
             i += 1;
         }
-        let claimed: u128 = public_inputs.get_unchecked(5);
-        if hash_u128 != claimed {
+        let claimed_wallet_hash: u128 = public_inputs.get_unchecked(5);
+        if hash_u128 != claimed_wallet_hash {
             panic_with_error!(&env, ContractError::ProofCallerMismatch);
         }
 
-        // AZ-002 — reject proofs whose commitment was never attested by the
-        // trusted KYC authority.
+        // AZ-001: Load the admin-controlled compliance policy.  Reject all
+        // verifications until the policy is explicitly configured.
+        let policy: PolicyParams = env
+            .storage()
+            .instance()
+            .get(&DataKey::Policy)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::PolicyNotConfigured));
+
+        // AZ-001: Enforce minimum KYC tier server-side.
+        // public_inputs[0] is the tier the prover encoded; it must meet or
+        // exceed the contract's required minimum.
+        let prover_tier: u128 = public_inputs.get_unchecked(0);
+        if prover_tier < policy.min_tier {
+            panic_with_error!(&env, ContractError::KycTierTooLow);
+        }
+
+        // AZ-001: Enforce allowed-country server-side.
+        // public_inputs[1] is the country the prover encoded; it must match
+        // exactly the country stored in the contract policy.
+        let prover_country: u128 = public_inputs.get_unchecked(1);
+        if prover_country != policy.allowed_country {
+            panic_with_error!(&env, ContractError::CountryNotAllowed);
+        }
+
+        // AZ-002: Reject proofs whose commitment was never attested.
         if !env
             .storage()
             .persistent()
@@ -265,19 +387,18 @@ impl ZkVerifier {
             panic_with_error!(&env, ContractError::NullifierAlreadySpent);
         }
 
-        // Record the nullifier.  TTL is set here; it will be bumped on every
-        // subsequent `is_verified` check so active entries stay alive.
-        env.storage()
-            .persistent()
-            .set(&DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()), &true);
+        // Record the nullifier in persistent storage (AZ-014).
+        env.storage().persistent().set(
+            &DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()),
+            &true,
+        );
         env.storage().persistent().extend_ttl(
             &DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()),
             NULLIFIER_TTL_THRESHOLD,
             NULLIFIER_TTL_LEDGERS,
         );
 
-        // Store an immutable validity deadline. Reads never extend this deadline,
-        // so a stale credential cannot remain valid merely because it is queried.
+        // Store an immutable validity deadline.
         let expires_at_ledger = env
             .ledger()
             .sequence()
@@ -336,6 +457,22 @@ impl ZkVerifier {
             .has(&DataKey::ScopedNullifier(commitment, nullifier))
     }
 
+    /// Return the admin address.
+    pub fn admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::Unauthorized))
+    }
+
+    /// Return whether the contract is paused.
+    pub fn paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
     // ── Admin ───────────────────────────────────────────────────────────────
 
     /// Pause the contract.
@@ -352,8 +489,7 @@ impl ZkVerifier {
         Self::extend_instance_ttl(&env);
     }
 
-    /// Revoke a wallet's verification immediately. Only the administrator may
-    /// revoke, and successful revocations are emitted for off-chain indexers.
+    /// Revoke a wallet's verification immediately.
     pub fn revoke_verification(env: Env, wallet: Address) -> bool {
         Self::check_admin(&env);
         let key = DataKey::Verified(wallet.clone());
