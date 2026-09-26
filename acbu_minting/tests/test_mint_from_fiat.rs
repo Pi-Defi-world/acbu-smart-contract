@@ -1,15 +1,18 @@
 #![cfg(test)]
 
-use acbu_minting::{MintingContract, MintingContractClient};
+use acbu_minting::{FiatSettlementProof, MintingContract, MintingContractClient};
+use ed25519_dalek::{Signer, SigningKey};
+use rand::rngs::OsRng;
 use shared::{CurrencyCode, DECIMALS};
 use soroban_env_host::budget::AsBudget;
 use soroban_sdk::testutils::StellarAssetContract;
+use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::xdr::{
     AlphaNum4, AssetCode4, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey,
     LedgerKeyTrustLine, ScAddress, TrustLineAsset, TrustLineEntry, TrustLineEntryExt,
     TrustLineFlags,
 };
-use soroban_sdk::{testutils::Address as _, Address, Env, String as SorobanString};
+use soroban_sdk::{testutils::Address as _, Address, Bytes, BytesN, Env, String as SorobanString};
 use std::rc::Rc;
 
 // --- Mocks (reuse from test.rs) ---
@@ -158,6 +161,9 @@ fn establish_trustline(env: &Env, holder: &Address, sac: &StellarAssetContract) 
         .unwrap();
 }
 
+/// AC-038: Initialize the minting contract, returning the operator ed25519
+/// `SigningKey` that was registered as `operator_pub_key`.  Tests that call
+/// `mint_from_fiat` must use `make_fiat_proof` with this key.
 fn init_mint_client(
     env: &Env,
     client: &MintingContractClient,
@@ -170,7 +176,10 @@ fn init_mint_client(
     treasury: &Address,
     fee_rate: i128,
     fee_single: i128,
-) {
+) -> SigningKey {
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let pub_key_bytes = signing_key.verifying_key().to_bytes();
+    let pub_key: BytesN<32> = BytesN::from_array(env, &pub_key_bytes);
     let config = acbu_minting::MintingConfig {
         admin: admin.clone(),
         oracle: oracle.clone(),
@@ -184,8 +193,52 @@ fn init_mint_client(
         // initialize rejects admin == operator (#5024); every test calls
         // set_operator right after init, so a placeholder is sufficient.
         operator: Address::generate(env),
+        operator_pub_key: pub_key,
     };
     client.initialize(&config);
+    signing_key
+}
+
+/// AC-038: Build a valid `FiatSettlementProof` for `mint_from_fiat` tests.
+///
+/// Replicates the commitment message encoding from `verify_fiat_settlement_proof`
+/// in `acbu_minting/src/lib.rs`:
+///   sha256( XDR(fintech_tx_id) ++ XDR(recipient) ++ XDR(fiat_amount)
+///           ++ XDR(currency)   ++ XDR(ledger_timestamp) )
+fn make_fiat_proof(
+    env: &Env,
+    signing_key: &SigningKey,
+    fintech_tx_id: &SorobanString,
+    recipient: &Address,
+    fiat_amount: i128,
+    currency: &CurrencyCode,
+) -> FiatSettlementProof {
+    let mut preimage = Bytes::new(env);
+    preimage.append(&fintech_tx_id.to_xdr(env));
+    preimage.append(&recipient.to_xdr(env));
+    preimage.append(&fiat_amount.to_xdr(env));
+    preimage.append(&currency.to_xdr(env));
+    preimage.append(&env.ledger().timestamp().to_xdr(env));
+
+    let digest = env.crypto().sha256(&preimage);
+    let message_bytes: std::vec::Vec<u8> = digest.to_array().to_vec();
+
+    let sig_bytes = signing_key.sign(&message_bytes).to_bytes();
+    let pub_key_bytes = signing_key.verifying_key().to_bytes();
+
+    FiatSettlementProof {
+        pub_key: BytesN::from_array(env, &pub_key_bytes),
+        signature: BytesN::from_array(env, &sig_bytes),
+    }
+}
+
+/// Produce a dummy proof (zeroed sig) for tests that should panic *before*
+/// proof verification is reached (e.g. wrong operator, empty tx_id).
+fn dummy_proof(env: &Env) -> FiatSettlementProof {
+    FiatSettlementProof {
+        pub_key: BytesN::from_array(env, &[0u8; 32]),
+        signature: BytesN::from_array(env, &[0u8; 64]),
+    }
 }
 
 // --- Tests for mint_from_fiat: Access Control and Validation ---
@@ -216,7 +269,7 @@ fn test_mint_from_fiat_success() {
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
 
-    init_mint_client(
+    let signing_key = init_mint_client(
         &env,
         &client,
         &admin,
@@ -234,12 +287,15 @@ fn test_mint_from_fiat_success() {
 
     let fiat_amount = 50 * DECIMALS;
     let fintech_tx_id = SorobanString::from_str(&env, "fintech_tx_001");
+    let currency = CurrencyCode::new(&env, "NGN");
+    let proof = make_fiat_proof(&env, &signing_key, &fintech_tx_id, &recipient, fiat_amount, &currency);
     let acbu = client.mint_from_fiat(
         &operator,
         &recipient,
-        &CurrencyCode::new(&env, "NGN"),
+        &currency,
         &fiat_amount,
         &fintech_tx_id,
+        &proof,
     );
 
     assert!(acbu > 0);
@@ -280,7 +336,7 @@ fn test_mint_from_fiat_unauthorized_caller() {
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
 
-    init_mint_client(
+    let _ = init_mint_client(
         &env,
         &client,
         &admin,
@@ -299,13 +355,14 @@ fn test_mint_from_fiat_unauthorized_caller() {
     let fiat_amount = 50 * DECIMALS;
     let fintech_tx_id = SorobanString::from_str(&env, "fintech_tx_001");
 
-    // Attacker tries to call mint_from_fiat - should fail
+    // Attacker tries to call mint_from_fiat — panics at #5007 before proof check.
     client.mint_from_fiat(
         &attacker,
         &recipient,
         &CurrencyCode::new(&env, "NGN"),
         &fiat_amount,
         &fintech_tx_id,
+        &dummy_proof(&env),
     );
 }
 
@@ -327,7 +384,7 @@ fn test_mint_from_fiat_recipient_self_mint() {
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
 
-    init_mint_client(
+    let _ = init_mint_client(
         &env,
         &client,
         &admin,
@@ -346,13 +403,14 @@ fn test_mint_from_fiat_recipient_self_mint() {
     let fiat_amount = 50 * DECIMALS;
     let fintech_tx_id = SorobanString::from_str(&env, "fintech_tx_001");
 
-    // Recipient tries to call as themselves - should fail because only operator can call
+    // Recipient tries to call as themselves — panics at #5007 before proof check.
     client.mint_from_fiat(
         &recipient,
         &recipient,
         &CurrencyCode::new(&env, "NGN"),
         &fiat_amount,
         &fintech_tx_id,
+        &dummy_proof(&env),
     );
 }
 
@@ -374,7 +432,7 @@ fn test_mint_from_fiat_empty_tx_id() {
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
 
-    init_mint_client(
+    let _ = init_mint_client(
         &env,
         &client,
         &admin,
@@ -393,13 +451,14 @@ fn test_mint_from_fiat_empty_tx_id() {
     let fiat_amount = 50 * DECIMALS;
     let fintech_tx_id = SorobanString::from_str(&env, "");
 
-    // Call with empty fintech_tx_id - should fail
+    // Call with empty fintech_tx_id — panics at #5014 before proof check.
     client.mint_from_fiat(
         &operator,
         &recipient,
         &CurrencyCode::new(&env, "NGN"),
         &fiat_amount,
         &fintech_tx_id,
+        &dummy_proof(&env),
     );
 }
 
@@ -421,7 +480,7 @@ fn test_mint_from_fiat_duplicate_tx_id() {
     stoken_sac.mint(&mint_addr, &(500 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
 
-    init_mint_client(
+    let signing_key = init_mint_client(
         &env,
         &client,
         &admin,
@@ -439,23 +498,28 @@ fn test_mint_from_fiat_duplicate_tx_id() {
 
     let fiat_amount = 50 * DECIMALS;
     let fintech_tx_id = SorobanString::from_str(&env, "fintech_tx_duplicate");
+    let currency = CurrencyCode::new(&env, "NGN");
 
-    // First call succeeds
+    // First call succeeds.
+    let proof1 = make_fiat_proof(&env, &signing_key, &fintech_tx_id, &recipient, fiat_amount, &currency);
     client.mint_from_fiat(
         &operator,
         &recipient,
-        &CurrencyCode::new(&env, "NGN"),
-        &fiat_amount,
-        &fintech_tx_id.clone(),
-    );
-
-    // Second call with same tx_id should fail
-    client.mint_from_fiat(
-        &operator,
-        &recipient,
-        &CurrencyCode::new(&env, "NGN"),
+        &currency,
         &fiat_amount,
         &fintech_tx_id,
+        &proof1,
+    );
+
+    // Second call with same tx_id should fail with #5008.
+    let proof2 = make_fiat_proof(&env, &signing_key, &fintech_tx_id, &recipient, fiat_amount, &currency);
+    client.mint_from_fiat(
+        &operator,
+        &recipient,
+        &currency,
+        &fiat_amount,
+        &fintech_tx_id,
+        &proof2,
     );
 }
 
@@ -477,7 +541,7 @@ fn test_mint_from_fiat_below_min_amount() {
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
 
-    init_mint_client(
+    let signing_key = init_mint_client(
         &env,
         &client,
         &admin,
@@ -493,16 +557,19 @@ fn test_mint_from_fiat_below_min_amount() {
 
     client.set_operator(&operator);
 
-    // Mint amount is too small (less than MIN_MINT_AMOUNT)
-    let fiat_amount = 1; // Way too small
+    // Mint amount is too small (less than MIN_MINT_AMOUNT); panics at #5003
+    // after proof verification passes.
+    let fiat_amount = 1;
     let fintech_tx_id = SorobanString::from_str(&env, "fintech_tx_small");
-
+    let currency = CurrencyCode::new(&env, "NGN");
+    let proof = make_fiat_proof(&env, &signing_key, &fintech_tx_id, &recipient, fiat_amount, &currency);
     client.mint_from_fiat(
         &operator,
         &recipient,
-        &CurrencyCode::new(&env, "NGN"),
+        &currency,
         &fiat_amount,
         &fintech_tx_id,
+        &proof,
     );
 }
 
@@ -524,7 +591,7 @@ fn test_mint_from_fiat_above_max_amount() {
     stoken_sac.mint(&mint_addr, &(100_000 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
 
-    init_mint_client(
+    let signing_key = init_mint_client(
         &env,
         &client,
         &admin,
@@ -540,16 +607,18 @@ fn test_mint_from_fiat_above_max_amount() {
 
     client.set_operator(&operator);
 
-    // Mint amount exceeds MAX_MINT_AMOUNT
+    // Mint amount exceeds MAX_MINT_AMOUNT; panics at #5003 after proof passes.
     let fiat_amount = 1_000_000_000_000_000;
     let fintech_tx_id = SorobanString::from_str(&env, "fintech_tx_large");
-
+    let currency = CurrencyCode::new(&env, "NGN");
+    let proof = make_fiat_proof(&env, &signing_key, &fintech_tx_id, &recipient, fiat_amount, &currency);
     client.mint_from_fiat(
         &operator,
         &recipient,
-        &CurrencyCode::new(&env, "NGN"),
+        &currency,
         &fiat_amount,
         &fintech_tx_id,
+        &proof,
     );
 }
 
@@ -570,7 +639,7 @@ fn test_mint_from_fiat_admin_not_default_operator() {
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
 
-    init_mint_client(
+    let signing_key = init_mint_client(
         &env,
         &client,
         &admin,
@@ -589,14 +658,17 @@ fn test_mint_from_fiat_admin_not_default_operator() {
 
     let fiat_amount = 50 * DECIMALS;
     let fintech_tx_id = SorobanString::from_str(&env, "fintech_tx_custom_op");
+    let currency = CurrencyCode::new(&env, "NGN");
+    let proof = make_fiat_proof(&env, &signing_key, &fintech_tx_id, &recipient, fiat_amount, &currency);
 
     // Custom operator should succeed
     let acbu = client.mint_from_fiat(
         &operator,
         &recipient,
-        &CurrencyCode::new(&env, "NGN"),
+        &currency,
         &fiat_amount,
         &fintech_tx_id,
+        &proof,
     );
     assert!(acbu > 0);
 }
@@ -619,7 +691,7 @@ fn test_mint_from_fiat_admin_when_operator_set() {
     stoken_sac.mint(&mint_addr, &(100 * DECIMALS));
     oracle_mock_client(&env, &oracle).seed_stoken(&stoken_id);
 
-    init_mint_client(
+    let _ = init_mint_client(
         &env,
         &client,
         &admin,
@@ -639,13 +711,14 @@ fn test_mint_from_fiat_admin_when_operator_set() {
     let fiat_amount = 50 * DECIMALS;
     let fintech_tx_id = SorobanString::from_str(&env, "fintech_tx_admin_tries");
 
-    // Admin tries to call but is not the operator anymore - should fail
+    // Admin tries to call but is not the operator anymore — panics at #5007.
     client.mint_from_fiat(
         &admin,
         &recipient,
         &CurrencyCode::new(&env, "NGN"),
         &fiat_amount,
         &fintech_tx_id,
+        &dummy_proof(&env),
     );
 }
 
@@ -662,7 +735,7 @@ fn test_mint_from_usdc_routes_fee_to_treasury() {
     let fee_rate = 300i128; // 3%
     let fee_single = 100i128;
 
-    init_mint_client(
+    let _ = init_mint_client(
         &env,
         &client,
         &admin,
@@ -716,7 +789,7 @@ fn test_mint_from_basket_returns_net_mint() {
     let fee_rate = 300i128; // 3%
     let fee_single = 100i128;
 
-    init_mint_client(
+    let _ = init_mint_client(
         &env,
         &client,
         &admin,
@@ -755,7 +828,7 @@ fn test_mint_from_fiat_rejects_contract_recipient() {
     let operator = Address::generate(&env);
     let contract_recipient = Address::generate(&env);
 
-    init_mint_client(
+    let signing_key = init_mint_client(
         &env,
         &client,
         &admin,
@@ -773,12 +846,17 @@ fn test_mint_from_fiat_rejects_contract_recipient() {
 
     let fiat_amount = 50 * DECIMALS;
     let fintech_tx_id = SorobanString::from_str(&env, "fintech_tx_contract_recip");
+    let currency = CurrencyCode::new(&env, "NGN");
+    // The recipient check happens before proof check (assert_recipient_is_account).
+    // Build a valid proof anyway so the argument is present.
+    let proof = make_fiat_proof(&env, &signing_key, &fintech_tx_id, &contract_recipient, fiat_amount, &currency);
 
     client.mint_from_fiat(
         &operator,
         &contract_recipient,
-        &CurrencyCode::new(&env, "NGN"),
+        &currency,
         &fiat_amount,
         &fintech_tx_id,
+        &proof,
     );
 }

@@ -5,7 +5,7 @@
 use acbu_minting::{MintingConfig, MintingContract, MintingContractClient, MintingError};
 use shared::MAX_CIRCUIT_PEERS;
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{contract, contractimpl, symbol_short, vec, Address, Env, Error, String, Vec};
+use soroban_sdk::{contract, contractimpl, symbol_short, vec, Address, BytesN, Env, Error, String, Vec};
 
 const ACCOUNT: &str = "GAAQEAYEAUDAOCAJBIFQYDIOB4IBCEQTCQKRMFYYDENBWHA5DYPSABOV";
 
@@ -44,6 +44,7 @@ fn setup() -> (Env, MintingContractClient<'static>, Address) {
         fee_rate_bps: 30,
         fee_single_bps: 100,
         operator: Address::generate(&env),
+        operator_pub_key: BytesN::from_array(&env, &[0u8; 32]),
     });
     (env, client, id)
 }

@@ -31,6 +31,31 @@ pub struct SettlementProof {
     pub timestamp: u64,
 }
 
+/// AC-038: Cryptographic fiat-settlement attestation.
+///
+/// Before `mint_from_fiat` mints any ACBU, the caller must supply an ed25519
+/// signature produced by the operator's off-chain key over the canonical
+/// commitment message.  The contract verifies the signature on-chain using
+/// `env.crypto().ed25519_verify`, so a compromised *Stellar* operator key
+/// alone is insufficient — the attacker would also need the separate ed25519
+/// signing key to forge a settlement proof.
+///
+/// Commitment message encoding (big-endian, no padding):
+///   sha256( XDR(fintech_tx_id) ++ XDR(recipient) ++ XDR(fiat_amount)
+///           ++ XDR(currency)   ++ XDR(ledger_timestamp) )
+///
+/// The operator registers their ed25519 public key during `initialize` (via
+/// `MintingConfig.operator_pub_key`) and may rotate it later via
+/// `set_operator_pub_key` (admin-only, with full auth).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FiatSettlementProof {
+    /// ed25519 public key (32 bytes) that produced the attestation.
+    pub pub_key: BytesN<32>,
+    /// ed25519 signature (64 bytes) over the canonical commitment message.
+    pub signature: BytesN<64>,
+}
+
 /// Centralised storage key registry — all instance/persistent keys for this contract are
 /// declared here so accidental key reuse or silent string-literal collisions can be caught
 /// by reviewing a single place.
@@ -66,6 +91,9 @@ pub struct DataKey {
     pub circuit_peers: Symbol,
     /// Burning contract authorised to report burns via `record_burn` (AC-005).
     pub burning_contract: Symbol,
+    /// AC-038: ed25519 public key used to verify fiat-settlement attestations in
+    /// `mint_from_fiat`.  Stored as `BytesN<32>`; rotatable by admin only.
+    pub operator_pub_key: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -93,6 +121,7 @@ const DATA_KEY: DataKey = DataKey {
     tx_nonce: symbol_short!("TX_NONCE"),
     circuit_peers: symbol_short!("CB_PEERS"),
     burning_contract: symbol_short!("BURN_CTR"),
+    operator_pub_key: symbol_short!("OP_PUBKY"),
 };
 
 /// Admin rotation timelock: the pending admin must wait this long before
@@ -146,6 +175,13 @@ pub enum MintingError {
     BurningContractNotSet = 5030,
     /// `record_burn` called with a non-positive amount (AC-005).
     InvalidBurnAmount = 5031,
+    /// AC-038: The ed25519 attestation signature on the fiat-settlement proof
+    /// does not verify against the stored operator public key.  This means the
+    /// mint was not backed by a cryptographically attested off-chain settlement.
+    InvalidFiatSettlementProof = 5032,
+    /// AC-038: No operator ed25519 public key has been registered; call
+    /// `set_operator_pub_key` (admin only) before using `mint_from_fiat`.
+    OperatorPubKeyNotSet = 5033,
     Unknown = 5999,
 }
 
@@ -183,6 +219,8 @@ impl Display for MintingError {
             Self::InvalidCircuitPeer => "invalid circuit-breaker peer",
             Self::BurningContractNotSet => "burning contract not set",
             Self::InvalidBurnAmount => "invalid burn amount",
+            Self::InvalidFiatSettlementProof => "fiat settlement proof signature is invalid",
+            Self::OperatorPubKeyNotSet => "operator ed25519 public key not set",
             Self::Unknown => "unknown minting error",
         };
         f.write_str(message)
@@ -202,6 +240,10 @@ pub struct MintingConfig {
     pub fee_rate_bps: i128,
     pub fee_single_bps: i128,
     pub operator: Address,
+    /// AC-038: ed25519 public key (32 bytes) corresponding to the operator's
+    /// off-chain signing key.  Every `mint_from_fiat` call must supply a valid
+    /// ed25519 attestation signed by this key.
+    pub operator_pub_key: BytesN<32>,
 }
 
 #[contracttype]
@@ -302,6 +344,10 @@ impl MintingContract {
             .instance()
             .set(&DATA_KEY.fee_single, &config.fee_single_bps);
         env.storage().instance().set(&DATA_KEY.operator, &config.operator);
+        // AC-038: store the operator's ed25519 public key for fiat-settlement proof verification.
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.operator_pub_key, &config.operator_pub_key);
         env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
         env.storage()
             .instance()
@@ -949,6 +995,11 @@ impl MintingContract {
     /// Fintech-partner fiat mint: operator (fintech backend) authorizes; validates fintech_tx_id
     /// to prevent duplicate minting. Requires both operator authorization and valid fintech transaction.
     /// This function enforces strict access control: only the operator (fintech partner) can call it.
+    ///
+    /// AC-038: Also requires a valid `FiatSettlementProof` — an ed25519 attestation signed by the
+    /// operator's registered off-chain key — proving that the corresponding fiat deposit was settled
+    /// before any ACBU is minted.  A compromised Stellar operator key alone is insufficient; the
+    /// attacker must also forge the ed25519 proof.
     pub fn mint_from_fiat(
         env: Env,
         operator: Address,
@@ -956,6 +1007,8 @@ impl MintingContract {
         currency: CurrencyCode,
         fiat_amount: i128,
         fintech_tx_id: SorobanString,
+        // AC-038: Cryptographic fiat-settlement attestation signed by the operator's ed25519 key.
+        proof: FiatSettlementProof,
     ) -> i128 {
         // Re-entrancy guard
         let _guard = reentrancy_guard::acquire_guard(&env);
@@ -983,6 +1036,21 @@ impl MintingContract {
         if is_fintech_tx_id_processed(&env, &normalized_tx_id) {
             env.panic_with_error(MintingError::DuplicateFintechTxId);
         }
+
+        // AC-038: Verify the fiat-settlement attestation.
+        //
+        // The operator's ed25519 key must be registered (stored at init or via
+        // `set_operator_pub_key`).  We hash the canonical commitment fields and
+        // check the supplied signature against the stored public key.  A panicking
+        // `ed25519_verify` maps directly to `InvalidFiatSettlementProof`.
+        verify_fiat_settlement_proof(
+            &env,
+            &proof,
+            &normalized_tx_id,
+            &recipient,
+            fiat_amount,
+            &currency,
+        );
 
         let min_amount: i128 = env
             .storage()
@@ -1203,6 +1271,31 @@ impl MintingContract {
             timestamp: env.ledger().timestamp(),
         };
         env.events().publish((symbol_short!("op_upd"),), event);
+    }
+
+    /// AC-038: Register or rotate the operator's ed25519 public key (admin only).
+    ///
+    /// This key is used to verify `FiatSettlementProof` attestations inside
+    /// `mint_from_fiat`.  The key must be a 32-byte ed25519 public key.
+    /// Only the admin may update it; the function panics if paused.
+    pub fn set_operator_pub_key(env: Env, new_pub_key: BytesN<32>) {
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        admin.require_auth();
+        Self::check_paused(&env);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.operator_pub_key, &new_pub_key);
+        env.events()
+            .publish((symbol_short!("op_pk"),), new_pub_key);
+    }
+
+    /// AC-038: Return the currently registered operator ed25519 public key.
+    /// Panics with `OperatorPubKeyNotSet` if no key has been registered yet.
+    pub fn get_operator_pub_key(env: Env) -> BytesN<32> {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.operator_pub_key)
+            .unwrap_or_else(|| env.panic_with_error(MintingError::OperatorPubKeyNotSet))
     }
 
     /// Overwrite the tracked total ACBU supply with `new_supply` (admin only).
@@ -1813,6 +1906,63 @@ impl MintingContract {
 }
 
 // Helper functions for proof tracking and validation
+
+/// AC-038: Verify a `FiatSettlementProof` attestation.
+///
+/// Constructs the canonical commitment message from the mint call's parameters
+/// and verifies the ed25519 signature against the operator's registered public
+/// key stored in instance storage.
+///
+/// Message layout (XDR-serialised, concatenated, then SHA-256 hashed):
+///   fintech_tx_id ++ recipient ++ fiat_amount ++ currency ++ ledger_timestamp
+///
+/// The hash is passed as the `message` argument to `ed25519_verify` (which
+/// internally hashes again only when required; on Soroban the raw bytes are
+/// used, so we pass the sha256 digest as a `Bytes` value).
+///
+/// Panics with `OperatorPubKeyNotSet` when no key is registered, or with
+/// `InvalidFiatSettlementProof` when the signature fails to verify.
+fn verify_fiat_settlement_proof(
+    env: &Env,
+    proof: &FiatSettlementProof,
+    fintech_tx_id: &SorobanString,
+    recipient: &Address,
+    fiat_amount: i128,
+    currency: &CurrencyCode,
+) {
+    // Retrieve the registered operator public key.
+    let stored_pub_key: BytesN<32> = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY.operator_pub_key)
+        .unwrap_or_else(|| env.panic_with_error(MintingError::OperatorPubKeyNotSet));
+
+    // Build the canonical commitment preimage.
+    let mut preimage = Bytes::new(env);
+    preimage.append(&fintech_tx_id.to_xdr(env));
+    preimage.append(&recipient.to_xdr(env));
+    preimage.append(&fiat_amount.to_xdr(env));
+    preimage.append(&currency.to_xdr(env));
+    preimage.append(&env.ledger().timestamp().to_xdr(env));
+
+    // Hash the preimage; this is the message the operator signed off-chain.
+    let digest = env.crypto().sha256(&preimage);
+    let message = Bytes::from_slice(env, &digest.to_array());
+
+    // Verify the signature; `ed25519_verify` panics on failure, so wrap it in
+    // a trap-to-error translation using a temporary invocation pattern.
+    // Soroban's `ed25519_verify` panics directly with a host error when the
+    // signature is invalid, which bubbles up as a contract error.  We therefore
+    // first confirm the supplied pub_key matches the stored key, then verify.
+    if proof.pub_key != stored_pub_key {
+        env.panic_with_error(MintingError::InvalidFiatSettlementProof);
+    }
+
+    // This panics (bubbles up as a contract invocation failure) if the
+    // signature does not verify — which is the correct on-chain behaviour.
+    env.crypto()
+        .ed25519_verify(&stored_pub_key, &message, &proof.signature);
+}
 
 fn generate_unique_tx_id(env: &Env, user: &Address, amount: i128, prefix: &str) -> SorobanString {
     let nonce = next_tx_nonce(env);
