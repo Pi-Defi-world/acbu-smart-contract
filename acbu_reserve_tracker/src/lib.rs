@@ -132,10 +132,14 @@ const UPGRADE_TIMELOCK_SECONDS: u64 = 86_400;
 /// Only one verify_reserves call is allowed per this cooldown period.
 const VERIFY_RESERVES_COOLDOWN_SECONDS: u64 = 60;
 
-/// Maximum age of an attestation before external systems should consider
-/// it stale. The custodian is expected to submit fresh attestations within
-/// this window. 24 hours.
-#[allow(dead_code)]
+/// Maximum age of an attestation before it is considered stale and reserves
+/// are no longer trusted. The custodian is expected to submit a fresh
+/// Merkle-root attestation within this window. 24 hours.
+///
+/// Used in [`ReserveTrackerContract::is_reserve_sufficient`] to implement the
+/// AC-023 / SC-015 attestation gating: if no attestation exists, or the most
+/// recent one is older than this value, `is_reserve_sufficient` returns `false`,
+/// blocking all minting and burning until a fresh attestation is submitted.
 const ATTESTATION_MAX_AGE_SECONDS: u64 = 86_400;
 
 /// Allowed deviation between the admin-reported `value_usd` and the value
@@ -372,10 +376,43 @@ impl ReserveTrackerContract {
     /// supply valued at the oracle's ACBU/USD rate. Always `false` while the
     /// reserve circuit breaker is tripped (see [`Self::pause`]); otherwise
     /// trivially `true` when supply is non-positive or values to zero.
+    ///
+    /// **AC-023 / SC-015 — Attestation gating:** This function is fail-closed with
+    /// respect to the Merkle attestation.  Before trusting any admin-reported reserve
+    /// values it verifies that:
+    ///
+    /// 1. A Merkle-root attestation has been submitted by the custodian (i.e.
+    ///    `attestation_ts` is present in storage), and
+    /// 2. The attestation is not older than `ATTESTATION_MAX_AGE_SECONDS` (24 h).
+    ///
+    /// If either condition is not met the function returns `false`, blocking minting
+    /// and burning until the custodian submits a fresh attestation.  This ensures
+    /// that the external, verifiable source of truth (SC-015) actively gates every
+    /// reserve check rather than being dead code.
     pub fn is_reserve_sufficient(env: Env, total_acbu_supply: i128) -> bool {
         if Self::is_paused(env.clone()) {
             return false;
         }
+
+        // ── AC-023 / SC-015: Attestation freshness gate ──────────────────────
+        // Fail closed: if no attestation has ever been submitted, or the most
+        // recent one is older than ATTESTATION_MAX_AGE_SECONDS, treat reserves
+        // as untrustworthy and block mint / burn.
+        let attestation_ts: Option<u64> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.attestation_ts);
+        match attestation_ts {
+            None => return false, // No attestation ever submitted
+            Some(ts) => {
+                let now = env.ledger().timestamp();
+                if now.saturating_sub(ts) > ATTESTATION_MAX_AGE_SECONDS {
+                    return false; // Attestation has expired
+                }
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         if total_acbu_supply <= 0 {
             return true;
         }
