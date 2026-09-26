@@ -20,6 +20,23 @@ fn poseidon2_hash_4(a: Field, b: Field, c: Field, d: Field) -> Field {
     state[0]
 }
 
+// AZ-001 — Defence-in-depth note
+//
+// `required_kyc` and `allowed_country` are `pub` inputs: the prover must
+// commit to them inside the proof.  The circuit alone cannot prevent a
+// malicious prover from choosing `required_kyc = 0` and any `allowed_country`,
+// because those are valid inputs that trivially satisfy the assertions below.
+//
+// The **on-chain contract** (`contracts/zk_verifier/src/lib.rs`) closes this
+// gap with a second, independent check: it reads its own admin-controlled
+// `PolicyParams` from storage and verifies that
+//
+//   public_inputs[0]  (≡ required_kyc)    ≥  policy.min_tier
+//   public_inputs[1]  (≡ allowed_country) == policy.allowed_country
+//
+// Because the policy lives in contract storage and is only writable by the
+// admin, the prover cannot influence these values.  Both the circuit proof
+// AND the server-side policy check must pass for `verify()` to succeed.
 fn main(
     kyc_level: u64,
     country_code: u64,
@@ -38,10 +55,14 @@ fn main(
     );
     assert(computed == commitment);
 
-    // 2) Prove KYC level meets or exceeds the required threshold
+    // 2) Prove KYC level meets or exceeds the required threshold.
+    //    Note: the on-chain contract ALSO enforces this against its stored
+    //    policy.min_tier, so the prover cannot bypass by setting required_kyc=0.
     assert(kyc_level >= required_kyc);
 
-    // 3) Prove the country matches the allowed jurisdiction
+    // 3) Prove the country matches the allowed jurisdiction.
+    //    Note: the on-chain contract ALSO enforces this against its stored
+    //    policy.allowed_country, so the prover cannot bypass by choosing freely.
     assert(country_code == allowed_country);
 
     // 4) Derive nullifier = hash(commitment, salt) to prevent double-use

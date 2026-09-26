@@ -319,38 +319,33 @@ pub enum ContractError {
     /// AZ-002).
     CommitmentNotAttested = 17,
     /// The submitted nullifier was already consumed for this credential
-    /// commitment and cannot be replayed (zk_verifier, AZ-025).
+    /// commitment and cannot be replayed (zk_verifier, AZ-025 / AZ-014).
     NullifierAlreadySpent = 18,
-
-    /// The nullifier submitted in this verification has already been spent for
-    /// this commitment. Replay attempts are rejected (zk_verifier, AZ-014).
-    NullifierAlreadySpent = 18,
-
     /// The `public_inputs` vector length does not match the expected constant
     /// `MAX_PUBLIC_INPUTS_LEN`. Rejects malformed or oversized inputs before
     /// any proof verification work is performed (zk_verifier, AZ-007).
     InvalidPublicInputsLength = 19,
-
     /// The wallet address hash encoded in `public_inputs[5]` (`wallet_address_hash`)
     /// does not match the address that signed and submitted this transaction.
     /// Prevents one valid proof from being replayed across different wallets
     /// (zk_verifier, AZ-032).
     ProofCallerMismatch = 20,
 
-    /// The nullifier submitted in this verification has already been spent for
-    /// this commitment. Replay attempts are rejected (zk_verifier, AZ-014).
-    NullifierAlreadySpent = 18,
-
-    /// The `public_inputs` vector length does not match the expected constant
-    /// `MAX_PUBLIC_INPUTS_LEN`. Rejects malformed or oversized inputs before
-    /// any proof verification work is performed (zk_verifier, AZ-007).
-    InvalidPublicInputsLength = 19,
-
-    /// The wallet address hash encoded in `public_inputs[5]` (`wallet_address_hash`)
-    /// does not match the address that signed and submitted this transaction.
-    /// Prevents one valid proof from being replayed across different wallets
-    /// (zk_verifier, AZ-032).
-    ProofCallerMismatch = 20,
+    // ── AZ-001: server-side compliance policy enforcement ──────────────────
+    /// No compliance policy has been configured by the admin yet.
+    /// `verify()` refuses all proofs until a policy is set, preventing a
+    /// zero-tier / any-country bypass during the window after deployment.
+    PolicyNotConfigured = 21,
+    /// The KYC tier encoded in `public_inputs[0]` is below the minimum tier
+    /// required by the contract's stored compliance policy.
+    /// A prover who sets `required_kyc = 0` in the circuit can no longer
+    /// bypass this check because the contract independently enforces the
+    /// admin-controlled minimum (AZ-001).
+    KycTierTooLow = 22,
+    /// The country code encoded in `public_inputs[1]` is not in the set of
+    /// allowed jurisdictions stored by the contract.  A prover who sets
+    /// `allowed_country` to their own value cannot bypass this check (AZ-001).
+    CountryNotAllowed = 23,
 
     Unknown = 9999,
 }
@@ -378,6 +373,9 @@ impl core::fmt::Display for ContractError {
             ContractError::NullifierAlreadySpent => write!(f, "nullifier already spent"),
             ContractError::InvalidPublicInputsLength => write!(f, "invalid public inputs length"),
             ContractError::ProofCallerMismatch => write!(f, "proof caller mismatch: public_inputs[5] (wallet_address_hash) does not match submitting address (AZ-032)"),
+            ContractError::PolicyNotConfigured => write!(f, "compliance policy not configured: admin must call set_policy before any verification is accepted (AZ-001)"),
+            ContractError::KycTierTooLow => write!(f, "KYC tier in public_inputs[0] is below the minimum tier required by the contract compliance policy (AZ-001)"),
+            ContractError::CountryNotAllowed => write!(f, "country code in public_inputs[1] is not in the allowed jurisdictions configured by the contract compliance policy (AZ-001)"),
             ContractError::Unknown => write!(f, "unknown error"),
         }
     }
