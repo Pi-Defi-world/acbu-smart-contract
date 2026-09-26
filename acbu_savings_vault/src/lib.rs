@@ -306,17 +306,18 @@ impl SavingsVault {
         let token = soroban_sdk::token::Client::new(&env, &acbu);
         let vault_addr = env.current_contract_address();
 
-        // Transfer the net amount to the vault first, verifying success.
-        match token.try_transfer(&user, &vault_addr, &net_amount) {
+        // AC-037: Pull the full gross amount in a single transfer so the user
+        // only needs one approval for `amount`.  The fee is then forwarded
+        // from the vault to the admin in a second, vault-initiated transfer
+        // (no user auth required for that leg).
+        match token.try_transfer(&user, &vault_addr, &amount) {
             Ok(Ok(())) => {}
             _ => env.panic_with_error(Error::AccountingError),
         }
-        // Transfer the fee to the admin if applicable, verifying success.
+        // Forward the fee portion from vault to admin (vault-initiated, no
+        // additional user approval needed).
         if fee_amount > 0 {
-            match token.try_transfer(&user, &admin, &fee_amount) {
-                Ok(Ok(())) => {}
-                _ => env.panic_with_error(Error::AccountingError),
-            }
+            token.transfer(&vault_addr, &admin, &fee_amount);
         }
 
         // Record the deposit lot in storage after the transfers succeed
