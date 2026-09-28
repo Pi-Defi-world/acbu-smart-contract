@@ -13,7 +13,6 @@
 
 # Editor/IDE files
 .idea/
-.vscode/
 *.swp
 *.swo
 *~
@@ -62,3 +61,7 @@ test_comprehensive.rs
 # Python
 __pycache__/
 *.pyc
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore
