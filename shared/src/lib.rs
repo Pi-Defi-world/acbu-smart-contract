@@ -444,6 +444,12 @@ pub enum ContractError {
     /// `allowed_country` to their own value cannot bypass this check (AZ-001).
     CountryNotAllowed = 23,
 
+    /// The vault has not approved the burning contract as a spender with
+    /// sufficient allowance for the requested S-token transfer.  Ensure the
+    /// vault calls `approve(burning_contract, amount, expiry)` on each S-token
+    /// before redemption.
+    VaultAllowanceInsufficient = 14,
+
     Unknown = 9999,
 }
 
