@@ -448,7 +448,10 @@ pub enum ContractError {
     /// sufficient allowance for the requested S-token transfer.  Ensure the
     /// vault calls `approve(burning_contract, amount, expiry)` on each S-token
     /// before redemption.
-    VaultAllowanceInsufficient = 14,
+    ///
+    /// Note: this must use a code that is not already assigned (14 is
+    /// `ArithmeticOverflow`), otherwise the enum fails to compile with E0081.
+    VaultAllowanceInsufficient = 24,
 
     Unknown = 9999,
 }
@@ -479,6 +482,7 @@ impl core::fmt::Display for ContractError {
             ContractError::PolicyNotConfigured => write!(f, "compliance policy not configured: admin must call set_policy before any verification is accepted (AZ-001)"),
             ContractError::KycTierTooLow => write!(f, "KYC tier in public_inputs[0] is below the minimum tier required by the contract compliance policy (AZ-001)"),
             ContractError::CountryNotAllowed => write!(f, "country code in public_inputs[1] is not in the allowed jurisdictions configured by the contract compliance policy (AZ-001)"),
+            ContractError::VaultAllowanceInsufficient => write!(f, "vault allowance insufficient: the vault has not approved the burning contract for the requested S-token transfer (AC-034)"),
             ContractError::Unknown => write!(f, "unknown error"),
         }
     }

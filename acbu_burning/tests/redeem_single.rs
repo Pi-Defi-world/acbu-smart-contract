@@ -335,7 +335,7 @@ fn test_redeem_single_stale_currency_rate() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #14)")] // VaultAllowanceInsufficient
+#[should_panic(expected = "Error(Contract, #24)")] // VaultAllowanceInsufficient
 fn test_redeem_single_no_vault_allowance() {
     let env = Env::default();
     let ctx = setup_test(&env);
@@ -361,7 +361,7 @@ fn test_redeem_single_no_vault_allowance() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #14)")] // VaultAllowanceInsufficient
+#[should_panic(expected = "Error(Contract, #24)")] // VaultAllowanceInsufficient
 fn test_redeem_single_insufficient_vault_allowance() {
     let env = Env::default();
     let ctx = setup_test(&env);
