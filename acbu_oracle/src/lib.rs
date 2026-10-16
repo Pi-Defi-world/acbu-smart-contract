@@ -96,6 +96,13 @@ const MIN_ORACLE_SOURCE_FEEDS: u32 = 3;
 /// Number of decimal places used for all rates reported by this oracle.
 const RATE_DECIMALS: u32 = 7;
 
+/// W10-SEC-001: hard floor on the validator quorum required to accept a rate.
+/// A single validator (or a colluding minority below this threshold) must never
+/// be able to unilaterally set the ACBU rate. This floor is enforced on top of
+/// the configurable `min_signatures` so that even a misconfigured or malicious
+/// admin cannot lower the effective quorum below 3-of-N.
+pub const MIN_VALIDATOR_QUORUM: u32 = 3;
+
 /// Mirrors acbu_reserve_tracker's instance-TTL ceiling: bumps the entry to
 /// ~300 days (at 5s/ledger) on every rate write and read. Every mint, burn,
 /// and reserve check reads through this contract's instance storage, so it
@@ -277,6 +284,9 @@ impl OracleContract {
         }
         if min_signatures == 0 {
             env.panic_with_error(OracleError::MinSignaturesZero);
+        }
+        if min_signatures < MIN_VALIDATOR_QUORUM {
+            env.panic_with_error(OracleError::InvalidMinSignatures);
         }
         if validators.len() > MAX_VALIDATORS {
             env.panic_with_error(OracleError::MaxValidatorsReached);
@@ -509,6 +519,13 @@ impl OracleContract {
             .instance()
             .get(&DATA_KEY.min_signatures)
             .unwrap();
+        // W10-SEC-001: enforce the hard 3-of-N floor regardless of stored config
+        // so a single validator can never unilaterally commit a rate.
+        let min_sigs = if min_sigs < MIN_VALIDATOR_QUORUM {
+            MIN_VALIDATOR_QUORUM
+        } else {
+            min_sigs
+        };
 
         if sources.len() > 0 {
             let required = min_sigs.max(MIN_ORACLE_SOURCE_FEEDS);
@@ -784,6 +801,11 @@ impl OracleContract {
             .instance()
             .get(&DATA_KEY.min_signatures)
             .unwrap();
+        let min_sigs = if min_sigs < MIN_VALIDATOR_QUORUM {
+            MIN_VALIDATOR_QUORUM
+        } else {
+            min_sigs
+        };
 
         let current_time = env.ledger().timestamp();
 
@@ -1055,6 +1077,9 @@ impl OracleContract {
         let validators: Vec<Address> =
             env.storage().instance().get(&DATA_KEY.validators).unwrap();
         if new_min == 0 || new_min > validators.len() {
+            env.panic_with_error(OracleError::InvalidMinSignatures);
+        }
+        if new_min < MIN_VALIDATOR_QUORUM {
             env.panic_with_error(OracleError::InvalidMinSignatures);
         }
         env.storage()

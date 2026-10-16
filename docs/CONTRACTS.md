@@ -106,7 +106,7 @@ Aggregates exchange rates from multiple validators and provides rate data.
 
 ### Access Control
 
-- Update rates: Validators only (multisig)
+- Update rates: Requires an aggregated 3-of-5 validator quorum (threshold signature); a single validator's submission is never stored as authoritative
 - Read rates: Public
 - Manage validators: Admin only
 
@@ -115,6 +115,8 @@ Aggregates exchange rates from multiple validators and provides rate data.
 ## Reserve Tracker Contract (`acbu_reserve_tracker`)
 
 Tracks total reserves backing ACBU tokens across multiple currencies.
+
+Rate updates accepted by the Oracle are gated on a 3-of-5 multi-validator quorum; `min_signatures` only gates price *sources* and does not substitute for validator signature aggregation.
 
 ### Key Functions
 
@@ -128,6 +130,10 @@ Tracks total reserves backing ACBU tokens across multiple currencies.
 
 - Used by Minting and Burning contracts for reserve verification
 - Queries Oracle for currency rates
+
+### Security
+
+- Oracle rate updates require a 3-of-5 validator quorum; no single validator can unilaterally set the ACBU rate
 
 ---
 
