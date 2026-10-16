@@ -30,9 +30,8 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 20 | `ProofCallerMismatch` | The wallet address hash encoded in `public_inputs[5]` (`wallet_address_hash`) does not match the address that signed and submitted this transaction. Prevents one valid proof from being replayed across different wallets (zk_verifier, AZ-032). |
 | 21 | `PolicyNotConfigured` | No compliance policy has been configured by the admin yet. `verify()` refuses all proofs until a policy is set, preventing a zero-tier / any-country bypass during the window after deployment. |
 | 22 | `KycTierTooLow` | The KYC tier encoded in `public_inputs[0]` is below the minimum tier required by the contract's stored compliance policy. A prover who sets `required_kyc = 0` in the circuit can no longer bypass this check because the contract independently enforces the admin-controlled minimum (AZ-001). |
-| 23 | `CountryNotAllowed` | The country code encoded in `public_inputs[1]` is not in the set of allowed jurisdictions stored by the contract. A prover who sets `allowed_country` to their own value cannot bypass this check (AZ-001). |
-| 24 | `VkHashMismatch` | The verification key provided at contract initialization does not match the pinned audited VK hash (W10-SEC-009). |
-| 14 | `VaultAllowanceInsufficient` | The vault has not approved the burning contract as a spender with sufficient allowance for the requested S-token transfer. Ensure the vault calls `approve(burning_contract, amount, expiry)` on each S-token before redemption. |
+| 23 | `CountryNotAllowed` | The country code encoded in `public_inputs[1]` is not in the set of allowed jurisdictions stored by the contract.  A prover who sets `allowed_country` to their own value cannot bypass this check (AZ-001). |
+| 14 | `VaultAllowanceInsufficient` | The vault has not approved the burning contract as a spender with sufficient allowance for the requested S-token transfer.  Ensure the vault calls `approve(burning_contract, amount, expiry)` on each S-token before redemption. |
 | 9999 | `Unknown` | unknown error |
 
 ## `shared / reentrancy guard` - `ReentrancyError`
@@ -168,6 +167,8 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 5029 | `InvalidCircuitPeer` | The circuit-breaker peer list is invalid (too long, duplicate, or self). |
 | 5030 | `BurningContractNotSet` | `record_burn` called while no burning contract is linked (AC-005). |
 | 5031 | `InvalidBurnAmount` | `record_burn` called with a non-positive amount (AC-005). |
+| 5032 | `InvalidFiatSettlementProof` | AC-038: The ed25519 attestation signature on the fiat-settlement proof does not verify against the stored operator public key.  This means the mint was not backed by a cryptographically attested off-chain settlement. |
+| 5033 | `OperatorPubKeyNotSet` | AC-038: No operator ed25519 public key has been registered; call `set_operator_pub_key` (admin only) before using `mint_from_fiat`. |
 | 5999 | `Unknown` | unknown minting error |
 
 ## `acbu_oracle` - `OracleError`
@@ -214,14 +215,14 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 8005 | `AdminTimelockNotElapsed` | admin timelock has not elapsed |
 | 8006 | `NoPendingAdminToCancel` | no pending admin to cancel |
 | 8007 | `Unauthorized` | unauthorized |
-| 8008 | `AttestationNotFound` | no attestation submitted yet |
-| 8009 | `InvalidMerkleProof` | merkle proof does not match stored root |
-| 8010 | `InvalidCustodian` | caller is not the custodian |
-| 8011 | `AttestationExpired` | attestation has expired |
-| 8014 | `NonPositiveAmount` | amount and value_usd must be positive |
-| 8015 | `InconsistentReserve` | value_usd inconsistent with oracle rate |
-| 8016 | `DuplicateCurrency` | currency already tracked |
-| 8012 | `NoPendingUpgrade` | no pending upgrade |
-| 8013 | `TimelockNotElapsed` | timelock has not elapsed |
+| 8008 | `DuplicateCurrency` | currency already tracked |
+| 8009 | `AttestationNotFound` | no attestation submitted yet |
+| 8010 | `InvalidMerkleProof` | merkle proof does not match stored root |
+| 8011 | `InvalidCustodian` | caller is not the custodian |
+| 8012 | `AttestationExpired` | attestation has expired |
+| 8013 | `NoPendingUpgrade` | no pending upgrade |
+| 8014 | `TimelockNotElapsed` | timelock has not elapsed |
+| 8015 | `NonPositiveAmount` | amount and value_usd must be positive |
+| 8016 | `InconsistentReserve` | value_usd inconsistent with oracle rate |
 | 8017 | `OracleStale` | oracle rate is stale |
 | 8999 | `Unknown` | unknown reserve tracker error |

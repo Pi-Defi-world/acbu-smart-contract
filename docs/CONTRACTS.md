@@ -185,6 +185,7 @@ Provides peer-to-peer lending functionality for ACBU tokens.
 - `borrow`: Borrow ACBU from a specific lender's liquidity (borrower and lender
   must both authorize)
 - `repay`: Repay borrowed ACBU
+- `liquidate`: Write off an overdue loan (lender only)
 
 ### Features
 
@@ -201,9 +202,10 @@ has been removed. Because the loan is unsecured, the lender bears the full credi
 risk and must authorize each individual loan alongside the borrower.
 
 `LoanData.collateral_amount` (always `0`) and error code `2014`
-(`InsufficientCollateral`) are reserved for a future *distinct-asset* collateral
-extension, which also requires oracle pricing and a liquidation path. No
-`liquidate` entrypoint exists today: an unrepaid loan remains open in storage.
+(`InsufficientCollateral`) are reserved for a future _distinct-asset_ collateral
+extension, which also requires oracle pricing. An overdue loan can be written off
+by its lender via `liquidate()`, which removes the principal from the lender's
+tracked balance and marks the loan as `LoanStatus::Defaulted`.
 
 ---
 

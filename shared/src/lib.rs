@@ -451,7 +451,7 @@ pub enum ContractError {
     /// sufficient allowance for the requested S-token transfer.  Ensure the
     /// vault calls `approve(burning_contract, amount, expiry)` on each S-token
     /// before redemption.
-    VaultAllowanceInsufficient = 14,
+    VaultAllowanceInsufficient = 24,
 
     Unknown = 9999,
 }
@@ -473,6 +473,9 @@ impl core::fmt::Display for ContractError {
             ContractError::InvalidVersion => write!(f, "invalid version"),
             ContractError::SlippageExceeded => write!(f, "output below minimum: slippage exceeded"),
             ContractError::ArithmeticOverflow => write!(f, "arithmetic overflow"),
+            ContractError::VaultAllowanceInsufficient => {
+                write!(f, "vault allowance insufficient")
+            }
             ContractError::InvalidCircuitPeer => write!(f, "invalid circuit-breaker peer"),
             ContractError::CommitmentAlreadyAttested => write!(f, "commitment already attested"),
             ContractError::CommitmentNotAttested => write!(f, "commitment not attested"),

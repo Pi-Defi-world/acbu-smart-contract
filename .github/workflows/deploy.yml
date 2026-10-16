@@ -98,11 +98,7 @@ jobs:
 
       # -----------------------------------------------------------------------
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.88.0
-          toolchain: "1.88.0"
-          targets: wasm32-unknown-unknown
+        uses: ./.github/actions/rust-toolchain
 
       # -----------------------------------------------------------------------
       - name: Cache Cargo registry
@@ -151,6 +147,32 @@ jobs:
           STELLAR_SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
           # Pass mainnet confirmation via env var (non-interactive guard in deploy.sh)
           DEPLOY_CONFIRM: ${{ github.event.inputs.network == 'mainnet' && github.event.inputs.confirm || '' }}
+          # Initialisation parameters — real addresses come from GitHub
+          # Environment *variables* (Settings → Environments → <network> →
+          # Variables).  deploy.sh validates them (non-empty, non-placeholder)
+          # before spending any XLM.  See DEPLOYMENT.md § Initialisation
+          # parameters for the full list.
+          ADMIN_ADDRESS: ${{ vars.ADMIN_ADDRESS }}
+          ACBU_TOKEN_ID: ${{ vars.ACBU_TOKEN_ID }}
+          USDC_TOKEN_ID: ${{ vars.USDC_TOKEN_ID }}
+          VAULT_ADDRESS: ${{ vars.VAULT_ADDRESS }}
+          TREASURY_ADDRESS: ${{ vars.TREASURY_ADDRESS }}
+          WITHDRAWAL_PROCESSOR: ${{ vars.WITHDRAWAL_PROCESSOR }}
+          OPERATOR_ADDRESS: ${{ vars.OPERATOR_ADDRESS }}
+          OPERATOR_PUB_KEY: ${{ vars.OPERATOR_PUB_KEY }}
+          ORACLE_VALIDATORS: ${{ vars.ORACLE_VALIDATORS }}
+          ORACLE_MIN_SIGNATURES: ${{ vars.ORACLE_MIN_SIGNATURES }}
+          MULTISIG_SIGNERS: ${{ vars.MULTISIG_SIGNERS }}
+          MULTISIG_THRESHOLD: ${{ vars.MULTISIG_THRESHOLD }}
+          MIN_RESERVE_RATIO_BPS: ${{ vars.MIN_RESERVE_RATIO_BPS }}
+          MINT_FEE_RATE_BPS: ${{ vars.MINT_FEE_RATE_BPS }}
+          MINT_FEE_SINGLE_BPS: ${{ vars.MINT_FEE_SINGLE_BPS }}
+          BURN_FEE_RATE_BPS: ${{ vars.BURN_FEE_RATE_BPS }}
+          BURN_FEE_SINGLE_REDEEM_BPS: ${{ vars.BURN_FEE_SINGLE_REDEEM_BPS }}
+          SAVINGS_FEE_RATE_BPS: ${{ vars.SAVINGS_FEE_RATE_BPS }}
+          SAVINGS_YIELD_RATE_BPS: ${{ vars.SAVINGS_YIELD_RATE_BPS }}
+          LENDING_FEE_RATE_BPS: ${{ vars.LENDING_FEE_RATE_BPS }}
+          SKIP_INIT: ${{ vars.DEPLOY_SKIP_INIT }}
         run: |
           bash scripts/deploy.sh "${{ github.event.inputs.network }}"
 
@@ -168,10 +190,10 @@ jobs:
           else
             git commit -m "chore(deploy): update contract registry for ${{ github.event.inputs.network }} [skip ci]
 
-  Deployed by: ${{ github.actor }}
-  Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-  Network: ${{ github.event.inputs.network }}
-  Git ref: ${{ github.ref }}"
+            Deployed by: ${{ github.actor }}
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Network: ${{ github.event.inputs.network }}
+            Git ref: ${{ github.ref }}"
 
             git push origin HEAD:${{ github.ref_name }}
             echo "✅ Registry committed and pushed to ${{ github.ref_name }}."
