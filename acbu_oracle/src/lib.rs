@@ -282,14 +282,25 @@ impl OracleContract {
             env.panic_with_error(OracleError::MaxValidatorsReached);
         }
 
+        // W10-S-017: the validator set must contain distinct addresses. A repeated
+        // address lets one operator count twice toward `validators.len()` — and
+        // with it the upper bound accepted by `set_min_signatures` — while still
+        // contributing only a single signature to any quorum. Operator
+        // independence (one key per independent operator) therefore starts from a
+        // set of genuinely distinct keys, so duplicates are rejected up front,
+        // before any state is written.
+        let mut validator_set: Map<Address, bool> = Map::new(&env);
+        for v in validators.iter() {
+            if validator_set.contains_key(v.clone()) {
+                env.panic_with_error(OracleError::ValidatorAlreadyExists);
+            }
+            validator_set.set(v, true);
+        }
+
         env.storage().instance().set(&DATA_KEY.admin, &admin);
         env.storage()
             .instance()
             .set(&DATA_KEY.validators, &validators);
-        let mut validator_set: Map<Address, bool> = Map::new(&env);
-        for v in validators.iter() {
-            validator_set.set(v, true);
-        }
         env.storage()
             .instance()
             .set(&DATA_KEY.validator_set, &validator_set);
@@ -504,21 +515,18 @@ impl OracleContract {
             }
         }
 
-        if sources.len() > 0 {
-            let min_sigs: u32 = env
-                .storage()
-                .instance()
-                .get(&DATA_KEY.min_signatures)
-                .unwrap();
-            let required = min_sigs.max(MIN_ORACLE_SOURCE_FEEDS);
-            if sources.len() < required {
-                env.panic_with_error(OracleError::InsufficientOracleSources);
-            }
         let min_sigs: u32 = env
             .storage()
             .instance()
             .get(&DATA_KEY.min_signatures)
             .unwrap();
+
+        if sources.len() > 0 {
+            let required = min_sigs.max(MIN_ORACLE_SOURCE_FEEDS);
+            if sources.len() < required {
+                env.panic_with_error(OracleError::InsufficientOracleSources);
+            }
+        }
 
         // ── Emergency bypass logic (SC-025) ──────────────────────────────────
         //
