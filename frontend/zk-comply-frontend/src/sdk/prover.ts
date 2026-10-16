@@ -6,7 +6,11 @@ import { Noir } from "@noir-lang/noir_js";
 import { UltraHonkBackend } from "@aztec/bb.js";
 import { compile, createFileManager } from "@noir-lang/noir_wasm";
 import type { ProofArtifacts, ComplianceInput } from "./types";
-import { computeCommitment, computeNullifier } from "./poseidon";
+import {
+  computeCommitment,
+  computeNullifier,
+  computeAccountBinding,
+} from "./poseidon";
 
 let compiled: Awaited<ReturnType<typeof compile>> | null = null;
 let backend: UltraHonkBackend | null = null;
@@ -55,23 +59,35 @@ export async function generateProof(
     throw new Error("Circuit not loaded. Call loadCircuit() first.");
   }
 
+  if (!input.accountAddress) {
+    throw new Error(
+      "ComplianceInput.accountAddress is required to bind the proof to the caller."
+    );
+  }
+
   const commitment = await computeCommitment(input.credential);
   const nullifier = await computeNullifier(commitment, input.credential.salt);
+  const accountBinding = await computeAccountBinding(
+    input.accountAddress,
+    input.accountSalt
+  );
 
   const circuitInputs = {
     kyc_level: input.credential.kycLevel,
     country_code: input.credential.countryCode,
     salt: fieldHex(input.credential.salt),
+    account_salt: fieldHex(input.accountSalt),
     commitment: fieldHex(commitment),
     required_kyc: input.requiredKyc,
     allowed_country: input.allowedCountry,
     nullifier: fieldHex(nullifier),
+    account_binding: fieldHex(accountBinding),
   };
 
   const program = new Noir(compiled as never);
   const { witness } = await program.execute(circuitInputs);
   const { proof, publicInputs } = await backend.generateProof(witness);
-  const vk = await backend.getVerificationKey();
+  const bk = await backend.getVerificationKey();
 
   const publicInputsBytes = hexToBytes(
     (publicInputs as string[])
@@ -85,8 +101,9 @@ export async function generateProof(
         ? proof
         : Uint8Array.from(proof as ArrayLike<number>),
     publicInputs: publicInputsBytes,
-    vk: vk instanceof Uint8Array ? vk : Uint8Array.from(vk as ArrayLike<number>),
+    vk: bk instanceof Uint8Array ? bk : Uint8Array.from(bk as ArrayLike<number>),
     nullifier: bigintToBytes32(nullifier),
     commitment: bigintToBytes32(commitment),
+    accountBinding: bigintToBytes32(accountBinding),
   };
 }

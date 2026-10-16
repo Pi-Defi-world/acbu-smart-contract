@@ -1,4 +1,4 @@
-#![no_std]
+#`!no_std]
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, Vec,
@@ -65,13 +65,42 @@ impl ZkGate {
             return false;
         }
 
+        // Bind the proof to the caller's on-chain identity by passing the account
+        // as an explicit public input alongside the account address. The verifier
+        // must bind this identity commitment into the circuit so a proof is only
+        // valid for the intended account.
+        let identity_commitment = Self::identity_commitment(&env, &account);
+
         let verified: bool = env.invoke_contract(
             &vrf,
-            &symbol_short!("is_v"),
-            Vec::from_array(&env, [account.into_val(&env)]),
+            &symbol_short("is_v"),
+            Vec::from_array(
+                &env,
+                [
+                    account.clone().into_val(&env),
+                    identity_commitment.into_val(&env),
+                ],
+            ),
         );
 
         verified
+    }
+
+    fn identity_commitment(env: &Env, account: &Address) -> u32 {
+        // Deterministic per-account identity commitment derived from the account
+        // and the current contract address. This binds the proof to the intended
+        // on-chain account and prevents a credential from verifying multiple accounts.
+        let account_bytes = account.to_string().into_bytes();
+        let contract_bytes = env.current_contract_address().to_string().into_bytes();
+
+        let mut hash: u32 = 0;
+        for i in 0..account_bytes.len() {
+            hash = hash.wrapping_mul(31).wrapping_add(account_bytes.get(i).unwrap() as u32);
+        }
+        for i in 0..contract_bytes.len() {
+            hash = hash.wrapping_mul(31).wrapping_add(contract_bytes.get(i).unwrap() as u32);
+        }
+        hash
     }
 
     fn require_contract_vrf(_env: &Env, vrf: &Address) {

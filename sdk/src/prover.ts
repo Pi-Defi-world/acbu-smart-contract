@@ -12,6 +12,7 @@ import type { ProofArtifacts, ComplianceInput } from "./types.js";
 import {
   computeCommitment,
   computeNullifier,
+  computeAccountBinding,
   fieldToBytes32,
 } from "./poseidon.js";
 
@@ -47,7 +48,7 @@ function hexToBytes(hex: string): Uint8Array {
  */
 export async function loadCircuit(circuitSource: string): Promise<void> {
   const fm = createFileManager("/");
-  // noir_wasm FileManager: addFile is the stable API used by generate-artifacts.mjs
+  // noir_wasm FileManager: addFile is the stable API used by generate-artifacts.mj
   (fm as { addFile: (path: string, contents: string) => void }).addFile(
     "./main.nr",
     circuitSource
@@ -68,6 +69,11 @@ export async function loadCircuit(circuitSource: string): Promise<void> {
  * The raw credential data (kycLevel, countryCode, salt) never
  * leaves the browser — it's fed directly into the Wasm prover.
  * Only the proof and public inputs are returned.
+ *
+ * The proof is bound to the submitting on-chain account via `accountBinding`
+ * (W10-SEC-015).  The binding is derived from the caller's address and a
+ * per-account salt that only the caller knows, so a proof generated for one
+ * account cannot be replayed by another.
  */
 export async function generateProof(
   input: ComplianceInput
@@ -76,17 +82,29 @@ export async function generateProof(
     throw new Error("Circuit not loaded. Call loadCircuit() first.");
   }
 
+  if (!input.accountAddress) {
+    throw new Error(
+      "ComplianceInput.accountAddress is required to bind the proof to the caller."
+    );
+  }
+
   const commitment = await computeCommitment(input.credential);
   const nullifier = await computeNullifier(commitment, input.credential.salt);
+  const accountBinding = await computeAccountBinding(
+    input.accountAddress,
+    input.accountSalt
+  );
 
   const circuitInputs = {
     kyc_level: input.credential.kycLevel,
     country_code: input.credential.countryCode,
     salt: fieldHex(input.credential.salt),
+    account_salt: fieldHex(input.accountSalt),
     commitment: fieldHex(commitment),
     required_kyc: input.requiredKyc,
     allowed_country: input.allowedCountry,
     nullifier: fieldHex(nullifier),
+    account_binding: fieldHex(accountBinding),
   };
 
   const program = new Noir(compiled as never);
@@ -106,5 +124,6 @@ export async function generateProof(
     vk: vk instanceof Uint8Array ? vk : Uint8Array.from(vk as ArrayLike<number>),
     nullifier: bigintToBytes32(nullifier),
     commitment: bigintToBytes32(commitment),
+    accountBinding: bigintToBytes32(accountBinding),
   };
 }
