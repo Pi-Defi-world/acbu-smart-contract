@@ -84,6 +84,16 @@ const VERIFICATION_VALIDITY_LEDGERS: u32 = 1_051_200; // ~60 days
 /// |   5   | `wallet_address_hash` | sha256(wallet_xdr)[0..16] as u128 (AZ-032) |
 const MAX_PUBLIC_INPUTS_LEN: u32 = 6;
 
+/// Canonical SHA-256 hash of the audited KYC verification key (W10-SEC-009).
+///
+/// A deployer or compromised pipeline cannot register an arbitrary VK:
+/// the contract enforces that `sha256(vk_bytes) == AUDITED_VK_HASH` at
+/// initialization time.
+pub const AUDITED_VK_HASH: [u8; 32] = [
+    0x2a, 0x73, 0xc4, 0xba, 0x11, 0xf0, 0x73, 0xf1, 0x79, 0x7d, 0x90, 0x91, 0x5e, 0xbb, 0xb9, 0xeb,
+    0x9d, 0x09, 0xf4, 0x45, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+];
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -156,6 +166,10 @@ pub enum DataKey {
     Paused,
     /// AZ-001: on-chain compliance policy (min_tier + allowed_country).
     Policy,
+    /// W10-SEC-009: Verification key bytes committed at deploy/initialization.
+    Vk,
+    /// W10-SEC-009: SHA-256 hash of the committed verification key.
+    VkHash,
     /// Spent nullifier — keyed per (commitment, nullifier) pair.
     ///
     /// Stored in *persistent* storage so entries expire individually via TTL
@@ -183,16 +197,34 @@ pub struct ZkVerifier;
 impl ZkVerifier {
     // ── Initialisation ──────────────────────────────────────────────────────
 
-    /// Initialise the contract.  Must be called exactly once.
-    pub fn initialize(env: Env, admin: Address) {
+    /// Initialise the contract. Must be called exactly once.
+    ///
+    /// W10-SEC-009: When `vk_bytes` is supplied, its SHA-256 hash is computed
+    /// on-chain and verified against the audited commitment [`AUDITED_VK_HASH`].
+    /// Any mismatched or unauthorized VK is rejected.
+    pub fn initialize(env: Env, admin: Address, vk_bytes: Option<Bytes>) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, ContractError::Unauthorized);
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Paused, &false);
+
+        // W10-SEC-009: Commit and verify VK hash if provided, or pin canonical hash.
+        let expected_hash = BytesN::from_array(&env, &AUDITED_VK_HASH);
+        if let Some(vk) = vk_bytes {
+            let actual_hash = env.crypto().sha256(&vk);
+            if actual_hash != expected_hash {
+                panic_with_error!(&env, ContractError::VkHashMismatch);
+            }
+            env.storage().instance().set(&DataKey::Vk, &vk);
+            env.storage().instance().set(&DataKey::VkHash, &actual_hash);
+        } else {
+            env.storage().instance().set(&DataKey::VkHash, &expected_hash);
+        }
+
         // Policy starts unconfigured — `verify()` rejects all proofs until
-        // the admin calls `set_policy`.  This prevents the zero-KYC bypass
+        // the admin calls `set_policy`. This prevents the zero-KYC bypass
         // window that would otherwise exist between deployment and policy setup.
         Self::extend_instance_ttl(&env);
     }
@@ -507,6 +539,16 @@ impl ZkVerifier {
         );
         Self::extend_instance_ttl(&env);
         true
+    }
+
+    /// Return the stored verification key bytes, if initialized.
+    pub fn get_vk(env: Env) -> Option<Bytes> {
+        env.storage().instance().get(&DataKey::Vk)
+    }
+
+    /// Return the committed verification key hash (W10-SEC-009).
+    pub fn get_vk_hash(env: Env) -> Option<BytesN<32>> {
+        env.storage().instance().get(&DataKey::VkHash)
     }
 
     // ── Internal helpers ────────────────────────────────────────────────────

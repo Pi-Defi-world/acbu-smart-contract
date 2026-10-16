@@ -25,7 +25,14 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 15 | `InvalidCircuitPeer` | A circuit-breaker peer list is invalid: too many entries, a duplicate, or the contract itself. |
 | 16 | `CommitmentAlreadyAttested` | The credential commitment was already attested by the KYC authority (zk_verifier trusted commitment registry, AZ-002). |
 | 17 | `CommitmentNotAttested` | The credential commitment submitted with a proof was never attested by the trusted KYC authority (zk_verifier trusted commitment registry, AZ-002). |
-| 18 | `NullifierAlreadySpent` | The submitted nullifier was already consumed for this credential commitment and cannot be replayed (zk_verifier, AZ-025). |
+| 18 | `NullifierAlreadySpent` | The submitted nullifier was already consumed for this credential commitment and cannot be replayed (zk_verifier, AZ-025 / AZ-014). |
+| 19 | `InvalidPublicInputsLength` | The `public_inputs` vector length does not match the expected constant `MAX_PUBLIC_INPUTS_LEN`. Rejects malformed or oversized inputs before any proof verification work is performed (zk_verifier, AZ-007). |
+| 20 | `ProofCallerMismatch` | The wallet address hash encoded in `public_inputs[5]` (`wallet_address_hash`) does not match the address that signed and submitted this transaction. Prevents one valid proof from being replayed across different wallets (zk_verifier, AZ-032). |
+| 21 | `PolicyNotConfigured` | No compliance policy has been configured by the admin yet. `verify()` refuses all proofs until a policy is set, preventing a zero-tier / any-country bypass during the window after deployment. |
+| 22 | `KycTierTooLow` | The KYC tier encoded in `public_inputs[0]` is below the minimum tier required by the contract's stored compliance policy. A prover who sets `required_kyc = 0` in the circuit can no longer bypass this check because the contract independently enforces the admin-controlled minimum (AZ-001). |
+| 23 | `CountryNotAllowed` | The country code encoded in `public_inputs[1]` is not in the set of allowed jurisdictions stored by the contract. A prover who sets `allowed_country` to their own value cannot bypass this check (AZ-001). |
+| 24 | `VkHashMismatch` | The verification key provided at contract initialization does not match the pinned audited VK hash (W10-SEC-009). |
+| 14 | `VaultAllowanceInsufficient` | The vault has not approved the burning contract as a spender with sufficient allowance for the requested S-token transfer. Ensure the vault calls `approve(burning_contract, amount, expiry)` on each S-token before redemption. |
 | 9999 | `Unknown` | unknown error |
 
 ## `shared / reentrancy guard` - `ReentrancyError`
