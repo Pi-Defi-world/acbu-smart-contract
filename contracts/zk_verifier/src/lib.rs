@@ -44,6 +44,7 @@
 //! all proofs.
 
 use shared::ContractError;
+use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Bytes, BytesN,
     Env, Vec,
@@ -332,7 +333,7 @@ impl ZkVerifier {
 
         // AZ-032: Verify wallet_address_hash (public_inputs[5]) matches caller.
         let wallet_xdr: Bytes = wallet.clone().to_xdr(&env);
-        let digest: BytesN<32> = env.crypto().sha256(&wallet_xdr);
+        let digest: BytesN<32> = env.crypto().sha256(&wallet_xdr).into();
         let digest_bytes = digest.to_array();
         let mut hash_u128: u128 = 0u128;
         let mut i: u32 = 0;
@@ -388,10 +389,9 @@ impl ZkVerifier {
         }
 
         // Record the nullifier in persistent storage (AZ-014).
-        env.storage().persistent().set(
-            &DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()),
-            &true,
-        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()), &true);
         env.storage().persistent().extend_ttl(
             &DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()),
             NULLIFIER_TTL_THRESHOLD,

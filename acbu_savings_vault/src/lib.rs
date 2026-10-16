@@ -129,7 +129,6 @@ const ADMIN_TIMELOCK_SECONDS: u64 = 86_400;
 const INSTANCE_TTL_THRESHOLD: u32 = 5_184_000;
 const INSTANCE_TTL_EXTEND_TO: u32 = 5_184_000;
 
-
 // ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------
@@ -260,11 +259,21 @@ impl SavingsVault {
             env.panic_with_error(Error::InvalidYieldRate);
         }
         env.storage().instance().set(&DATA_KEY.admin, &admin);
-        env.storage().instance().set(&DATA_KEY.acbu_token, &acbu_token);
-        env.storage().instance().set(&DATA_KEY.fee_rate, &fee_rate_bps);
-        env.storage().instance().set(&DATA_KEY.yield_rate, &yield_rate_bps);
-        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
-        env.storage().instance().set(&SharedDataKey::Version, &CONTRACT_VERSION);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.acbu_token, &acbu_token);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.fee_rate, &fee_rate_bps);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.yield_rate, &yield_rate_bps);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.phase, &ContractPhase::Active);
+        env.storage()
+            .instance()
+            .set(&SharedDataKey::Version, &CONTRACT_VERSION);
         Self::extend_instance_ttl(&env);
     }
 
@@ -353,7 +362,6 @@ impl SavingsVault {
                 maturity_timestamp,
             },
         );
-
 
         net_amount
     }
@@ -479,7 +487,6 @@ impl SavingsVault {
             (user, amount, 0i128, yield_paid, now),
         );
 
-
         payout_amount
     }
 
@@ -531,7 +538,7 @@ impl SavingsVault {
     /// short (AC-007). Pays as much as the reserve currently covers; any
     /// remainder stays owed. Returns the amount paid.
     pub fn claim_yield(env: Env, user: Address) -> i128 {
-        reentrancy_guard::acquire_guard(&env);
+        let _guard = reentrancy_guard::acquire_guard(&env);
         user.require_auth();
         Self::check_paused(&env);
 
@@ -559,7 +566,6 @@ impl SavingsVault {
         env.events()
             .publish((symbol_short!("yld_clm"), user), (paid, remaining));
 
-        reentrancy_guard::release_guard(&env);
         paid
     }
 
