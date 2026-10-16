@@ -224,6 +224,39 @@ fn test_initialize_twice() {
 }
 
 #[test]
+#[should_panic(expected = "#5030")]
+fn test_mint_from_usdc_without_conversion_quota() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) =
+        setup_test(&env);
+
+    init_mint_client(
+        &env,
+        &client,
+        &admin,
+        &oracle,
+        &reserve_tracker,
+        &acbu_token_id,
+        &usdc_token_id,
+        &admin,
+        &admin,
+        300,
+        100,
+    );
+
+    let user = Address::generate(&env);
+    let mint_amount = 50 * DECIMALS;
+
+    let usdc_token =
+        soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token_id);
+    usdc_token.mint(&user, &mint_amount);
+
+    // No conversion quota is authorized.
+    client.mint_from_usdc(&user, &mint_amount, &user);
+}
+#[test]
 fn test_mint_from_usdc() {
     let env = Env::default();
     env.mock_all_auths();
@@ -255,6 +288,7 @@ fn test_mint_from_usdc() {
     );
 
     let mint_amount = 50 * DECIMALS;
+    client.authorize_usdc_conversion_quota(&admin, &mint_amount);
     let acbu_minted = client.mint_from_usdc(&user, &mint_amount, &user);
 
     let expected_fee = 15_000_000;
@@ -392,7 +426,7 @@ fn test_mint_insufficient_reserves() {
     let user = Address::generate(&env);
     let usdc_sac = soroban_sdk::token::StellarAssetClient::new(&env, &usdc_token);
     usdc_sac.mint(&user, &DECIMALS);
-
+    client.authorize_usdc_conversion_quota(&admin, &DECIMALS);
     client.mint_from_usdc(&user, &DECIMALS, &user);
 }
 

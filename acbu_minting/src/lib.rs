@@ -96,6 +96,7 @@ pub struct DataKey {
     /// AC-038: ed25519 public key used to verify fiat-settlement attestations in
     /// `mint_from_fiat`.  Stored as `BytesN<32>`; rotatable by admin only.
     pub operator_pub_key: Symbol,
+    pub usdc_conversion_quota: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -124,6 +125,7 @@ const DATA_KEY: DataKey = DataKey {
     circuit_peers: symbol_short!("CB_PEERS"),
     burning_contract: symbol_short!("BURN_CTR"),
     operator_pub_key: symbol_short!("OP_PUBKY"),
+    usdc_conversion_quota: symbol_short!("USDC_QTA"),
 };
 
 /// Admin rotation timelock: the pending admin must wait this long before
@@ -146,6 +148,7 @@ pub enum MintingError {
     ProofAlreadyUsed = 5005,
     InvalidOracleRate = 5006,
     UnauthorizedOperator = 5007,
+    InsufficientConversionQuota = 5030,
     DuplicateFintechTxId = 5008,
     InvalidDripAmount = 5009,
     DripExceedsCap = 5010,
@@ -405,6 +408,15 @@ impl MintingContract {
         if usdc_amount < min_amount || usdc_amount > max_amount {
             env.panic_with_error(MintingError::InvalidMintAmount);
         }
+        let available_quota: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.usdc_conversion_quota)
+            .unwrap_or(0);
+
+        if usdc_amount > available_quota {
+            env.panic_with_error(MintingError::InsufficientConversionQuota);
+        }
 
         let acbu_token: Address = env.storage().instance().get(&DATA_KEY.acbu_token).unwrap();
         let usdc_token: Address = env.storage().instance().get(&DATA_KEY.usdc_token).unwrap();
@@ -466,6 +478,10 @@ impl MintingContract {
         if !reserve_ok {
             env.panic_with_error(MintingError::InsufficientReserves);
         }
+        let remaining_quota = available_quota - usdc_amount;
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.usdc_conversion_quota, &remaining_quota);
 
         total_supply += acbu_amount
             .checked_add(fee_acbu)
@@ -1250,6 +1266,38 @@ impl MintingContract {
             .get(&DATA_KEY.operator)
             .unwrap_or(admin)
     }
+    /// Authorize USDC conversion capacity after it has been reserved or hedged.
+    /// Only the registered operator may increase the available quota.
+    pub fn authorize_usdc_conversion_quota(
+        env: Env,
+        operator: Address,
+        usdc_amount: i128,
+    ) {
+        let expected_operator: Address = Self::get_operator(env.clone());
+
+        if operator != expected_operator {
+            env.panic_with_error(MintingError::UnauthorizedOperator);
+        }
+        operator.require_auth();
+
+        if usdc_amount <= 0 {
+            env.panic_with_error(MintingError::InvalidMintAmount);
+        }
+
+        let current_quota: i128 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.usdc_conversion_quota)
+            .unwrap_or(0);
+
+        let updated_quota = current_quota
+            .checked_add(usdc_amount)
+            .unwrap_or_else(|| env.panic_with_error(MintingError::ArithmeticOverflow));
+
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.usdc_conversion_quota, &updated_quota);
+    }
 
     /// Set the operator address (admin only). The operator must differ from the
     /// admin to preserve role separation, otherwise it reverts with
@@ -1807,9 +1855,12 @@ impl MintingContract {
     fn assert_recipient_is_account(address: &Address) {
         if !is_account_address(address) {
             address.env().panic_with_error(MintingError::InvalidRecipient);
+        }
+
         let env = address.env();
         let strkey = address.to_string();
         let len = strkey.len();
+
         if len == 56 {
             let mut buf = [0u8; 56];
             strkey.copy_into_slice(&mut buf);

@@ -46,6 +46,7 @@ const EXPECTED_STORAGE_KEYS: &[&str] = &[
     "TRSY",
     "TX_NONCE",
     "USDC_TKN",
+    "USDC_QTA",
     "VAULT",
 ];
 
