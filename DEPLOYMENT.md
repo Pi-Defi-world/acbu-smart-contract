@@ -221,6 +221,15 @@ stellar contract invoke \
   --basket_weights '{"NGN":1800,"KES":1200,"RWF":800,"GHS":900,"UGX":700,"TZS":600,"ZAR":1500,"EGP":1500}'
 ```
 
+> **Validator independence (W10-S-017):** each entry in `--validators` must be a
+> distinct Stellar account operated by a **separate, legally and geographically
+> independent entity**, and at most one key may be operated by the
+> issuer/foundation. Set `--min_signatures` to at least `issuer_operated_keys + 2`
+> so the issuer cannot reach quorum with a single colluding validator (for the
+> five-validator reference set this is `4`, not `3`). Supplying a repeated
+> address is rejected by the contract. See
+> [docs/threat-model.md §3.1.1](docs/threat-model.md#311-oracle-validator-operator-independence-w10-s-017).
+
 ### Reserve Tracker
 
 ```bash

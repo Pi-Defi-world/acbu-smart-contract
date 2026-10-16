@@ -70,6 +70,42 @@ This document describes the authorization invocation tree for all cross-contract
 **Threat:** A compromised oracle could return manipulated rates, causing ACBU to be minted at an incorrect price.  
 **Mitigation:** Freshness checks on every rate read; oracle uses multi-validator median aggregation with outlier detection.
 
+#### 3.1.1 Oracle validator operator independence (W10-S-017)
+
+The oracle commits a rate only once `min_signatures` **distinct** validator
+accounts have submitted it (the `update_rate` quorum, AC-003). Distinct accounts
+are necessary but not sufficient: if one entity controls several signing keys, it
+satisfies more of the quorum than its number of independent operators suggests.
+
+Let `M` be the validator count, `k` the number of keys controlled by the ACBU
+issuer (or any single party), and `q = min_signatures`. A malicious issuer needs
+`q - k` *additional* colluding independent validators to force a rate. The feed
+is therefore manipulation resistant only when `q >= k + 2` — i.e. at least two
+independent validators must also be compromised. When `q <= k + 1` the issuer can
+reach quorum with at most one colluding peer.
+
+The earlier five-validator deployment in which two validator keys (V1 and V2)
+were both operated by the issuer, with `q = 3`, is vulnerable: the issuer only
+needs one colluding independent to reach quorum (`2 + 1 = 3`), contradicting the
+operator-independence assumption in the deployment documentation.
+
+**Required operator policy:**
+
+- At most **one** validator key may be operated by the issuer/foundation
+  (`k <= 1`).
+- `min_signatures` must satisfy `q >= k + 2`. For the reference five-validator
+  set this means `q = 4`, not `3`.
+- Validators must be run by **legally and geographically separate entities**
+  with independent key custody, hosting, and operational staff. Keys must not
+  share infrastructure or be delegated to a common custodian.
+- Validator rotation (`schedule_validator_change` + `execute_validator_change`)
+  must preserve the `q >= k + 2` invariant.
+
+The contract enforces the mechanical precondition — `initialize` rejects a
+validator list containing a repeated address, so one key can never be counted
+twice — but operator diversity itself is an off-chain deployment commitment that
+must be verified and periodically re-audited.
+
 ---
 
 ### 3.2 Minting Contract → Reserve Tracker
@@ -254,6 +290,19 @@ No auth is required on the read-only oracle call. The chain is safe as long as b
 
 ---
 
+### 4.8 Issuer-Controlled Oracle Quorum (W10-S-017)
+
+**Scenario:** The issuer operates enough validator keys that it can reach
+`min_signatures` with only one colluding independent validator, allowing it to
+post a manipulated rate.  
+**Mitigation:** Operate at most one validator key as the issuer and set
+`min_signatures >= issuer_keys + 2` (at least 4-of-5 for the reference set). Run
+validators through separate legal/geographic entities with independent key
+custody. `initialize` additionally rejects duplicate validator addresses so a
+single key cannot be counted more than once toward the quorum.
+
+---
+
 ## 5. Deployment Checklist (Auth-Related)
 
 Before deploying to mainnet, verify:
@@ -263,6 +312,9 @@ Before deploying to mainnet, verify:
 - [ ] Oracle address stored in minting, burning, and reserve tracker contracts is the correct deployed oracle
 - [ ] Reserve tracker address stored in minting and burning contracts is the correct deployed reserve tracker
 - [ ] Operator address stored in the minting contract is the correct fintech backend key
+- [ ] At most one oracle validator key is operated by the issuer/foundation (`k <= 1`)
+- [ ] Oracle `min_signatures` satisfies `q >= k + 2` (at least 4-of-5 in the reference set)
+- [ ] Oracle validators are legally and geographically independent with separate key custody
 - [ ] Admin is a multisig with at least 2-of-3 signers
 - [ ] No other contract or account holds minter authority on the ACBU SAC
 

@@ -64,6 +64,34 @@ fn test_initialize() {
     assert_eq!(client.get_min_signatures(), min_signatures, "client.get_min_signatures() should equal min_signatures");
 }
 
+/// W10-S-017: operator independence starts from distinct validator keys.
+/// Registering the same address twice would let one operator pad the set while
+/// contributing a single signature to any quorum, so `initialize` rejects it.
+#[test]
+#[should_panic(expected = "#7013")]
+fn test_initialize_rejects_duplicate_validators() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let validator = Address::generate(&env);
+
+    let mut validators = Vec::new(&env);
+    validators.push_back(validator.clone());
+    validators.push_back(validator);
+
+    let ngn = CurrencyCode::new(&env, "NGN");
+    let mut currencies = Vec::new(&env);
+    currencies.push_back(ngn.clone());
+
+    let mut basket_weights = Map::new(&env);
+    basket_weights.set(ngn, 10_000i128);
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &validators, &2u32, &currencies, &basket_weights);
+}
+
 #[test]
 fn test_update_rate() {
     let env = Env::default();
