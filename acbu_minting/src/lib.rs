@@ -7,10 +7,8 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_amount_after_fee, calculate_fee, check_oracle_freshness, is_account_address,
-    ContractPhase, CurrencyCode, DataKey as SharedDataKey, MintEvent, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION, DECIMALS,
     any_circuit_peer_paused, calculate_amount_after_fee, calculate_fee, check_oracle_freshness,
-    validate_circuit_peers, ContractPhase, CurrencyCode,
+    is_account_address, validate_circuit_peers, ContractPhase, CurrencyCode,
     DataKey as SharedDataKey, MintEvent, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION, DECIMALS,
     MAX_MINT_AMOUNT, MAX_TOTAL_SUPPLY, MIN_MINT_AMOUNT, ORACLE_GET_ACBU_RATE_WITH_TS,
     ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_CURRENCIES, ORACLE_GET_RATE, ORACLE_GET_RATE_WITH_TS,
@@ -1806,6 +1804,7 @@ impl MintingContract {
     fn assert_recipient_is_account(address: &Address) {
         if !is_account_address(address) {
             address.env().panic_with_error(MintingError::InvalidRecipient);
+        }
         let env = address.env();
         let strkey = address.to_string();
         let len = strkey.len();
@@ -1943,10 +1942,10 @@ fn verify_fiat_settlement_proof(
 
     // Build the canonical commitment preimage.
     let mut preimage = Bytes::new(env);
-    preimage.append(&fintech_tx_id.to_xdr(env));
+    preimage.append(&fintech_tx_id.clone().to_xdr(env));
     preimage.append(&recipient.to_xdr(env));
     preimage.append(&fiat_amount.to_xdr(env));
-    preimage.append(&currency.to_xdr(env));
+    preimage.append(&currency.clone().to_xdr(env));
     preimage.append(&env.ledger().timestamp().to_xdr(env));
 
     // Hash the preimage; this is the message the operator signed off-chain.

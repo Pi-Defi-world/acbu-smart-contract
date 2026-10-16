@@ -161,6 +161,8 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 5029 | `InvalidCircuitPeer` | The circuit-breaker peer list is invalid (too long, duplicate, or self). |
 | 5030 | `BurningContractNotSet` | `record_burn` called while no burning contract is linked (AC-005). |
 | 5031 | `InvalidBurnAmount` | `record_burn` called with a non-positive amount (AC-005). |
+| 5032 | `InvalidFiatSettlementProof` | The ed25519 attestation on the fiat-settlement proof does not verify against the registered operator/partner key (AC-038, W10-SEC-004). |
+| 5033 | `OperatorPubKeyNotSet` | No operator ed25519 attestation key has been registered; call `set_operator_pub_key` (admin only) before using `mint_from_fiat` (AC-038, W10-SEC-004). |
 | 5999 | `Unknown` | unknown minting error |
 
 ## `acbu_oracle` - `OracleError`

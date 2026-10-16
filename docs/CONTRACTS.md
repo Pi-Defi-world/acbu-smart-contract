@@ -36,11 +36,29 @@ Handles conversion of USDC and fiat deposits into ACBU tokens.
 
 - `initialize`: Configure admin, oracle, reserve tracker, tokens, and fees
 - `mint_from_usdc`: Mint ACBU from USDC deposit
-- `mint_from_fiat`: Mint ACBU from fiat deposit via fintech partner
+- `mint_from_fiat`: Mint ACBU from a fiat deposit settled by the fintech partner. Requires **both** the Stellar operator key (`operator.require_auth`) **and** an on-chain-verified ed25519 `FiatSettlementProof` attestation (see “Fiat mint authorization” below)
+- `set_operator_pub_key`: Admin-only registration/rotation of the ed25519 attestation key
 - `mint_from_basket`: Mint ACBU by depositing S-tokens in basket proportions
 - `mint_from_single`: Mint ACBU by depositing single S-token
 - `pause/unpause`: Emergency pause mechanism
 - `set_fee_rate`: Update fee rates
+
+### Fiat mint authorization (W10-SEC-004)
+
+`mint_from_fiat` requires **two independent authorization factors** — possession of the Stellar operator key alone is not sufficient:
+
+1. **Stellar operator key** — only the configured `operator` address may call, and it must `require_auth`.
+2. **Off-chain ed25519 attestation** — the caller must supply a `FiatSettlementProof { pub_key, signature }` whose signature verifies against the admin-registered operator public key (`operator_pub_key`) over the canonical commitment
+   `sha256( XDR(fintech_tx_id) ‖ XDR(recipient) ‖ XDR(fiat_amount) ‖ XDR(currency) ‖ XDR(ledger_timestamp) )`.
+
+Consequences:
+
+- A compromised Stellar operator key alone cannot mint ACBU; the attacker would also need the separate ed25519 signing key.
+- The attestation is bound to the exact commitment, so it cannot be replayed for a different amount, recipient, currency or transaction id.
+- `set_operator_pub_key` is admin-only and, when rotated, invalidates previously issued attestations.
+- A settled `fintech_tx_id` cannot be minted twice.
+
+See [`W10-SEC-004-mint-attestation.md`](./W10-SEC-004-mint-attestation.md) and the regression tests in [`acbu_minting/tests/test_mint_from_fiat.rs`](../acbu_minting/tests/test_mint_from_fiat.rs).
 
 ### Token Transfer Model
 
