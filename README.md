@@ -369,7 +369,7 @@ After deployment, contract addresses are saved to `.soroban/deployment_{network}
 
 ## Security
 
-- All admin functions require multisig (3 of 5)
+- All admin functions require multisig authorization — see [docs/QUORUM_MATRIX.md](docs/QUORUM_MATRIX.md) for the canonical per-action thresholds
 - Rate limits on transactions
 - Circuit breakers for anomalies
 - Time locks for critical operations

@@ -406,6 +406,11 @@ stellar contract invoke \
 
 ### Multisig
 
+The threshold values below are derived from the canonical quorum matrix — see
+[docs/QUORUM_MATRIX.md](docs/QUORUM_MATRIX.md) for the full per-action breakdown and rationale.
+
+**Testnet** (5 signers, starting threshold 2-of-5):
+
 ```bash
 stellar contract invoke \
   --id <multisig-id> \
@@ -414,8 +419,25 @@ stellar contract invoke \
   --rpc-url "https://soroban-testnet.stellar.org" \
   -- initialize \
   --signers '["<signer-1>","<signer-2>","<signer-3>","<signer-4>","<signer-5>"]' \
+  --threshold 2
+```
+
+**Mainnet** (7 signers, starting threshold 3-of-7):
+
+```bash
+stellar contract invoke \
+  --id <multisig-id> \
+  --source-account "$STELLAR_SECRET_KEY" \
+  --network-passphrase "Public Global Stellar Network ; September 2015" \
+  --rpc-url "https://mainnet.stellar.validationcloud.io/v1/<key>" \
+  -- initialize \
+  --signers '["<signer-1>","<signer-2>","<signer-3>","<signer-4>","<signer-5>","<signer-6>","<signer-7>"]' \
   --threshold 3
 ```
+
+> The `--threshold` value above is the floor for routine proposals. Higher-impact
+> actions (upgrades, config changes) must be proposed with the appropriate signer
+> count per the quorum matrix before `execute` will succeed.
 
 ---
 
