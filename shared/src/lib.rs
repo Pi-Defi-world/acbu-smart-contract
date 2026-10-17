@@ -443,6 +443,9 @@ pub enum ContractError {
     /// allowed jurisdictions stored by the contract.  A prover who sets
     /// `allowed_country` to their own value cannot bypass this check (AZ-001).
     CountryNotAllowed = 23,
+    /// The verification key provided at contract initialization does not match
+    /// the pinned audited VK hash (W10-SEC-009).
+    VkHashMismatch = 24,
 
     /// The vault has not approved the burning contract as a spender with
     /// sufficient allowance for the requested S-token transfer.  Ensure the
@@ -482,6 +485,7 @@ impl core::fmt::Display for ContractError {
             ContractError::PolicyNotConfigured => write!(f, "compliance policy not configured: admin must call set_policy before any verification is accepted (AZ-001)"),
             ContractError::KycTierTooLow => write!(f, "KYC tier in public_inputs[0] is below the minimum tier required by the contract compliance policy (AZ-001)"),
             ContractError::CountryNotAllowed => write!(f, "country code in public_inputs[1] is not in the allowed jurisdictions configured by the contract compliance policy (AZ-001)"),
+            ContractError::VkHashMismatch => write!(f, "verification key hash mismatch: does not match audited VK commitment (W10-SEC-009)"),
             ContractError::Unknown => write!(f, "unknown error"),
         }
     }
