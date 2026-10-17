@@ -1,6 +1,6 @@
-#![no_std]
+#no_std]
 
-use soroban_sdk::{
+use soroban_sdk:{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, Vec,
 };
 
@@ -12,6 +12,7 @@ pub enum ZkGateError {
     AlreadyInitialized = 2,
     InvalidVrf = 3,
     VrfNotConfigured = 4,
+    IdentityMismatch = 5,
 }
 
 #[contracttype]
@@ -41,14 +42,16 @@ impl ZkGate {
             .storage()
             .instance()
             .get(&DataKey::Owner)
-            .unwrap_or_else(|| env.panic_with_error(ZkGateError::Unauthorized));
+            .unwrap_or_else(
+                || env.panic_with_error(ZkGateError::Unauthorized),
+            );
 
         if owner != stored_owner {
             env.panic_with_error(ZkGateError::Unauthorized);
         }
 
         owner.require_auth();
-        Self::require_contract_vrf(&env, &vrf);
+        Self.require_contract_vrf(&env, &vrf);
         env.storage().instance().set(&DataKey::Vrf, &vrf);
     }
 
@@ -65,9 +68,15 @@ impl ZkGate {
             return false;
         }
 
+        // Bind the proof to the caller's identity: the verifier must receive the
+        // account as a public input and only return true when the proof's identity
+        // commitment is derived from this exact account. The account is forwarded
+        // along with the caller auth requirement enforced by the verifier.
+        account.require_auth();
+
         let verified: bool = env.invoke_contract(
             &vrf,
-            &symbol_short!("is_v"),
+            &symbol_short("is_v"),
             Vec::from_array(&env, [account.into_val(&env)]),
         );
 

@@ -13,6 +13,7 @@ import {
   computeCommitment,
   computeNullifier,
   fieldToBytes32,
+  computeAccountCommitment,
 } from "./poseidon.js";
 
 let compiled: Awaited<ReturnType<typeof compile>> | null = null;
@@ -68,16 +69,27 @@ export async function loadCircuit(circuitSource: string): Promise<void> {
  * The raw credential data (kycLevel, countryCode, salt) never
  * leaves the browser — it's fed directly into the Wasm prover.
  * Only the proof and public inputs are returned.
+ *
+ * W10-SEC-015: the proof is bound to the intended on-chain account via
+ * `account_commitment`, which is derived from the caller's Address. The
+ * nullifier is derived from (commitment, salt, account_commitment), so
+ * a proof for one account cannot be replayed for another.
  */
 export async function generateProof(
-  input: ComplianceInput
+  input: ComplianceInput,
+  account: string
 ): Promise<ProofArtifacts> {
   if (!compiled || !backend) {
     throw new Error("Circuit not loaded. Call loadCircuit() first.");
   }
 
   const commitment = await computeCommitment(input.credential);
-  const nullifier = await computeNullifier(commitment, input.credential.salt);
+  const accountCommitment = await computeAccountCommitment(account);
+  const nullifier = await computeNullifier(
+    commitment,
+    input.credential.salt,
+    accountCommitment
+  );
 
   const circuitInputs = {
     kyc_level: input.credential.kycLevel,
@@ -87,6 +99,7 @@ export async function generateProof(
     required_kyc: input.requiredKyc,
     allowed_country: input.allowedCountry,
     nullifier: fieldHex(nullifier),
+    account_commitment: fieldHex(accountCommitment),
   };
 
   const program = new Noir(compiled as never);
@@ -106,5 +119,6 @@ export async function generateProof(
     vk: vk instanceof Uint8Array ? vk : Uint8Array.from(vk as ArrayLike<number>),
     nullifier: bigintToBytes32(nullifier),
     commitment: bigintToBytes32(commitment),
+    accountCommitment: bigintToBytes32(accountCommitment),
   };
 }

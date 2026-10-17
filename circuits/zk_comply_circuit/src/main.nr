@@ -33,12 +33,21 @@ fn poseidon2_hash_4(a: Field, b: Field, c: Field, d: Field) -> Field {
 // gap with a second, independent check: it reads its own admin-controlled
 // `PolicyParams` from storage and verifies that
 //
-//   public_inputs[0]  (≡ required_kyc)    ≥  policy.min_tier
-//   public_inputs[1]  (≡ allowed_country) == policy.allowed_country
+//   public_inputs[0]  (≈ required_kyc)    ≥ policy.min_tier
+//   public_inputs[1]  (⊉ allowed_country) == policy.allowed_country
 //
-// Because the policy lives in contract storage and is only writable by the
-// admin, the prover cannot influence these values.  Both the circuit proof
+// Because the policy lives in contract storage and is only writable by
+// the admin, the prover cannot influence these values.  Both the circuit proof
 // AND the server-side policy check must pass for `verify()` to succeed.
+//
+// W10-SEC-015 — Account binding note
+//
+// The proof is bound to the intended on-chain account via `account_commitment`.
+// This is a public input derived from the caller's Address by the on-chain
+// contract (and by the prover client). The nullifier is derived from
+// (commitment, salt, account_commitment), so a proof cannot be replayed
+// for a different account and the same credential cannot produce a
+// valid nullifier for a different account without a fresh proof.
 fn main(
     kyc_level: u64,
     country_code: u64,
@@ -47,6 +56,7 @@ fn main(
     required_kyc: pub u64,
     allowed_country: pub u64,
     nullifier: pub Field,
+    account_commitment: pub Field,
 ) {
     // Keep the credential and policy inputs inside their documented domains.
     // Without these guards, arbitrary u64 values could be committed and
@@ -78,13 +88,18 @@ fn main(
     //    policy.allowed_country, so the prover cannot bypass by choosing freely.
     assert(country_code == allowed_country);
 
-    // 4) Derive nullifier = hash(commitment, salt) to prevent double-use
-    let expected_nullifier = poseidon2_hash_2(commitment, salt);
+    // 4) Derive nullifier bound to the account commitment.
+    //    This binds the proof to the intended on-chain account beyond
+    //    require_auth: a proof generated for one account cannot be
+    //    replayed for another account because the nullifier depends on
+    //    account_commitment.
+    let expected_nullifier = poseidon2_hash_4(commitment, salt, account_commitment, 0);
     assert(nullifier == expected_nullifier);
 }
 
 #[test]
 fn test_valid_basic_kyc_ngn() {
+    let account_commitment = 123456789;
     main(
         1,
         566,
@@ -92,12 +107,14 @@ fn test_valid_basic_kyc_ngn() {
         poseidon2_hash_4(1, 566, 12345, 0),
         1,
         566,
-        poseidon2_hash_2(poseidon2_hash_4(1, 566, 12345, 0), 12345),
+        poseidon2_hash_4(poseidon2_hash_4(1, 566, 12345, 0), 12345, account_commitment, 0),
+        account_commitment,
     );
 }
 
 #[test]
 fn test_valid_enterprise_kes() {
+    let account_commitment = 987654321;
     main(
         3,
         404,
@@ -105,12 +122,14 @@ fn test_valid_enterprise_kes() {
         poseidon2_hash_4(3, 404, 99999, 0),
         2,
         404,
-        poseidon2_hash_2(poseidon2_hash_4(3, 404, 99999, 0), 99999),
+        poseidon2_hash_4(poseidon2_hash_4(3, 404, 99999, 0), 99999, account_commitment, 0),
+        account_commitment,
     );
 }
 
 #[test(should_fail)]
 fn test_rejects_kyc_level_outside_documented_range() {
+    let account_commitment = 123456789;
     let commitment = poseidon2_hash_4(4, 566, 12345, 0);
     main(
         1,
@@ -119,12 +138,14 @@ fn test_rejects_kyc_level_outside_documented_range() {
         commitment,
         1,
         566,
-        poseidon2_hash_2(commitment, 12345),
+        poseidon2_hash_4(commitment, 12345, account_commitment, 0),
+        account_commitment,
     );
 }
 
 #[test(should_fail)]
 fn test_rejects_country_code_outside_iso_numeric_range() {
+    let account_commitment = 123456789;
     let commitment = poseidon2_hash_4(1, 1000, 12345, 0);
     main(
         1,
@@ -133,12 +154,14 @@ fn test_rejects_country_code_outside_iso_numeric_range() {
         commitment,
         1,
         1000,
-        poseidon2_hash_2(commitment, 12345),
+        poseidon2_hash_4(commitment, 12345, account_commitment, 0),
+        account_commitment,
     );
 }
 
 #[test(should_fail)]
 fn test_rejects_zero_country_code() {
+    let account_commitment = 123456789;
     let commitment = poseidon2_hash_4(1, 0, 12345, 0);
     main(
         1,
@@ -147,6 +170,24 @@ fn test_rejects_zero_country_code() {
         commitment,
         1,
         0,
-        poseidon2_hash_2(commitment, 12345),
+        poseidon2_hash_4(commitment, 12345, account_commitment, 0),
+        account_commitment,
+    );
+}
+
+#[test(should_fail)]
+fn test_rejects_nullifier_for_wrong_account() {
+    let account_commitment = 123456789;
+    let other_account = 987654321;
+    let commitment = poseidon2_hash_4(1, 566, 12345, 0);
+    main(
+        1,
+        566,
+        12345,
+        commitment,
+        1,
+        566,
+        poseidon2_hash_4(commitment, 12345, other_account, 0),
+        account_commitment,
     );
 }

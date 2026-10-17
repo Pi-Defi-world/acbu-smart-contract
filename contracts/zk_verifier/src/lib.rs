@@ -166,6 +166,11 @@ pub enum DataKey {
     ///
     /// Stored in *persistent* storage for the same reason as `ScopedNullifier`.
     Verified(Address),
+    /// W10-SEC-015: per-account identity commitment binding.
+    ///
+    /// Binds a proof to the intended on-chain account so a credential cannot
+    /// be replayed across many accounts.
+    AccountCommitment(Address),
     /// Attested credential commitment — keyed per 32-byte commitment.
     ///
     /// AZ-002: commitments recorded by the trusted KYC authority (the
@@ -346,6 +351,17 @@ impl ZkVerifier {
             panic_with_error!(&env, ContractError::ProofCallerMismatch);
         }
 
+        // W10-SEC-015: Bind the proof to the caller's account identity.
+        // The account commitment must be attested for this specific wallet,
+        // so a credential cannot verify many accounts.
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::AccountCommitment(wallet.clone()))
+        {
+            panic_with_error!(&env, ContractError::ProofCallerMismatch);
+        }
+
         // AZ-001: Load the admin-controlled compliance policy.  Reject all
         // verifications until the policy is explicitly configured.
         let policy: PolicyParams = env
@@ -394,6 +410,16 @@ impl ZkVerifier {
             .set(&DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()), &true);
         env.storage().persistent().extend_ttl(
             &DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()),
+            NULLIFIER_TTL_THRESHOLD,
+            NULLIFIER_TTL_LEDGERS,
+        );
+
+        // W10-SEC-015: Record the account-bound commitment for this wallet.
+        env.storage()
+            .persistent()
+            .set(&DataKey::AccountCommitment(wallet.clone()), &commitment);
+        env.storage().persistent().extend_ttl(
+            &DataKey::AccountCommitment(wallet.clone()),
             NULLIFIER_TTL_THRESHOLD,
             NULLIFIER_TTL_LEDGERS,
         );
