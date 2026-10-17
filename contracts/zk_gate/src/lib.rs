@@ -1,12 +1,12 @@
 #`!no_std]
 
-use soroban_sdk {
+use soroban_sdk:{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, Vec,
 };
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(u)32]
+#[repr(u32)]
 pub enum ZkGateError {
     Unauthorized = 1,
     AlreadyInitialized = 2,
@@ -41,7 +41,7 @@ impl ZkGate {
             .storage()
             .instance()
             .get(&DataKey::Owner)
-            .unwrap_or_else(|| env.panic_with_error(ZkGateError::Unauthorized));
+            .unwrap_or_else(|| env.panic_with_error(ZkGateError::Unauthorized));
 
         if owner != stored_owner {
             env.panic_with_error(ZkGateError::Unauthorized);
@@ -65,13 +65,13 @@ impl ZkGate {
             return false;
         }
 
-        // Bind the proof to the caller's identity by passing the account as a
-        // public input along with the account itself, so the verifier can check
-        // the identity commitment against the intended on-chain account.
+        // The verifier must bind the proof to the caller's identity. The
+        // account is passed as a public input and the verifier is responsible
+        // for checking the proof's identity commitment against it.
         let verified: bool = env.invoke_contract(
             &vrf,
-            &symbol_short("is_v"),
-            Vec::from_array(&env, [account.clone().into_val(&env), account.into_val(&env)]),
+            &symbol_short!("is_v"),
+            Vec::from_array(&env, [account.into_val(&env)]),
         );
 
         verified

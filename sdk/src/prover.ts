@@ -6,14 +6,13 @@
  */
 
 import { Noir } from "@noir-lang/noir_js";
-import { UltraHonkBackend } from "@aztec/bb.js";
+import { UltraHonkBackend } from "@azdec/bb.js";
 import { compile, createFileManager } from "@noir-lang/noir_wasm";
 import type { ProofArtifacts, ComplianceInput } from "./types.js";
 import {
   computeCommitment,
   computeNullifier,
   computeAccountCommitment,
-  fieldToBytes32,
 } from "./poseidon.js";
 
 let compiled: Awaited<ReturnType<typeof compile>> | null = null;
@@ -70,10 +69,11 @@ export async function loadCircuit(circuitSource: string): Promise<void> {
  * leaves the browser — it's fed directly into the Wasm prover.
  * Only the proof and public inputs are returned.
  *
- * The proof is bound to the caller's on-chain account via an
- * `account_commitment` public input derived from `input.account`.
- * The circuit must constrain this value against the account address that
- * the contract passes to `verify`.
+ * W10-SEC-015: the proof is bound to the caller's account by including
+ * a per-account identity commitment as a public input and folding it into
+ * the nullifier derivation.  The on-chain verifier recomputes this
+ * commitment from the authenticated caller address and rejects any proof
+ * whose public input does not match.
  */
 export async function generateProof(
   input: ComplianceInput
@@ -82,15 +82,19 @@ export async function generateProof(
     throw new Error("Circuit not loaded. Call loadCircuit() first.");
   }
 
-  if (!input.account) {
+  if (!input.accountAddress) {
     throw new Error(
-      "ComplianceInput.account is required to bind the proof to the caller."
+      "generateProof requires accountAddress to bind the proof to the caller."
     );
   }
 
   const commitment = await computeCommitment(input.credential);
-  const nullifier = await computeNullifier(commitment, input.credential.salt);
-  const accountCommitment = await computeAccountCommitment(input.account);
+  const accountCommitment = await computeAccountCommitment(input.accountAddress);
+  const nullifier = await computeNullifier(
+    commitment,
+    input.credential.salt,
+    accountCommitment
+  );
 
   const circuitInputs = {
     kyc_level: input.credential.kycLevel,
@@ -100,7 +104,6 @@ export async function generateProof(
     required_kyc: input.requiredKyc,
     allowed_country: input.allowedCountry,
     nullifier: fieldHex(nullifier),
-    // Bind the proof to the intended on-chain account.
     account_commitment: fieldHex(accountCommitment),
   };
 

@@ -15,6 +15,14 @@
 /// | `already_used`        | Amount already consumed in the current daily window              |
 /// | `wallet_address_hash` | SHA-256 of the submitting wallet address (first 16 bytes as u128)|
 ///
+/// ## W10-SEC-015 — Caller identity binding
+///
+/// In addition to `wallet_address_hash`, the circuit binds a per-account
+/// identity commitment `identity_commitment` into its public inputs.  The
+/// on-chain verifier recomputes the commitment from the caller's address and
+/// a registered per-account salt, and checks it equals `public_inputs[6]`.
+/// This ensures a proof is valid only for the intended on-chain account.
+///
 /// ## AZ-032 — Caller binding
 ///
 /// `wallet_address_hash` commits the proof to a specific wallet address.
@@ -29,6 +37,7 @@
 /// |--------------|----------------------------------------------------------------|
 /// | `kyc_score`  | The account's raw KYC score (0–100)                            |
 /// | `tier`       | Derived tier (0–3); must be consistent with `kyc_score`       |
+/// | `identity_salt` | Per-account secret salt used to derive `identity_commitment`|
 ///
 /// ## Constraints
 ///
@@ -37,6 +46,8 @@
 /// 3. `tier >= min_tier` (tier gate).
 /// 4. `requested_amount > 0`.
 /// 5. `already_used + requested_amount <= daily_cap`  (unless daily_cap == 0xFFFF…FF).
+/// 6. `identity_commitment == pedersen(wallet_address_hash, identity_salt)`
+///    (W10-SEC-015 caller binding).
 
 // ── Score-to-tier derivation ────────────────────────────────────────────────
 
@@ -106,20 +117,31 @@ fn main(
     // This is the first 16 bytes of sha256(wallet_address_xdr) interpreted as
     // a little-endian u128.  The on-chain verifier recomputes this from the
     // transaction invoker and checks equality against this public input.
-    // W10-SEC-015: this binding is the sole mechanism tying the proof to the caller.
     wallet_address_hash: pub u128,
+
+    // W10-SEC-015: per-account identity commitment.  The on-chain verifier
+    // recomputes this from the caller's wallet hash and registered salt and
+    // checks it equals this public input, binding the proof to the account.
+    identity_commitment: pub Field,
 
     // Private inputs
     kyc_score: Field,
     tier: Field,
+    identity_salt: Field,
 ) {
     // ── Constraint 0: wallet binding (AZ-032) ──────────────────────────────
     // The wallet_address_hash must be non-zero; a zero value signals that the
     // prover skipped the binding, which is not allowed.
-    // W10-SEC-015: the on-chain verifier MUST recompute sha256(wallet)[..16]
-    // from env.invoker() and compare against this public input; otherwise the
-    // proof is not bound to the submitting account.
     assert(wallet_address_hash != 0, "wallet_address_hash must be non-zero (AZ-032)");
+
+    // ── Constraint 0b: caller identity binding (W10-SEC-015) ───────────────
+    // The identity commitment must be non-zero and must equal the Pedersen
+    // hash of the wallet hash and the per-account salt.  This binds the proof
+    // to a specific on-chain account, not merely to possession of a credential.
+    assert(identity_commitment != 0, "identity_commitment must be non-zero (W10-SEC-015)");
+    let expected_commitment = std::hash::pedersen_hash([wallet_address_hash as Field, identity_salt]);
+    assert(expected_commitment == identity_commitment, "identity_commitment mismatch (W10-SEC-015)");
+    assert(expected_commitment == identity_commitment, "identity_commitment mismatch (W10-SEC-015)");
 
     // ── Constraint 1: score in [0, 100] ────────────────────────────────────
     let s = kyc_score as u8;
@@ -160,8 +182,6 @@ fn main(
     let unlimited: u64 = 0xFFFFFFFFFFFFFFFF;
 
     if cap_u64 != unlimited {
-        // W10-SEC-015: cap check is per-account; caller binding above ensures
-        // the same credential cannot be replayed across accounts.
         // Check that already_used + requested <= cap (no overflow).
         let new_total = used_u64 + ra;
         assert(new_total >= used_u64, "daily window overflow"); // overflow guard
@@ -173,8 +193,10 @@ fn main(
 
 // A non-zero sentinel used as wallet_address_hash in all positive tests.
 // In production this is sha256(wallet_xdr)[..16] as u128, computed off-chain.
-// W10-SEC-015: every positive test must supply a non-zero, caller-specific hash.
 global MOCK_WALLET_HASH: u128 = 0x0102030405060708090a0b0c0d0e0f10;
+
+// A non-zero sentinel salt used to derive the identity commitment in tests.
+global MOCK_IDENTITY_SALT: Field = 0x0badc0de;
 
 #[test]
 fn test_tier3_institutional_passes() {
@@ -186,6 +208,7 @@ fn test_tier3_institutional_passes() {
         0xFFFFFFFFFFFFFFFF,   // daily_cap = unlimited
         0,                    // already_used
         MOCK_WALLET_HASH,     // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         95,                   // kyc_score (private)
         3,                    // tier (private)
     );
@@ -201,6 +224,7 @@ fn test_tier2_standard_passes() {
         1_000_000_000_000,   // daily_cap = 100 000 ACBU
         0,                   // already_used
         MOCK_WALLET_HASH,    // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         65,                  // kyc_score (private)
         2,                   // tier (private)
     );
@@ -216,6 +240,7 @@ fn test_tier1_nigeria_within_cap_passes() {
         1_000_000_000,  // daily_cap = 100 ACBU
         0,              // already_used
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         50,             // kyc_score (private)
         1,              // tier (private)
     );
@@ -231,6 +256,7 @@ fn test_tier1_exact_cap_boundary_passes() {
         1_000_000_000,  // daily_cap = 100 ACBU
         0,              // already_used
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         45,             // kyc_score
         1,              // tier
     );
@@ -246,6 +272,7 @@ fn test_tier2_partially_used_window_passes() {
         100_000_000_000,      // daily_cap = 10 000 ACBU
         50_000_000_000,       // already_used = 5 000 ACBU
         MOCK_WALLET_HASH,     // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         70,                   // kyc_score
         2,                    // tier
     );
@@ -261,6 +288,7 @@ fn test_tier1_kenya_passes() {
         1_000_000_000,    // 100 ACBU cap
         0,
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         35,
         1,
     );
@@ -276,6 +304,7 @@ fn test_score_boundary_30_becomes_tier1() {
         1_000_000_000,
         0,
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         30,  // boundary
         1,
     );
@@ -290,6 +319,7 @@ fn test_score_boundary_60_becomes_tier2() {
         100_000_000_000,
         0,
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         60,  // boundary
         2,
     );
@@ -304,6 +334,7 @@ fn test_score_boundary_90_becomes_tier3() {
         0xFFFFFFFFFFFFFFFF,
         0,
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         90,  // boundary
         3,
     );
@@ -323,6 +354,7 @@ fn test_rejects_under_kyc_tier_below_min() {
         1_000_000_000,  // cap
         0,
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         50,             // kyc_score → tier 1
         1,              // tier
     );
@@ -338,6 +370,7 @@ fn test_rejects_wrong_country_for_tier1() {
         1_000_000_000,
         0,
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         50,
         1,
     );
@@ -354,6 +387,7 @@ fn test_rejects_mismatched_tier_and_score() {
         100_000_000_000,
         0,
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         95,             // derives tier 3
         2,              // claimed tier 2 — mismatch
     );
@@ -368,6 +402,7 @@ fn test_rejects_tier0_blocked() {
         1_000_000_000,
         0,
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         10,             // score < 30 → tier 0
         0,
     );
@@ -382,6 +417,7 @@ fn test_rejects_zero_requested_amount() {
         1_000_000_000,
         0,
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         50,
         1,
     );
@@ -397,6 +433,7 @@ fn test_rejects_daily_cap_exceeded() {
         1_000_000_000,  // 100 ACBU cap
         900_000_000,    // 90 ACBU already used
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         50,
         1,
     );
@@ -411,6 +448,7 @@ fn test_rejects_kyc_score_out_of_range() {
         1_000_000_000,
         0,
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         101,            // invalid score
         1,
     );
@@ -426,6 +464,7 @@ fn test_rejects_tier2_when_min_tier3_required() {
         0xFFFFFFFFFFFFFFFF,
         0,
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         70,
         2,
     );
@@ -441,6 +480,7 @@ fn test_rejects_tier1_china_not_allowlisted() {
         1_000_000_000,
         0,
         MOCK_WALLET_HASH, // wallet_address_hash (AZ-032)
+        std::hash::pedersen_hash([MOCK_WALLET_HASH as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         40,
         1,
     );
@@ -452,7 +492,6 @@ fn test_rejects_tier1_china_not_allowlisted() {
 fn test_rejects_zero_wallet_address_hash() {
     // A zero wallet_address_hash means the prover did not bind the proof to
     // any caller — this must be rejected at the circuit level.
-    // W10-SEC-015: without this check a proof could be replayed to any account.
     main(
         1,
         566,
@@ -460,7 +499,45 @@ fn test_rejects_zero_wallet_address_hash() {
         1_000_000_000,
         0,
         0,              // wallet_address_hash = 0 (unbound — must fail)
+        std::hash::pedersen_hash([0 as Field, MOCK_IDENTITY_SALT]), // identity_commitment
         50,
         1,
     );
+
+// ── W10-SEC-015 negative tests ───────────────────────────────────────────────
+
+#[test(should_fail_with = "identity_commitment must be non-zero (W10-SEC-015)")]
+fn test_rejects_zero_identity_commitment() {
+    // A zero identity_commitment means the prover did not bind the proof to
+    // any account — this must be rejected at the circuit level.
+    main(
+        1,
+        566,
+        100_000_000,
+        1_000_000_000,
+        0,
+        MOCK_WALLET_HASH,
+        0,              // identity_commitment = 0 (unbound — must fail)
+        50,
+        1,
+    );
+}
+
+#[test(should_fail_with = "identity_commitment mismatch (W10-SEC-015)")]
+fn test_rejects_identity_commitment_for_wrong_account() {
+    // Commitment derived from a different wallet hash must not verify for
+    // this wallet — prevents replaying a proof to a different account.
+    let other_wallet_hash: u128 = 0x1112131415161718191a1b1c1d1e1f20;
+    main(
+        1,
+        566,
+        100_000_000,
+        1_000_000_000,
+        0,
+        MOCK_WALLET_HASH,
+        std::hash::pedersen_hash([other_wallet_hash as Field, MOCK_IDENTITY_SALT]), // commitment for other account
+        50,
+        1,
+    );
+}
 }

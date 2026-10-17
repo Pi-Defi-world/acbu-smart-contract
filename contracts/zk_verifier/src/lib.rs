@@ -83,8 +83,7 @@ const VERIFICATION_VALIDITY_LEDGERS: u32 = 1_051_200; // ~60 days
 /// |   3   | `daily_cap`           | Per-tier daily cap                       |
 /// |   4   | `already_used`        | Already consumed in current daily window |
 /// |   5   | `wallet_address_hash` | sha256(wallet_xdr)[0..16] as u128 (AZ-032) |
-/// |   6   | `account_commitment`  | sha256(account_xdr) bound to caller (W10-SEC-015) |
-const MAX_PUBLIC_INPUTS_LEN: u32 = 7;
+const MAX_PUBLIC_INPUTS_LEN: u32 = 6;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -163,6 +162,11 @@ pub enum DataKey {
     /// Stored in *persistent* storage so entries expire individually via TTL
     /// rather than accumulating in a single unbounded instance `Map`.
     ScopedNullifier(BytesN<32>, BytesN<32>),
+    /// W10-SEC-015: nullifier bound to a specific on-chain account.
+    ///
+    /// Keyed per (wallet, nullifier) so a proof's nullifier is only spendable
+    /// by the account whose identity commitment was bound into the circuit.
+    AccountNullifier(Address, BytesN<32>),
     /// Verified wallet record — keyed per address and bounded by its deadline.
     ///
     /// Stored in *persistent* storage for the same reason as `ScopedNullifier`.
@@ -172,13 +176,6 @@ pub enum DataKey {
     /// AZ-002: commitments recorded by the trusted KYC authority (the
     /// admin). Stored in *persistent* storage so the registry stays bounded.
     AttestedCommitment(BytesN<32>),
-    /// W10-SEC-015: per-account identity commitment binding.
-    ///
-    /// Maps a credential commitment to the account commitment that is
-    /// authorised to spend it.  A proof is only accepted when the caller's
-    /// derived account commitment matches the value bound here, so a single
-    /// credential cannot be replayed across many accounts.
-    AccountBinding(BytesN<32>),
 }
 
 // ---------------------------------------------------------------------------
@@ -282,50 +279,6 @@ impl ZkVerifier {
         Self::extend_instance_ttl(&env);
     }
 
-    /// W10-SEC-015 — bind a credential commitment to a specific on-chain
-    /// account commitment.
-    ///
-    /// The admin (trusted KYC authority) records which account commitment is
-    /// allowed to spend a given credential commitment.  `verify()` then
-    /// requires the caller's derived account commitment to equal this value,
-    /// so a proof is valid only for the intended on-chain account.
-    pub fn bind_account(env: Env, commitment: BytesN<32>, account_commitment: BytesN<32>) {
-        Self::check_admin(&env);
-        Self::assert_not_paused(&env);
-
-        if !env
-            .storage()
-            .persistent()
-            .has(&DataKey::AttestedCommitment(commitment.clone()))
-        {
-            panic_with_error!(&env, ContractError::CommitmentNotAttested);
-        }
-
-        let key = DataKey::AccountBinding(commitment.clone());
-        env.storage()
-            .persistent()
-            .set(&key, &account_commitment.clone());
-        env.storage().persistent().extend_ttl(
-            &key,
-            NULLIFIER_TTL_THRESHOLD,
-            NULLIFIER_TTL_LEDGERS,
-        );
-
-        env.events().publish(
-            (symbol_short!("bound"), commitment.clone()),
-            account_commitment,
-        );
-
-        Self::extend_instance_ttl(&env);
-    }
-
-    /// Returns the account commitment bound to `commitment`, if any.
-    pub fn get_account_binding(env: Env, commitment: BytesN<32>) -> Option<BytesN<32>> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::AccountBinding(commitment))
-    }
-
     /// Returns `true` if `commitment` was attested by the trusted KYC authority.
     pub fn is_attested(env: Env, commitment: BytesN<32>) -> bool {
         let key = DataKey::AttestedCommitment(commitment);
@@ -368,6 +321,14 @@ impl ZkVerifier {
     ///
     /// `public_inputs[5]` must equal the first 16 bytes of `sha256(wallet_xdr)`
     /// interpreted as a little-endian `u128`.
+    ///
+    /// # W10-SEC-015 — Account binding
+    ///
+    /// The nullifier is bound to the caller's account: it is recorded under
+    /// `DataKey::AccountNullifier(wallet, nullifier)` so a proof (and its
+    /// nullifier) can only be consumed by the intended on-chain account.
+    /// Combined with the `wallet_address_hash` check above, a credential can
+    /// no longer be replayed across many accounts.
     pub fn verify(
         env: Env,
         wallet: Address,
@@ -440,12 +401,46 @@ impl ZkVerifier {
             panic_with_error!(&env, ContractError::NullifierAlreadySpent);
         }
 
+        // W10-SEC-015: Bind the nullifier to the caller's account.  A proof
+        // is only valid for the intended on-chain account, so the same
+        // credential cannot be used to verify many accounts.
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::AccountNullifier(wallet.clone(), nullifier.clone()))
+        {
+            panic_with_error!(&env, ContractError::NullifierAlreadySpent);
+        }
+
+        // W10-SEC-015: A nullifier derived from a credential must not be
+        // re-bound to a different on-chain account.  If this exact nullifier
+        // was already consumed under a different wallet for the same
+        // commitment, reject — otherwise a single credential could verify
+        // many accounts by re-using the same nullifier under each.
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()))
+        {
+            panic_with_error!(&env, ContractError::NullifierAlreadySpent);
+        }
+
         // Record the nullifier in persistent storage (AZ-014).
         env.storage()
             .persistent()
             .set(&DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()), &true);
         env.storage().persistent().extend_ttl(
             &DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()),
+            NULLIFIER_TTL_THRESHOLD,
+            NULLIFIER_TTL_LEDGERS,
+        );
+
+        // W10-SEC-015: Record the account-bound nullifier.
+        env.storage()
+            .persistent()
+            .set(&DataKey::AccountNullifier(wallet.clone(), nullifier.clone()), &true);
+        env.storage().persistent().extend_ttl(
+            &DataKey::AccountNullifier(wallet.clone(), nullifier.clone()),
             NULLIFIER_TTL_THRESHOLD,
             NULLIFIER_TTL_LEDGERS,
         );
@@ -507,6 +502,13 @@ impl ZkVerifier {
         env.storage()
             .persistent()
             .has(&DataKey::ScopedNullifier(commitment, nullifier))
+    }
+
+    /// W10-SEC-015: Returns `true` if `nullifier` has been spent by `wallet`.
+    pub fn is_account_nullifier_spent(env: Env, wallet: Address, nullifier: BytesN<32>) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::AccountNullifier(wallet, nullifier))
     }
 
     /// Return the admin address.

@@ -6,7 +6,7 @@ import { Noir } from "@noir-lang/noir_js";
 import { UltraHonkBackend } from "@aztec/bb.js";
 import { compile, createFileManager } from "@noir-lang/noir_wasm";
 import type { ProofArtifacts, ComplianceInput } from "./types";
-import { computeCommitment, computeNullifier, computeAccountCommitment } from "./poseidon";
+import { computeCommitment, computeNullifier, computeIdentityCommitment } from "./poseidon";
 
 let compiled: Awaited<ReturnType<typeof compile>> | null = null;
 let backend: UltraHonkBackend | null = null;
@@ -33,17 +33,6 @@ function hexToBytes(hex: string): Uint8Array {
   return out;
 }
 
-function normalizeAccount(account: string): bigint {
-  const clean = account.trim().toLowerCase().replace(/^0x/, "");
-  if (!clean) {
-    throw new Error("Account identity is required");
-  }
-  if (!/^[0-9a-f]+$/.test(clean)) {
-    throw new Error("Invalid account identity");
-  }
-  return BigInt("0x" + clean);
-}
-
 export async function loadCircuit(circuitSource: string): Promise<void> {
   const fm = createFileManager("/");
   (fm as { addFile: (path: string, contents: string) => void }).addFile(
@@ -60,20 +49,19 @@ export async function loadCircuit(circuitSource: string): Promise<void> {
 }
 
 export async function generateProof(
-  input: ComplianceInput
+  input: ComplianceInput,
+  account: string
 ): Promise<ProofArtifacts> {
   if (!compiled || !backend) {
     throw new Error("Circuit not loaded. Call loadCircuit() first.");
   }
 
-  if (!input.account) {
-    throw new Error("Account identity is required to bind the proof");
-  }
-
   const commitment = await computeCommitment(input.credential);
   const nullifier = await computeNullifier(commitment, input.credential.salt);
-  const account = normalizeAccount(input.account);
-  const accountCommitment = await computeAccountCommitment(account);
+  const identityCommitment = await computeIdentityCommitment(
+    account,
+    input.credential.salt
+  );
 
   const circuitInputs = {
     kyc_level: input.credential.kycLevel,
@@ -83,7 +71,7 @@ export async function generateProof(
     required_kyc: input.requiredKyc,
     allowed_country: input.allowedCountry,
     nullifier: fieldHex(nullifier),
-    account_commitment: fieldHex(accountCommitment),
+    account_identity_commitment: fieldHex(identityCommitment),
   };
 
   const program = new Noir(compiled as never);
@@ -106,6 +94,6 @@ export async function generateProof(
     vk: vk instanceof Uint8Array ? vk : Uint8Array.from(vk as ArrayLike<number>),
     nullifier: bigintToBytes32(nullifier),
     commitment: bigintToBytes32(commitment),
-    accountCommitment: bigintToBytes32(accountCommitment),
+    identityCommitment: bigintToBytes32(identityCommitment),
   };
 }
