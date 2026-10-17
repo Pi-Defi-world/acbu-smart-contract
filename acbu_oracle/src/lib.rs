@@ -6,7 +6,7 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_deviation, check_oracle_ledger_freshness, median, CurrencyCode,
+    calculate_deviation, check_oracle_ledger_freshness, median, ContractError, CurrencyCode,
     DataKey as SharedDataKey, EmergencyBypassEvent,
     EmergencyConfig, EmergencyVote, EmergencyVoteCastEvent, OutlierDetectionEvent, RateData,
     RateUpdateEvent, BASIS_POINTS, CONTRACT_VERSION, EMERGENCY_THRESHOLD_BPS,
@@ -132,6 +132,11 @@ pub struct DataKey {
     /// Map<CurrencyCode, Vec<RateSubmission>> — per-validator rate submissions
     /// for the current round, committed once `min_signatures` agree (AC-003).
     pub rate_submissions: Symbol,
+    /// `bool` oracle circuit breaker flag (W10-SEC-013).
+    pub paused: Symbol,
+    /// Map<CurrencyCode, bool> — explicit multi-sig human-review flags per pair
+    /// required to authorise >5% (`emergency_threshold`) rate movements (W10-SEC-013).
+    pub review_flags: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -157,6 +162,8 @@ const DATA_KEY: DataKey = DataKey {
     emergency_thresholds: symbol_short!("EMRG_THR"),
     emergency_votes: symbol_short!("EMRG_VOT"),
     rate_submissions: symbol_short!("RATE_SUBS"),
+    paused: symbol_short!("PAUSED"),
+    review_flags: symbol_short!("REV_FLAG"),
 };
 
 const VERSION: u32 = 9;
@@ -192,6 +199,21 @@ pub struct RateSubmittedEvent {
     pub rate: i128,
     pub submission_count: u32,
     pub required: u32,
+    pub timestamp: u64,
+}
+
+/// Emitted when an update attempts to move a stored rate by more than the
+/// per-currency bound (default 5% / `EMERGENCY_THRESHOLD_BPS`) without an
+/// explicit multi-sig review flag or N-of-M emergency consensus (W10-SEC-013).
+/// The offending move is rejected and the oracle automatically pauses.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviationBreachEvent {
+    pub currency: CurrencyCode,
+    pub existing_rate: i128,
+    pub attempted_rate: i128,
+    pub deviation_bps: i128,
+    pub threshold_bps: i128,
     pub timestamp: u64,
 }
 
@@ -314,6 +336,11 @@ impl OracleContract {
         let rates: Map<CurrencyCode, RateData> = Map::new(&env);
         env.storage().instance().set(&DATA_KEY.rates, &rates);
         env.storage().instance().set(&DATA_KEY.last_update, &0u64);
+        env.storage().instance().set(&DATA_KEY.paused, &false);
+        let review_flags_empty: Map<CurrencyCode, bool> = Map::new(&env);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.review_flags, &review_flags_empty);
         env.storage()
             .instance()
             .set(&SharedDataKey::Version, &CONTRACT_VERSION);
@@ -448,20 +475,26 @@ impl OracleContract {
     /// validator replaces its earlier one. Every accepted call emits
     /// `RateSubmittedEvent`; the committing call also emits `RateUpdateEvent`.
     ///
-    /// Updates are
-    /// rate-limited to the configured update interval unless the new rate deviates
-    /// beyond the per-currency emergency threshold **and** at least `min_signatures`
-    /// validators have all independently cast emergency votes via
-    /// [`Self::cast_emergency_vote`] (N-of-M consensus). A single validator can no
-    /// longer unilaterally bypass the time-lock. Even with consensus, an emergency
-    /// update is refused until [`EMERGENCY_UPDATE_COOLDOWN_SECONDS`] have passed since
-    /// the currency's previous update. Once the stored rate is older than
+    /// **Hard cap & review-flag gate (W10-SEC-013 / SC-025):** updates moving any
+    /// stored rate by more than the per-currency emergency threshold (default 5% /
+    /// [`EMERGENCY_THRESHOLD_BPS`]) require either an explicit multi-sig review
+    /// flag set via [`Self::set_review_flag`] or N-of-M validator consensus via
+    /// [`Self::cast_emergency_vote`]. Attempting to commit a move above the bound
+    /// without a review flag or emergency consensus is rejected, emits
+    /// `DeviationBreachEvent`, and automatically pauses the oracle.
+    ///
+    /// Updates are rate-limited to the configured update interval unless the new
+    /// rate deviates beyond the per-currency emergency threshold **and** a review
+    /// flag or N-of-M emergency consensus is active. Even with consensus, an
+    /// emergency update inside the interval is refused until
+    /// [`EMERGENCY_UPDATE_COOLDOWN_SECONDS`] have passed since the currency's
+    /// previous update. Once the stored rate is older than
     /// [`STALE_RATE_MAX_LEDGERS`] — the point at which every read path rejects it —
     /// the interval no longer blocks a refresh, so write-side and read-side
     /// staleness agree. Rejects timestamps older than the stored rate. The
     /// `_timestamp` parameter is ignored; the ledger timestamp is used. Emits
-    /// `RateUpdateEvent` and, when an emergency bypass fires, also emits
-    /// `EmergencyBypassEvent`.
+    /// `RateUpdateEvent` and, when a reviewed above-threshold update commits, also
+    /// emits `EmergencyBypassEvent`.
     pub fn update_rate(
         env: Env,
         validator: Address,
@@ -470,6 +503,7 @@ impl OracleContract {
         sources: Vec<i128>,
         _timestamp: u64,
     ) {
+        Self::check_not_paused(&env);
         validator.require_auth();
 
         let validator_set: Map<Address, bool> =
@@ -510,29 +544,13 @@ impl OracleContract {
             .get(&DATA_KEY.min_signatures)
             .unwrap();
 
-        if sources.len() > 0 {
-            let required = min_sigs.max(MIN_ORACLE_SOURCE_FEEDS);
-            if sources.len() < required {
-                env.panic_with_error(OracleError::InsufficientOracleSources);
-            }
-        }
-
-        // ── Emergency bypass logic (SC-025) ──────────────────────────────────
+        // ── Emergency bypass & review-flag gate (SC-025 / W10-SEC-013) ───────
         //
-        // A single validator can no longer unilaterally bypass the time-lock.
-        // The two-step flow is:
-        //
-        //  1. Each validator that believes an emergency exists calls
-        //     `cast_emergency_vote(validator, currency, rate)` — this always
-        //     succeeds and persists the vote (it never panics, so storage is
-        //     never rolled back).
-        //
-        //  2. Once `min_signatures` qualifying votes exist, validators may
-        //     submit the emergency rate via `update_rate` inside the interval.
-        //     Each submission checks that consensus still holds; if not it
-        //     fails with `UpdateIntervalNotMet`. The round still needs
-        //     `min_signatures` submissions (AC-003); the committing call clears
-        //     the votes and emits `EmergencyBypassEvent`.
+        // A single validator can no longer unilaterally bypass the time-lock or
+        // move a rate beyond the 5% (`emergency_threshold`) bound.
+        // Large moves (>5%) require either:
+        //  • an explicit multi-sig review flag (`set_review_flag`), or
+        //  • `min_signatures` qualifying emergency votes (`cast_emergency_vote`).
         //
         // The separation is critical: because Soroban rolls back all storage
         // writes inside a panicking call, votes must be persisted via a
@@ -540,8 +558,8 @@ impl OracleContract {
         // ─────────────────────────────────────────────────────────────────────
 
         // Within the update interval only an emergency round may proceed. The
-        // emergency votes are checked here for every submission in the round and
-        // consumed only when the round commits.
+        // emergency votes / review flag are checked here for every submission in
+        // the round and consumed only when the round commits.
         //
         // AC-027: the interval is judged on both clocks. Read paths reject a rate
         // by ledger age (unforgeable), so once the stored rate is past
@@ -569,10 +587,10 @@ impl OracleContract {
                 {
                     env.panic_with_error(OracleError::EmergencyCooldownActive);
                 }
-                // Check whether N-of-M consensus already exists (votes were
-                // pre-registered via cast_emergency_vote).
-                allow_update =
-                    Self::get_emergency_vote_count(env.clone(), currency.clone()) >= min_sigs;
+                // Check whether an explicit multi-sig review flag is set or
+                // N-of-M emergency consensus already exists.
+                allow_update = Self::has_review_flag_internal(&env, &currency)
+                    || Self::get_emergency_vote_count(env.clone(), currency.clone()) >= min_sigs;
             }
         }
 
@@ -684,27 +702,61 @@ impl OracleContract {
         }
         let consensus_rate = median(submitted_rates.clone()).unwrap_or(median_rate);
 
-        if within_interval {
-            // Emergency round: consume the votes so they cannot be reused.
-            let mut all_votes: Map<CurrencyCode, Vec<EmergencyVote>> = env
-                .storage()
-                .instance()
-                .get(&DATA_KEY.emergency_votes)
-                .unwrap_or(Map::new(&env));
-            all_votes.remove(currency.clone());
-            env.storage()
-                .instance()
-                .set(&DATA_KEY.emergency_votes, &all_votes);
+        // ── W10-SEC-013: Enforce 5% bound and review-flag gate on commit ─────
+        if let Some(ref existing) = existing_rate {
+            let emergency_threshold = Self::get_emergency_threshold_bps(&env, &currency);
+            let consensus_deviation = calculate_deviation(consensus_rate, existing.rate_usd);
+            let raw_deviation = calculate_deviation(rate, existing.rate_usd);
+            let effective_deviation = consensus_deviation.max(raw_deviation);
+            if effective_deviation > emergency_threshold {
+                let has_review = Self::has_review_flag_internal(&env, &currency)
+                    || Self::get_emergency_vote_count(env.clone(), currency.clone()) >= min_sigs;
+                if !has_review {
+                    // Reject unreviewed >5% move: emit breach + pause events and
+                    // persist paused state without updating the stored rate.
+                    env.storage().instance().set(&DATA_KEY.paused, &true);
+                    Self::extend_instance_ttl(&env);
+                    env.events().publish(
+                        (symbol_short!("dev_brch"),),
+                        DeviationBreachEvent {
+                            currency: currency.clone(),
+                            existing_rate: existing.rate_usd,
+                            attempted_rate: consensus_rate,
+                            deviation_bps: effective_deviation,
+                            threshold_bps: emergency_threshold,
+                            timestamp: current_time,
+                        },
+                    );
+                    env.events().publish(
+                        (symbol_short!("paused"),),
+                        (validator, current_time),
+                    );
+                    return;
+                }
 
-            env.events().publish(
-                (symbol_short!("emrg_byp"),),
-                EmergencyBypassEvent {
-                    currency: currency.clone(),
-                    new_rate: consensus_rate,
-                    vote_count: min_sigs,
-                    timestamp: current_time,
-                },
-            );
+                // Consume both the explicit review flag and any pending emergency
+                // votes so they cannot be reused for a subsequent move.
+                Self::clear_review_flag(&env, &currency);
+                let mut all_votes: Map<CurrencyCode, Vec<EmergencyVote>> = env
+                    .storage()
+                    .instance()
+                    .get(&DATA_KEY.emergency_votes)
+                    .unwrap_or(Map::new(&env));
+                all_votes.remove(currency.clone());
+                env.storage()
+                    .instance()
+                    .set(&DATA_KEY.emergency_votes, &all_votes);
+
+                env.events().publish(
+                    (symbol_short!("emrg_byp"),),
+                    EmergencyBypassEvent {
+                        currency: currency.clone(),
+                        new_rate: consensus_rate,
+                        vote_count: min_sigs,
+                        timestamp: current_time,
+                    },
+                );
+            }
         }
 
         let rate_data = RateData {
@@ -859,10 +911,10 @@ impl OracleContract {
     /// unrestricted, but once a rate exists the override is subject to the same
     /// circuit-breaker rules as validator updates (AC-013 #736): the configured
     /// update interval must have elapsed, and the new rate may not deviate from
-    /// the stored rate by more than the per-currency emergency threshold —
-    /// larger moves must go through [`Self::cast_emergency_vote`] +
-    /// [`Self::update_rate`] N-of-M consensus. `rate` must be positive and may
-    /// not roll the timestamp backwards. Emits `RateUpdateEvent`.
+    /// the stored rate by more than the per-currency emergency threshold unless
+    /// an explicit multi-sig review flag has been set via [`Self::set_review_flag`]
+    /// (W10-SEC-013). `rate` must be positive and may not roll the timestamp
+    /// backwards. Emits `RateUpdateEvent`.
     pub fn set_rate_admin(env: Env, currency: CurrencyCode, rate: i128) {
         Self::check_admin(&env);
         if rate <= 0 {
@@ -877,8 +929,9 @@ impl OracleContract {
             }
             // AC-013 (#736): without these gates a compromised admin could
             // rewrite any rate at any time. Interval first (mirrors update_rate),
-            // then the emergency-deviation cap — beyond it, N-of-M emergency
-            // consensus is required instead of a unilateral admin write.
+            // then the emergency-deviation cap — beyond it, an explicit review
+            // flag or N-of-M emergency consensus is required instead of an
+            // unreviewed admin write.
             let update_interval: u64 = env
                 .storage()
                 .instance()
@@ -890,7 +943,10 @@ impl OracleContract {
             let emergency_threshold = Self::get_emergency_threshold_bps(&env, &currency);
             let deviation = calculate_deviation(rate, existing.rate_usd);
             if deviation > emergency_threshold {
-                env.panic_with_error(OracleError::AdminDeviationTooLarge);
+                if !Self::has_review_flag_internal(&env, &currency) {
+                    env.panic_with_error(OracleError::AdminDeviationTooLarge);
+                }
+                Self::clear_review_flag(&env, &currency);
             }
         }
         let rate_data = RateData {
@@ -1070,6 +1126,70 @@ impl OracleContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.rate_submissions, &empty_subs);
+    }
+
+    /// Set or clear an explicit multi-sig human-review flag for `currency` (admin only).
+    ///
+    /// Required by W10-SEC-013 to authorize a rate movement exceeding the 5%
+    /// (`emergency_threshold`) bound when N-of-M validator emergency votes have
+    /// not been cast. Consumed automatically when the reviewed update commits.
+    pub fn set_review_flag(env: Env, currency: CurrencyCode, approved: bool) {
+        Self::check_admin(&env);
+        let mut flags: Map<CurrencyCode, bool> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.review_flags)
+            .unwrap_or(Map::new(&env));
+        if approved {
+            flags.set(currency.clone(), true);
+        } else {
+            flags.remove(currency.clone());
+        }
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.review_flags, &flags);
+        Self::extend_instance_ttl(&env);
+        env.events().publish(
+            (symbol_short!("rev_flag"),),
+            (currency, approved, env.ledger().timestamp()),
+        );
+    }
+
+    /// Return whether an explicit multi-sig human-review flag is currently set for `currency`.
+    pub fn has_review_flag(env: Env, currency: CurrencyCode) -> bool {
+        Self::has_review_flag_internal(&env, &currency)
+    }
+
+    /// Pause the oracle circuit breaker (admin only).
+    pub fn pause(env: Env) {
+        Self::check_admin(&env);
+        env.storage().instance().set(&DATA_KEY.paused, &true);
+        Self::extend_instance_ttl(&env);
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        env.events().publish(
+            (symbol_short!("paused"),),
+            (admin, env.ledger().timestamp()),
+        );
+    }
+
+    /// Unpause the oracle circuit breaker after human review (admin only).
+    pub fn unpause(env: Env) {
+        Self::check_admin(&env);
+        env.storage().instance().set(&DATA_KEY.paused, &false);
+        Self::extend_instance_ttl(&env);
+        let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
+        env.events().publish(
+            (symbol_short!("unpaused"),),
+            (admin, env.ledger().timestamp()),
+        );
+    }
+
+    /// Return `true` when the oracle circuit breaker is paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.paused)
+            .unwrap_or(false)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1507,5 +1627,39 @@ impl OracleContract {
     fn check_admin(env: &Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+    }
+
+    fn check_not_paused(env: &Env) {
+        if env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.paused)
+            .unwrap_or(false)
+        {
+            env.panic_with_error(ContractError::Paused);
+        }
+    }
+
+    fn has_review_flag_internal(env: &Env, currency: &CurrencyCode) -> bool {
+        let flags: Map<CurrencyCode, bool> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.review_flags)
+            .unwrap_or(Map::new(env));
+        flags.get(currency.clone()).unwrap_or(false)
+    }
+
+    fn clear_review_flag(env: &Env, currency: &CurrencyCode) {
+        let mut flags: Map<CurrencyCode, bool> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.review_flags)
+            .unwrap_or(Map::new(env));
+        if flags.contains_key(currency.clone()) {
+            flags.remove(currency.clone());
+            env.storage()
+                .instance()
+                .set(&DATA_KEY.review_flags, &flags);
+        }
     }
 }

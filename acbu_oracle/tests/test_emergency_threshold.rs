@@ -465,7 +465,9 @@ fn test_normal_update_after_interval_succeeds() {
     assert_eq!(client.get_rate(&ngn), new_rate);
 }
 
-/// A large move (>5%) after the interval passes is not an emergency — no votes needed.
+/// W10-SEC-013: A large move (>5%) even after the interval passes requires an
+/// explicit review flag (or N-of-M emergency votes); without one, the move is
+/// rejected, a breach event is emitted, and the oracle pauses.
 #[test]
 fn test_large_move_after_interval_is_normal() {
     let (env, _admin, validators, ngn, client) = setup_with(3, 2);
@@ -473,9 +475,21 @@ fn test_large_move_after_interval_is_normal() {
     seed_rate(&env, &client, &validators, &ngn, 1_000_000i128);
     advance_time(&env, UPDATE_INTERVAL + 1);
 
-    let new_rate = 1_200_000i128; // 20% move — interval already passed
+    let new_rate = 1_200_000i128; // 20% move — exceeds 5% bound
+    submit_quorum(&env, &client, &validators, &ngn, new_rate);
+
+    // Unreviewed >5% move must be rejected and pause the oracle.
+    assert_eq!(client.get_rate(&ngn), 1_000_000i128);
+    assert!(client.is_paused());
+
+    // After multi-sig human review sets the review flag and unpauses, the move succeeds.
+    client.unpause();
+    client.set_review_flag(&ngn, &true);
+    assert!(client.has_review_flag(&ngn));
+
     submit_quorum(&env, &client, &validators, &ngn, new_rate);
     assert_eq!(client.get_rate(&ngn), new_rate);
+    assert!(!client.has_review_flag(&ngn), "review flag must be consumed on commit");
 }
 
 /// First-ever rate write for a currency is never subject to emergency checks.
@@ -736,4 +750,97 @@ fn test_ledger_fresh_rate_still_gated_by_clock_interval() {
     let rate = 1_010_000i128;
     let res = client.try_update_rate(&v0, &ngn, &rate, &quorum_sources(&env, rate), &0u64);
     assert_eq!(res, Err(Ok(contract_error(OracleError::UpdateIntervalNotMet))));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 13. W10-SEC-013 — 5% bound, multi-sig review-flag gate, and pause-on-breach
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// An unreviewed >5% move after the interval must be rejected, leave the stored
+/// rate untouched, and pause the oracle so subsequent updates revert with
+/// `ContractError::Paused` (#4).
+#[test]
+fn test_w10_sec_013_unreviewed_large_move_pauses_and_blocks_updates() {
+    let (env, _admin, validators, ngn, client) = setup_with(3, 2);
+    let v0 = validators.get(0).unwrap();
+
+    seed_rate(&env, &client, &validators, &ngn, 1_000_000i128);
+    advance_time(&env, UPDATE_INTERVAL + 1);
+    assert!(!client.is_paused());
+
+    // 5.01% move without review flag or emergency votes -> breach & pause.
+    let breach_rate = 1_050_100i128;
+    submit_quorum(&env, &client, &validators, &ngn, breach_rate);
+
+    assert_eq!(client.get_rate(&ngn), 1_000_000i128, "rate must not change on breach");
+    assert!(client.is_paused(), "oracle must pause on unreviewed >5% breach");
+
+    // Any further update while paused must fail with ContractError::Paused (#4).
+    let normal_rate = 1_010_000i128;
+    let res = client.try_update_rate(&v0, &ngn, &normal_rate, &quorum_sources(&env, normal_rate), &0u64);
+    assert_eq!(res, Err(Ok(Error::from_contract_error(shared::ContractError::Paused as u32))));
+}
+
+/// Exact 5.00% move (500 bps) is within the bound and does not trigger a breach.
+#[test]
+fn test_w10_sec_013_exact_five_percent_move_allowed_after_interval() {
+    let (env, _admin, validators, ngn, client) = setup_with(3, 2);
+
+    seed_rate(&env, &client, &validators, &ngn, 1_000_000i128);
+    advance_time(&env, UPDATE_INTERVAL + 1);
+
+    let boundary_rate = 1_050_000i128; // exactly 5.00% (500 bps)
+    submit_quorum(&env, &client, &validators, &ngn, boundary_rate);
+
+    assert_eq!(client.get_rate(&ngn), boundary_rate);
+    assert!(!client.is_paused());
+}
+
+/// Multi-sig admin review flag (`set_review_flag`) authorizes a >5% move both
+/// within the interval (after cooldown) and after the interval, and is
+/// single-use (consumed on commit).
+#[test]
+fn test_w10_sec_013_review_flag_authorizes_large_move_and_is_consumed() {
+    let (env, _admin, validators, ngn, client) = setup_with(3, 2);
+
+    seed_rate(&env, &client, &validators, &ngn, 1_000_000i128);
+    advance_time(&env, EMERGENCY_UPDATE_COOLDOWN_SECONDS + 1);
+
+    // Multi-sig admin approves review flag for NGN.
+    client.set_review_flag(&ngn, &true);
+    assert!(client.has_review_flag(&ngn));
+
+    let reviewed_rate = 1_150_000i128; // 15% move inside regular interval
+    submit_quorum(&env, &client, &validators, &ngn, reviewed_rate);
+
+    assert_eq!(client.get_rate(&ngn), reviewed_rate);
+    assert!(!client.has_review_flag(&ngn), "review flag must be cleared after commit");
+    assert!(!client.is_paused());
+
+    // A second >5% move after the interval without a new review flag must breach and pause.
+    advance_time(&env, UPDATE_INTERVAL + 1);
+    let second_large_rate = 1_300_000i128;
+    submit_quorum(&env, &client, &validators, &ngn, second_large_rate);
+    assert_eq!(client.get_rate(&ngn), reviewed_rate);
+    assert!(client.is_paused());
+}
+
+/// Admin rate override (`set_rate_admin`) also enforces the 5% bound unless the
+/// multi-sig review flag is set, and consumes the flag when used.
+#[test]
+fn test_w10_sec_013_admin_override_requires_review_flag_above_five_percent() {
+    let (env, _admin, validators, ngn, client) = setup_with(3, 2);
+
+    seed_rate(&env, &client, &validators, &ngn, 1_000_000i128);
+    advance_time(&env, UPDATE_INTERVAL + 1);
+
+    let large_rate = 1_100_000i128; // 10% move
+    let res = client.try_set_rate_admin(&ngn, &large_rate);
+    assert_eq!(res, Err(Ok(contract_error(OracleError::AdminDeviationTooLarge))));
+
+    // With explicit review flag set, admin override succeeds and consumes the flag.
+    client.set_review_flag(&ngn, &true);
+    client.set_rate_admin(&ngn, &large_rate);
+    assert_eq!(client.get_rate(&ngn), large_rate);
+    assert!(!client.has_review_flag(&ngn));
 }
