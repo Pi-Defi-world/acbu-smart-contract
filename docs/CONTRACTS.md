@@ -262,3 +262,11 @@ cargo test --workspace -- --nocapture
 ## Security
 
 See [threat-model.md](threat-model.md) and [reentrancy-audit-c036.md](reentrancy-audit-c036.md) for security documentation.
+
+### Multisig quorum requirements
+
+All admin-gated functions (pause, fee changes, upgrades, validator and dependency management) require multisig authorisation. The required M-of-N threshold varies by action category. The single authoritative source is:
+
+**[docs/QUORUM_MATRIX.md](QUORUM_MATRIX.md)**
+
+Do not state quorum values inline in this document or in contract-specific docs — link to the matrix instead.

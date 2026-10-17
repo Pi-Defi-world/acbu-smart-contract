@@ -263,7 +263,7 @@ Before deploying to mainnet, verify:
 - [ ] Oracle address stored in minting, burning, and reserve tracker contracts is the correct deployed oracle
 - [ ] Reserve tracker address stored in minting and burning contracts is the correct deployed reserve tracker
 - [ ] Operator address stored in the minting contract is the correct fintech backend key
-- [ ] Admin is a multisig with at least 2-of-3 signers
+- [ ] Admin is a multisig configured with signers and thresholds that meet or exceed the requirements in [docs/QUORUM_MATRIX.md](QUORUM_MATRIX.md)
 - [ ] No other contract or account holds minter authority on the ACBU SAC
 
 ---
