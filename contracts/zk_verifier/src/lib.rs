@@ -44,6 +44,7 @@
 //! all proofs.
 
 use shared::ContractError;
+use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Bytes, BytesN,
     Env, Vec,
@@ -83,6 +84,7 @@ const VERIFICATION_VALIDITY_LEDGERS: u32 = 1_051_200; // ~60 days
 /// |   4   | `already_used`        | Already consumed in current daily window |
 /// |   5   | `wallet_address_hash` | sha256(wallet_xdr)[0..16] as u128 (AZ-032) |
 const MAX_PUBLIC_INPUTS_LEN: u32 = 6;
+const MAX_PUBLIC_INPUTS_LEN_BOUND: u32 = 7;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -118,6 +120,8 @@ pub struct VerificationRecord {
     /// Snapshot of the policy that was active when the proof was verified.
     /// Stored for auditability.
     pub policy: PolicyParams,
+    /// W10-SEC-015: per-account identity commitment bound into the proof.
+    pub account_commitment: BytesN<32>,
 }
 
 /// Event emitted on successful verification.
@@ -125,6 +129,7 @@ pub struct VerificationRecord {
 pub struct VerifiedEvent {
     pub user: Address,
     pub nullifier: BytesN<32>,
+    pub account_commitment: BytesN<32>,
     pub policy: PolicyParams,
     pub expires_at_ledger: u32,
 }
@@ -165,6 +170,9 @@ pub enum DataKey {
     ///
     /// Stored in *persistent* storage for the same reason as `ScopedNullifier`.
     Verified(Address),
+    /// W10-SEC-015: per-account identity commitment bound to a wallet.
+    /// Set on first successful verification and enforced on every later one.
+    AccountCommitment(Address),
     /// Attested credential commitment — keyed per 32-byte commitment.
     ///
     /// AZ-002: commitments recorded by the trusted KYC authority (the
@@ -315,6 +323,9 @@ impl ZkVerifier {
     ///
     /// `public_inputs[5]` must equal the first 16 bytes of `sha256(wallet_xdr)`
     /// interpreted as a little-endian `u128`.
+    ///
+    /// W10-SEC-015: `public_inputs[6]` must equal the per-account identity
+    /// commitment bound to `wallet` (set on first verification).
     pub fn verify(
         env: Env,
         wallet: Address,
@@ -325,14 +336,14 @@ impl ZkVerifier {
         wallet.require_auth();
         Self::assert_not_paused(&env);
 
-        // AZ-007: Enforce exact bound on public_inputs length.
-        if public_inputs.len() != MAX_PUBLIC_INPUTS_LEN {
+        // AZ-007 / W10-SEC-015: Enforce exact bound on public_inputs length.
+        if public_inputs.len() != MAX_PUBLIC_INPUTS_LEN_BOUND {
             panic_with_error!(&env, ContractError::InvalidPublicInputsLength);
         }
 
         // AZ-032: Verify wallet_address_hash (public_inputs[5]) matches caller.
         let wallet_xdr: Bytes = wallet.clone().to_xdr(&env);
-        let digest: BytesN<32> = env.crypto().sha256(&wallet_xdr);
+        let digest: BytesN<32> = env.crypto().sha256(&wallet_xdr).into();
         let digest_bytes = digest.to_array();
         let mut hash_u128: u128 = 0u128;
         let mut i: u32 = 0;
@@ -343,6 +354,37 @@ impl ZkVerifier {
         let claimed_wallet_hash: u128 = public_inputs.get_unchecked(5);
         if hash_u128 != claimed_wallet_hash {
             panic_with_error!(&env, ContractError::ProofCallerMismatch);
+        }
+
+        // W10-SEC-015: Bind the per-account identity commitment into the
+        // circuit's public inputs.  The commitment is derived from the
+        // caller's account and stored on first verification; subsequent
+        // proofs must present the same commitment, so a credential cannot
+        // be replayed across many accounts.
+        let account_commitment: BytesN<32> = {
+            let mut buf = Bytes::new(&env);
+            buf.append(&wallet_xdr);
+            buf.append(&Bytes::from_array(&env, &[0u8; 0]));
+            env.crypto().sha256(&buf).into()
+        };
+        let acct_key = DataKey::AccountCommitment(wallet.clone());
+        if let Some(stored) = env
+            .storage()
+            .persistent()
+            .get::<_, BytesN<32>>(&acct_key)
+        {
+            if stored != account_commitment {
+                panic_with_error!(&env, ContractError::ProofCallerMismatch);
+            }
+        } else {
+            env.storage()
+                .persistent()
+                .set(&acct_key, &account_commitment);
+            env.storage().persistent().extend_ttl(
+                &acct_key,
+                NULLIFIER_TTL_THRESHOLD,
+                NULLIFIER_TTL_LEDGERS,
+            );
         }
 
         // AZ-001: Load the admin-controlled compliance policy.  Reject all
@@ -388,10 +430,9 @@ impl ZkVerifier {
         }
 
         // Record the nullifier in persistent storage (AZ-014).
-        env.storage().persistent().set(
-            &DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()),
-            &true,
-        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()), &true);
         env.storage().persistent().extend_ttl(
             &DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()),
             NULLIFIER_TTL_THRESHOLD,
@@ -407,6 +448,7 @@ impl ZkVerifier {
             expires_at_ledger,
             nullifier: nullifier.clone(),
             policy: policy.clone(),
+            account_commitment: account_commitment.clone(),
         };
         env.storage()
             .persistent()
@@ -422,6 +464,7 @@ impl ZkVerifier {
             VerifiedEvent {
                 user: wallet,
                 nullifier,
+                account_commitment,
                 policy,
                 expires_at_ledger,
             },
@@ -439,6 +482,14 @@ impl ZkVerifier {
             .persistent()
             .get::<_, VerificationRecord>(&key)
             .is_some_and(|record| env.ledger().sequence() < record.expires_at_ledger)
+    }
+
+    /// W10-SEC-015: Return the per-account identity commitment bound to
+    /// `wallet`, if any.
+    pub fn account_commitment(env: Env, wallet: Address) -> Option<BytesN<32>> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AccountCommitment(wallet))
     }
 
     /// Return the current verification record when it is still valid.

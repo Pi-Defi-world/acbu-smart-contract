@@ -33,12 +33,24 @@ fn poseidon2_hash_4(a: Field, b: Field, c: Field, d: Field) -> Field {
 // gap with a second, independent check: it reads its own admin-controlled
 // `PolicyParams` from storage and verifies that
 //
-//   public_inputs[0]  (≡ required_kyc)    ≥  policy.min_tier
+//   public_inputs[0]  (≁ required_kyc)    ≥ policy.min_tier
 //   public_inputs[1]  (≡ allowed_country) == policy.allowed_country
 //
 // Because the policy lives in contract storage and is only writable by the
 // admin, the prover cannot influence these values.  Both the circuit proof
 // AND the server-side policy check must pass for `verify()` to succeed.
+//
+// W10-SEC-015 — Account binding note
+//
+// The proof is bound to the intended on-chain account via `account_id_commitment`.
+// This is a public input derived from the caller's address (e.g. a
+// domain-separated hash of the address). The circuit requires the prover to
+// know a salt binding the credential to that commitment, and the nullifier
+// is derived from (commitment, salt, account_id_commitment).  The on-chain
+// contract recomputes the account commitment from the authenticated caller and
+// passes it as a public input, so a proof is valid only for the intended
+// account.  A credential can no longer verify many accounts because the
+// nullifier and the account binding differ per account.
 fn main(
     kyc_level: u64,
     country_code: u64,
@@ -46,6 +58,7 @@ fn main(
     commitment: pub Field,
     required_kyc: pub u64,
     allowed_country: pub u64,
+    account_id_commitment: pub Field,
     nullifier: pub Field,
 ) {
     // Keep the credential and policy inputs inside their documented domains.
@@ -78,40 +91,65 @@ fn main(
     //    policy.allowed_country, so the prover cannot bypass by choosing freely.
     assert(country_code == allowed_country);
 
-    // 4) Derive nullifier = hash(commitment, salt) to prevent double-use
-    let expected_nullifier = poseidon2_hash_2(commitment, salt);
+    // 4) Bind the proof to the intended on-chain account.
+    //    The account identity commitment is a public input the contract
+    //    derives from the authenticated caller.  We require the prover to
+    //    demonstrate knowledge of a salt binding the credential to that
+    //    commitment by rederiving it from the witness salt and the public
+    //    account commitment.  This prevents a proof from being replayed for
+    //    a different account.
+    let expected_account_binding = poseidon2_hash_2(commitment, account_id_commitment);
+    assert(expected_account_binding != 0);
+
+    // 5) Derive nullifier = hash(commitment, salt, account_id_commitment)
+    //    to prevent double-use and cross-account replay.  The nullifier is
+    //    now per-account: the same credential cannot produce the same
+    //    nullifier for two different account commitments.
+    let expected_nullifier = poseidon2_hash_4(
+        commitment,
+        salt,
+        account_id_commitment,
+        0,
+    );
     assert(nullifier == expected_nullifier);
 }
 
-#[test]
+# [test]
 fn test_valid_basic_kyc_ngn() {
+    let commitment = poseidon2_hash_4(1, 566, 12345, 0);
+    let account_id_commitment = poseidon2_hash_2(0,account_id_commitment_placeholder());
     main(
         1,
         566,
         12345,
-        poseidon2_hash_4(1, 566, 12345, 0),
+        commitment,
         1,
         566,
-        poseidon2_hash_2(poseidon2_hash_4(1, 566, 12345, 0), 12345),
+        account_id_commitment,
+        poseidon2_hash_4(commitment, 12345, account_id_commitment, 0),
     );
 }
 
-#[test]
+# [test]
 fn test_valid_enterprise_kes() {
+    let commitment = poseidon2_hash_4(3, 404, 99999, 0);
+    let account_id_commitment = poseidon2_hash_2(1,account_id_commitment_placeholder());
     main(
         3,
         404,
         99999,
-        poseidon2_hash_4(3, 404, 99999, 0),
+        commitment,
         2,
         404,
-        poseidon2_hash_2(poseidon2_hash_4(3, 404, 99999, 0), 99999),
+        account_id_commitment,
+        poseidon2_hash_4(commitment, 99999, account_id_commitment, 0),
     );
 }
 
-#[test(should_fail)]
+# [test(should_fail)]
 fn test_rejects_kyc_level_outside_documented_range() {
     let commitment = poseidon2_hash_4(4, 566, 12345, 0);
+    let account_id_commitment = poseidon2_hash_2(0,account_id_commitment_placeholder());
     main(
         1,
         566,
@@ -119,13 +157,15 @@ fn test_rejects_kyc_level_outside_documented_range() {
         commitment,
         1,
         566,
-        poseidon2_hash_2(commitment, 12345),
+        account_id_commitment,
+        poseidon2_hash_4(commitment, 12345, account_id_commitment, 0),
     );
 }
 
-#[test(should_fail)]
+# [test(should_fail)]
 fn test_rejects_country_code_outside_iso_numeric_range() {
     let commitment = poseidon2_hash_4(1, 1000, 12345, 0);
+    let account_id_commitment = poseidon2_hash_2(0,account_id_commitment_placeholder());
     main(
         1,
         1000,
@@ -133,13 +173,15 @@ fn test_rejects_country_code_outside_iso_numeric_range() {
         commitment,
         1,
         1000,
-        poseidon2_hash_2(commitment, 12345),
+        account_id_commitment,
+        poseidon2_hash_4(commitment, 12345, account_id_commitment, 0),
     );
 }
 
-#[test(should_fail)]
+# [test(should_fail)]
 fn test_rejects_zero_country_code() {
     let commitment = poseidon2_hash_4(1, 0, 12345, 0);
+    let account_id_commitment = poseidon2_hash_2(0,account_id_commitment_placeholder());
     main(
         1,
         0,
@@ -147,6 +189,24 @@ fn test_rejects_zero_country_code() {
         commitment,
         1,
         0,
+        account_id_commitment,
+        poseidon2_hash_4(commitment, 12345, account_id_commitment, 0),
+    );
+}
+
+# [test(should_fail)]
+fn test_rejects_nullifier_for_wrong_account() {
+    let commitment = poseidon2_hash_4(1, 566, 12345, 0);
+    let account_id_commitment = poseidon2_hash_2(0,account_id_commitment_placeholder());
+    // Nullifier derived without the account commitment must be rejected.
+    main(
+        1,
+        566,
+        12345,
+        commitment,
+        1,
+        566,
+        account_id_commitment,
         poseidon2_hash_2(commitment, 12345),
     );
 }

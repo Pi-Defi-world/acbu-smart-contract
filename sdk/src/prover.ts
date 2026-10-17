@@ -12,6 +12,7 @@ import type { ProofArtifacts, ComplianceInput } from "./types.js";
 import {
   computeCommitment,
   computeNullifier,
+  computeIdentityCommitment,
   fieldToBytes32,
 } from "./poseidon.js";
 
@@ -68,6 +69,10 @@ export async function loadCircuit(circuitSource: string): Promise<void> {
  * The raw credential data (kycLevel, countryCode, salt) never
  * leaves the browser — it's fed directly into the Wasm prover.
  * Only the proof and public inputs are returned.
+ *
+ * The proof is bound to the intended on-chain account: the circuit
+ * receives a per-account identity commitment as a public input, so a
+ * proof is valid only for the account it was generated for.
  */
 export async function generateProof(
   input: ComplianceInput
@@ -78,6 +83,9 @@ export async function generateProof(
 
   const commitment = await computeCommitment(input.credential);
   const nullifier = await computeNullifier(commitment, input.credential.salt);
+  const identityCommitment = await computeIdentityCommitment(
+    input.account
+  );
 
   const circuitInputs = {
     kyc_level: input.credential.kycLevel,
@@ -87,6 +95,8 @@ export async function generateProof(
     required_kyc: input.requiredKyc,
     allowed_country: input.allowedCountry,
     nullifier: fieldHex(nullifier),
+    // Per-account identity commitment bound into public inputs.
+    identity_commitment: fieldHex(identityCommitment),
   };
 
   const program = new Noir(compiled as never);
@@ -103,8 +113,9 @@ export async function generateProof(
   return {
     proof: proof instanceof Uint8Array ? proof : Uint8Array.from(proof as ArrayLike<number>),
     publicInputs: publicInputsBytes,
-    vk: vk instanceof Uint8Array ? vk : Uint8Array.from(vk as ArrayLike<number>),
+    vk: vk instanceof Uint8Array ? bk : Uint8Array.from(vk as ArrayLike<number>),
     nullifier: bigintToBytes32(nullifier),
     commitment: bigintToBytes32(commitment),
+    identityCommitment: bigintToBytes32(identityCommitment),
   };
 }

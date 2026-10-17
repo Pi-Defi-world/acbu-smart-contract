@@ -1,6 +1,6 @@
-#![no_std]
+#`!no_std]
 
-use soroban_sdk::{
+use soroban_sdk:{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, Vec,
 };
 
@@ -12,6 +12,7 @@ pub enum ZkGateError {
     AlreadyInitialized = 2,
     InvalidVrf = 3,
     VrfNotConfigured = 4,
+    IdentityMismatch = 5,
 }
 
 #[contracttype]
@@ -65,10 +66,14 @@ impl ZkGate {
             return false;
         }
 
+        // Bind the proof to the caller's identity by passing the account as the
+        // identity commitment public input. The verifier must check that the
+        // proof's identity commitment matches this account, so a credential
+        // cannot be replayed across accounts.
         let verified: bool = env.invoke_contract(
             &vrf,
-            &symbol_short!("is_v"),
-            Vec::from_array(&env, [account.into_val(&env)]),
+            &symbol_short("is_v"),
+            Vec::from_array(&env, [account.clone().into_val(&env), account.into_val(&env)]),
         );
 
         verified
