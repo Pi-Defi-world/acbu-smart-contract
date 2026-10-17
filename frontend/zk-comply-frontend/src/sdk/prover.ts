@@ -1,4 +1,4 @@
-/*
+/**
  * Browser prover — mirrors repo `sdk/src/prover.ts` (UltraHonk + Noir).
  */
 
@@ -6,7 +6,7 @@ import { Noir } from "@noir-lang/noir_js";
 import { UltraHonkBackend } from "@aztec/bb.js";
 import { compile, createFileManager } from "@noir-lang/noir_wasm";
 import type { ProofArtifacts, ComplianceInput } from "./types";
-import { computeCommitment, computeNullifier, computeIdentityCommitment } from "./poseidon";
+import { computeCommitment, computeNullifier } from "./poseidon";
 
 let compiled: Awaited<ReturnType<typeof compile>> | null = null;
 let backend: UltraHonkBackend | null = null;
@@ -49,8 +49,7 @@ export async function loadCircuit(circuitSource: string): Promise<void> {
 }
 
 export async function generateProof(
-  input: ComplianceInput,
-  account: string
+  input: ComplianceInput
 ): Promise<ProofArtifacts> {
   if (!compiled || !backend) {
     throw new Error("Circuit not loaded. Call loadCircuit() first.");
@@ -58,10 +57,6 @@ export async function generateProof(
 
   const commitment = await computeCommitment(input.credential);
   const nullifier = await computeNullifier(commitment, input.credential.salt);
-  const identityCommitment = await computeIdentityCommitment(
-    account,
-    input.credential.salt
-  );
 
   const circuitInputs = {
     kyc_level: input.credential.kycLevel,
@@ -71,7 +66,6 @@ export async function generateProof(
     required_kyc: input.requiredKyc,
     allowed_country: input.allowedCountry,
     nullifier: fieldHex(nullifier),
-    account_identity_commitment: fieldHex(identityCommitment),
   };
 
   const program = new Noir(compiled as never);
@@ -94,6 +88,5 @@ export async function generateProof(
     vk: vk instanceof Uint8Array ? vk : Uint8Array.from(vk as ArrayLike<number>),
     nullifier: bigintToBytes32(nullifier),
     commitment: bigintToBytes32(commitment),
-    identityCommitment: bigintToBytes32(identityCommitment),
   };
 }

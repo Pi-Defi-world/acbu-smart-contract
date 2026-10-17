@@ -6,12 +6,13 @@
  */
 
 import { Noir } from "@noir-lang/noir_js";
-import { UltraHonkBackend } from "@azdec/bb.js";
+import { UltraHonkBackend } from "@aztec/bb.js";
 import { compile, createFileManager } from "@noir-lang/noir_wasm";
 import type { ProofArtifacts, ComplianceInput } from "./types.js";
 import {
   computeCommitment,
   computeNullifier,
+  fieldToBytes32,
   computeAccountCommitment,
 } from "./poseidon.js";
 
@@ -47,7 +48,7 @@ function hexToBytes(hex: string): Uint8Array {
  */
 export async function loadCircuit(circuitSource: string): Promise<void> {
   const fm = createFileManager("/");
-  // noir_wasm FileManager: addFile is the stable API used by generate-artifacts.mj
+  // noir_wasm FileManager: addFile is the stable API used by generate-artifacts.mjs
   (fm as { addFile: (path: string, contents: string) => void }).addFile(
     "./main.nr",
     circuitSource
@@ -69,27 +70,21 @@ export async function loadCircuit(circuitSource: string): Promise<void> {
  * leaves the browser — it's fed directly into the Wasm prover.
  * Only the proof and public inputs are returned.
  *
- * W10-SEC-015: the proof is bound to the caller's account by including
- * a per-account identity commitment as a public input and folding it into
- * the nullifier derivation.  The on-chain verifier recomputes this
- * commitment from the authenticated caller address and rejects any proof
- * whose public input does not match.
+ * W10-SEC-015: the proof is bound to the intended on-chain account via
+ * `account_commitment`, which is derived from the caller's Address. The
+ * nullifier is derived from (commitment, salt, account_commitment), so
+ * a proof for one account cannot be replayed for another.
  */
 export async function generateProof(
-  input: ComplianceInput
+  input: ComplianceInput,
+  account: string
 ): Promise<ProofArtifacts> {
   if (!compiled || !backend) {
     throw new Error("Circuit not loaded. Call loadCircuit() first.");
   }
 
-  if (!input.accountAddress) {
-    throw new Error(
-      "generateProof requires accountAddress to bind the proof to the caller."
-    );
-  }
-
   const commitment = await computeCommitment(input.credential);
-  const accountCommitment = await computeAccountCommitment(input.accountAddress);
+  const accountCommitment = await computeAccountCommitment(account);
   const nullifier = await computeNullifier(
     commitment,
     input.credential.salt,
