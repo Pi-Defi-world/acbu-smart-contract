@@ -12,7 +12,7 @@ import type { ProofArtifacts, ComplianceInput } from "./types.js";
 import {
   computeCommitment,
   computeNullifier,
-  computeIdentityCommitment,
+  computeAccountCommitment,
   fieldToBytes32,
 } from "./poseidon.js";
 
@@ -48,7 +48,7 @@ function hexToBytes(hex: string): Uint8Array {
  */
 export async function loadCircuit(circuitSource: string): Promise<void> {
   const fm = createFileManager("/");
-  // noir_wasm FileManager: addFile is the stable API used by generate-artifacts.mjs
+  // noir_wasm FileManager: addFile is the stable API used by generate-artifacts.mj
   (fm as { addFile: (path: string, contents: string) => void }).addFile(
     "./main.nr",
     circuitSource
@@ -70,9 +70,10 @@ export async function loadCircuit(circuitSource: string): Promise<void> {
  * leaves the browser — it's fed directly into the Wasm prover.
  * Only the proof and public inputs are returned.
  *
- * The proof is bound to the intended on-chain account: the circuit
- * receives a per-account identity commitment as a public input, so a
- * proof is valid only for the account it was generated for.
+ * The proof is bound to the caller's on-chain account via an
+ * `account_commitment` public input derived from `input.account`.
+ * The circuit must constrain this value against the account address that
+ * the contract passes to `verify`.
  */
 export async function generateProof(
   input: ComplianceInput
@@ -81,11 +82,15 @@ export async function generateProof(
     throw new Error("Circuit not loaded. Call loadCircuit() first.");
   }
 
+  if (!input.account) {
+    throw new Error(
+      "ComplianceInput.account is required to bind the proof to the caller."
+    );
+  }
+
   const commitment = await computeCommitment(input.credential);
   const nullifier = await computeNullifier(commitment, input.credential.salt);
-  const identityCommitment = await computeIdentityCommitment(
-    input.account
-  );
+  const accountCommitment = await computeAccountCommitment(input.account);
 
   const circuitInputs = {
     kyc_level: input.credential.kycLevel,
@@ -95,8 +100,8 @@ export async function generateProof(
     required_kyc: input.requiredKyc,
     allowed_country: input.allowedCountry,
     nullifier: fieldHex(nullifier),
-    // Per-account identity commitment bound into public inputs.
-    identity_commitment: fieldHex(identityCommitment),
+    // Bind the proof to the intended on-chain account.
+    account_commitment: fieldHex(accountCommitment),
   };
 
   const program = new Noir(compiled as never);
@@ -113,9 +118,9 @@ export async function generateProof(
   return {
     proof: proof instanceof Uint8Array ? proof : Uint8Array.from(proof as ArrayLike<number>),
     publicInputs: publicInputsBytes,
-    vk: vk instanceof Uint8Array ? bk : Uint8Array.from(vk as ArrayLike<number>),
+    vk: vk instanceof Uint8Array ? vk : Uint8Array.from(vk as ArrayLike<number>),
     nullifier: bigintToBytes32(nullifier),
     commitment: bigintToBytes32(commitment),
-    identityCommitment: bigintToBytes32(identityCommitment),
+    accountCommitment: bigintToBytes32(accountCommitment),
   };
 }

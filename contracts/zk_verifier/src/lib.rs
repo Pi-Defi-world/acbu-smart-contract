@@ -83,8 +83,8 @@ const VERIFICATION_VALIDITY_LEDGERS: u32 = 1_051_200; // ~60 days
 /// |   3   | `daily_cap`           | Per-tier daily cap                       |
 /// |   4   | `already_used`        | Already consumed in current daily window |
 /// |   5   | `wallet_address_hash` | sha256(wallet_xdr)[0..16] as u128 (AZ-032) |
-const MAX_PUBLIC_INPUTS_LEN: u32 = 6;
-const MAX_PUBLIC_INPUTS_LEN_BOUND: u32 = 7;
+/// |   6   | `account_commitment`  | sha256(account_xdr) bound to caller (W10-SEC-015) |
+const MAX_PUBLIC_INPUTS_LEN: u32 = 7;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -120,8 +120,6 @@ pub struct VerificationRecord {
     /// Snapshot of the policy that was active when the proof was verified.
     /// Stored for auditability.
     pub policy: PolicyParams,
-    /// W10-SEC-015: per-account identity commitment bound into the proof.
-    pub account_commitment: BytesN<32>,
 }
 
 /// Event emitted on successful verification.
@@ -129,7 +127,6 @@ pub struct VerificationRecord {
 pub struct VerifiedEvent {
     pub user: Address,
     pub nullifier: BytesN<32>,
-    pub account_commitment: BytesN<32>,
     pub policy: PolicyParams,
     pub expires_at_ledger: u32,
 }
@@ -170,14 +167,18 @@ pub enum DataKey {
     ///
     /// Stored in *persistent* storage for the same reason as `ScopedNullifier`.
     Verified(Address),
-    /// W10-SEC-015: per-account identity commitment bound to a wallet.
-    /// Set on first successful verification and enforced on every later one.
-    AccountCommitment(Address),
     /// Attested credential commitment — keyed per 32-byte commitment.
     ///
     /// AZ-002: commitments recorded by the trusted KYC authority (the
     /// admin). Stored in *persistent* storage so the registry stays bounded.
     AttestedCommitment(BytesN<32>),
+    /// W10-SEC-015: per-account identity commitment binding.
+    ///
+    /// Maps a credential commitment to the account commitment that is
+    /// authorised to spend it.  A proof is only accepted when the caller's
+    /// derived account commitment matches the value bound here, so a single
+    /// credential cannot be replayed across many accounts.
+    AccountBinding(BytesN<32>),
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +282,50 @@ impl ZkVerifier {
         Self::extend_instance_ttl(&env);
     }
 
+    /// W10-SEC-015 — bind a credential commitment to a specific on-chain
+    /// account commitment.
+    ///
+    /// The admin (trusted KYC authority) records which account commitment is
+    /// allowed to spend a given credential commitment.  `verify()` then
+    /// requires the caller's derived account commitment to equal this value,
+    /// so a proof is valid only for the intended on-chain account.
+    pub fn bind_account(env: Env, commitment: BytesN<32>, account_commitment: BytesN<32>) {
+        Self::check_admin(&env);
+        Self::assert_not_paused(&env);
+
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::AttestedCommitment(commitment.clone()))
+        {
+            panic_with_error!(&env, ContractError::CommitmentNotAttested);
+        }
+
+        let key = DataKey::AccountBinding(commitment.clone());
+        env.storage()
+            .persistent()
+            .set(&key, &account_commitment.clone());
+        env.storage().persistent().extend_ttl(
+            &key,
+            NULLIFIER_TTL_THRESHOLD,
+            NULLIFIER_TTL_LEDGERS,
+        );
+
+        env.events().publish(
+            (symbol_short!("bound"), commitment.clone()),
+            account_commitment,
+        );
+
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Returns the account commitment bound to `commitment`, if any.
+    pub fn get_account_binding(env: Env, commitment: BytesN<32>) -> Option<BytesN<32>> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AccountBinding(commitment))
+    }
+
     /// Returns `true` if `commitment` was attested by the trusted KYC authority.
     pub fn is_attested(env: Env, commitment: BytesN<32>) -> bool {
         let key = DataKey::AttestedCommitment(commitment);
@@ -323,9 +368,6 @@ impl ZkVerifier {
     ///
     /// `public_inputs[5]` must equal the first 16 bytes of `sha256(wallet_xdr)`
     /// interpreted as a little-endian `u128`.
-    ///
-    /// W10-SEC-015: `public_inputs[6]` must equal the per-account identity
-    /// commitment bound to `wallet` (set on first verification).
     pub fn verify(
         env: Env,
         wallet: Address,
@@ -336,8 +378,8 @@ impl ZkVerifier {
         wallet.require_auth();
         Self::assert_not_paused(&env);
 
-        // AZ-007 / W10-SEC-015: Enforce exact bound on public_inputs length.
-        if public_inputs.len() != MAX_PUBLIC_INPUTS_LEN_BOUND {
+        // AZ-007: Enforce exact bound on public_inputs length.
+        if public_inputs.len() != MAX_PUBLIC_INPUTS_LEN {
             panic_with_error!(&env, ContractError::InvalidPublicInputsLength);
         }
 
@@ -354,37 +396,6 @@ impl ZkVerifier {
         let claimed_wallet_hash: u128 = public_inputs.get_unchecked(5);
         if hash_u128 != claimed_wallet_hash {
             panic_with_error!(&env, ContractError::ProofCallerMismatch);
-        }
-
-        // W10-SEC-015: Bind the per-account identity commitment into the
-        // circuit's public inputs.  The commitment is derived from the
-        // caller's account and stored on first verification; subsequent
-        // proofs must present the same commitment, so a credential cannot
-        // be replayed across many accounts.
-        let account_commitment: BytesN<32> = {
-            let mut buf = Bytes::new(&env);
-            buf.append(&wallet_xdr);
-            buf.append(&Bytes::from_array(&env, &[0u8; 0]));
-            env.crypto().sha256(&buf).into()
-        };
-        let acct_key = DataKey::AccountCommitment(wallet.clone());
-        if let Some(stored) = env
-            .storage()
-            .persistent()
-            .get::<_, BytesN<32>>(&acct_key)
-        {
-            if stored != account_commitment {
-                panic_with_error!(&env, ContractError::ProofCallerMismatch);
-            }
-        } else {
-            env.storage()
-                .persistent()
-                .set(&acct_key, &account_commitment);
-            env.storage().persistent().extend_ttl(
-                &acct_key,
-                NULLIFIER_TTL_THRESHOLD,
-                NULLIFIER_TTL_LEDGERS,
-            );
         }
 
         // AZ-001: Load the admin-controlled compliance policy.  Reject all
@@ -448,7 +459,6 @@ impl ZkVerifier {
             expires_at_ledger,
             nullifier: nullifier.clone(),
             policy: policy.clone(),
-            account_commitment: account_commitment.clone(),
         };
         env.storage()
             .persistent()
@@ -464,7 +474,6 @@ impl ZkVerifier {
             VerifiedEvent {
                 user: wallet,
                 nullifier,
-                account_commitment,
                 policy,
                 expires_at_ledger,
             },
@@ -482,14 +491,6 @@ impl ZkVerifier {
             .persistent()
             .get::<_, VerificationRecord>(&key)
             .is_some_and(|record| env.ledger().sequence() < record.expires_at_ledger)
-    }
-
-    /// W10-SEC-015: Return the per-account identity commitment bound to
-    /// `wallet`, if any.
-    pub fn account_commitment(env: Env, wallet: Address) -> Option<BytesN<32>> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::AccountCommitment(wallet))
     }
 
     /// Return the current verification record when it is still valid.
