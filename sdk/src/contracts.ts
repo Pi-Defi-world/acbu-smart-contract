@@ -185,13 +185,13 @@ export async function registerCommitment(
 }
 
 /**
- * Submit a compliance proof result to the verifier contract and mark
- * the calling wallet as verified.
+ * Submit a compliance proof to the verifier contract and mark the
+ * calling wallet as verified.
  *
- * On-chain `verify(wallet, nullifier, commitment)` records the spent
- * nullifier after the caller has produced a valid ZK proof off-chain
- * (see `generateProof`). Proof bytes themselves are not posted — the
- * contract enforces attestation + nullifier uniqueness + wallet auth.
+ * On-chain `verify(wallet, nullifier, commitment, public_inputs)` records
+ * the spent nullifier. Proof bytes are not posted on-chain; the contract
+ * enforces attestation + nullifier uniqueness + wallet auth + AZ-032
+ * caller binding via the wallet-address hash in public_inputs[5].
  */
 export async function submitProof(
   secretKey: string,
@@ -205,6 +205,32 @@ export async function submitProof(
     if (!artifacts.commitment || artifacts.commitment.length !== 32) {
       return { success: false, error: "artifacts.commitment must be 32 bytes" };
     }
+
+    // Decode raw public inputs bytes (6 × 32-byte big-endian field elements)
+    // into u128 values for the contract's Vec<u128> parameter.
+    const PUBLIC_INPUTS_COUNT = 6;
+    const FIELD_BYTES = 32;
+    if (artifacts.publicInputs.length !== PUBLIC_INPUTS_COUNT * FIELD_BYTES) {
+      return {
+        success: false,
+        error: `publicInputs must be ${PUBLIC_INPUTS_COUNT * FIELD_BYTES} bytes`,
+      };
+    }
+    const publicInputsScVal = xdr.ScVal.scvVec(
+      Array.from({ length: PUBLIC_INPUTS_COUNT }, (_, i) => {
+        const chunk = artifacts.publicInputs.slice(
+          i * FIELD_BYTES,
+          (i + 1) * FIELD_BYTES
+        );
+        // Each field element fits in u128 (top 16 bytes are always 0 for BN254).
+        const lo = chunk.slice(16);
+        let value = BigInt(0);
+        for (const byte of lo) {
+          value = (value << BigInt(8)) | BigInt(byte);
+        }
+        return nativeToScVal(value, { type: "u128" });
+      })
+    );
 
     const rpc = new SorobanRpc.Server(TESTNET_RPC);
     const keypair = Keypair.fromSecret(secretKey);
@@ -226,7 +252,8 @@ export async function submitProof(
           nativeToScVal(Buffer.from(artifacts.commitment), {
             type: "bytesN",
             length: 32,
-          })
+          }),
+          publicInputsScVal
         )
       )
       .setTimeout(30)

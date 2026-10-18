@@ -51,6 +51,35 @@ use soroban_sdk::{
 };
 
 // ---------------------------------------------------------------------------
+// Verification record types
+// ---------------------------------------------------------------------------
+
+/// Stored per verified wallet in persistent storage.
+#[contracttype]
+#[derive(Clone)]
+pub struct VerificationRecord {
+    /// Ledger sequence after which this record is considered expired.
+    pub expires_at_ledger: u32,
+    /// The nullifier that was consumed to produce this verification.
+    pub nullifier: BytesN<32>,
+}
+
+/// Event emitted on a successful `verify` call.
+#[contracttype]
+pub struct VerifiedEvent {
+    pub user: Address,
+    pub nullifier: BytesN<32>,
+    pub expires_at_ledger: u32,
+}
+
+/// Event emitted when an admin revokes a wallet's verification.
+#[contracttype]
+pub struct VerificationRevokedEvent {
+    pub user: Address,
+    pub revoked_at_ledger: u32,
+}
+
+// ---------------------------------------------------------------------------
 // Storage TTL constants
 // ---------------------------------------------------------------------------
 
@@ -68,6 +97,11 @@ const NULLIFIER_TTL_THRESHOLD: u32 = NULLIFIER_TTL_LEDGERS / 2;
 /// TTL for the instance storage (admin, paused flag, policy).
 const INSTANCE_TTL_LEDGERS: u32 = 5_256_000; // ~1 year
 
+/// How long a verification record is considered valid after it is written.
+///
+/// Stellar closes ~1 ledger every 5 seconds.
+/// 2 102 400 ledgers ≈ 120 days.
+const VERIFICATION_VALIDITY_LEDGERS: u32 = 2_102_400;
 /// How long a successful verification record is valid.
 ///
 /// 1 051 200 ledgers ≈ 60 days.  The admin may revoke earlier.
@@ -406,7 +440,6 @@ impl ZkVerifier {
         let record = VerificationRecord {
             expires_at_ledger,
             nullifier: nullifier.clone(),
-            policy: policy.clone(),
         };
         env.storage()
             .persistent()
@@ -422,7 +455,6 @@ impl ZkVerifier {
             VerifiedEvent {
                 user: wallet,
                 nullifier,
-                policy,
                 expires_at_ledger,
             },
         );
@@ -535,5 +567,23 @@ impl ZkVerifier {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_TTL_LEDGERS / 2, INSTANCE_TTL_LEDGERS);
+    }
+
+    // ── Read-only getters (used by tests and off-chain tooling) ─────────────
+
+    /// Return the current admin address.
+    pub fn admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::Unauthorized))
+    }
+
+    /// Return `true` if the contract is currently paused.
+    pub fn paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
     }
 }
