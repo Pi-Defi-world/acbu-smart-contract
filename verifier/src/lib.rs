@@ -63,21 +63,22 @@ pub const PROOF_BYTES: usize = 2_144;
 
 /// Number of public inputs committed to by the `kyc_verifier` circuit.
 ///
-/// The circuit exposes exactly **5** public inputs, in order:
+/// The circuit exposes exactly **6** public inputs, in order:
 ///
-/// | Index | Field              | Type    | Description                              |
-/// |-------|--------------------|---------|------------------------------------------|
-/// | 0     | `min_tier`         | `u8`    | Minimum KYC tier required (0–3)          |
-/// | 1     | `country_code`     | `Field` | ISO 3166-1 numeric country code          |
-/// | 2     | `requested_amount` | `Field` | Transaction amount (7-decimal units)     |
-/// | 3     | `daily_cap`        | `Field` | Per-tier daily cap (`u64::MAX` = unlimited) |
-/// | 4     | `already_used`     | `Field` | Window total already consumed            |
+/// | Index | Field                 | Type    | Description                              |
+/// |-------|-----------------------|---------|------------------------------------------|
+/// | 0     | `min_tier`            | `u8`    | Minimum KYC tier required (0–3)          |
+/// | 1     | `country_code`        | `Field` | ISO 3166-1 numeric country code          |
+/// | 2     | `requested_amount`    | `Field` | Transaction amount (7-decimal units)     |
+/// | 3     | `daily_cap`           | `Field` | Per-tier daily cap (`u64::MAX` = unlimited) |
+/// | 4     | `already_used`        | `Field` | Window total already consumed            |
+/// | 5     | `wallet_address_hash` | `u128`  | `sha256(wallet_xdr)[0..16]` as little-endian u128 (AZ-032) |
 ///
 /// Any call to [`verify_proof`] that supplies a `public_inputs` slice of a
 /// different length is rejected immediately with
 /// [`VerifierError::InvalidPublicInputsLength`], preventing resource/gas abuse
 /// from oversized or undersized input vectors.
-pub const PUBLIC_INPUTS_LEN: usize = 5;
+pub const PUBLIC_INPUTS_LEN: usize = 6;
 
 // ---------------------------------------------------------------------------
 // ZK proof verification
@@ -89,6 +90,9 @@ const PI_COUNTRY_CODE: usize = 1;
 const PI_REQUESTED_AMOUNT: usize = 2;
 const PI_DAILY_CAP: usize = 3;
 const PI_ALREADY_USED: usize = 4;
+/// AZ-032 / W10-SEC-015: `sha256(wallet_xdr)[0..16]` as a little-endian u128.
+/// Binds the proof to the submitting on-chain account.
+const PI_WALLET_ADDRESS_HASH: usize = 5;
 
 /// Maximum valid KYC tier encoded in a public input.
 const MAX_TIER: u128 = 3;
@@ -112,6 +116,9 @@ const MAX_TIER: u128 = 3;
 ///    → [`InvalidPublicInputValue`].
 /// 7. `public_inputs[PI_ALREADY_USED] <= public_inputs[PI_DAILY_CAP]` — a proof
 ///    claiming already_used > daily_cap is self-contradictory → [`InvalidPublicInputValue`].
+/// 8. `public_inputs[PI_WALLET_ADDRESS_HASH] != 0` — a zero wallet binding means
+///    the proof is not bound to any account → [`InvalidPublicInputValue`]
+///    (AZ-032 / W10-SEC-015).
 ///
 /// # Note on cryptographic verification
 ///
@@ -119,6 +126,11 @@ const MAX_TIER: u128 = 3;
 /// recursive verifier) is performed by the Soroban contract layer, which
 /// imports this crate. The checks here are pre-validation guards that run in
 /// pure Rust with no runtime overhead.
+///
+/// [`verify_proof_for_caller`] performs the additional, value-dependent check
+/// that the proof's `wallet_address_hash` public input matches a specific
+/// submitting account. `verify_proof` alone cannot perform that check because
+/// it has no knowledge of the caller.
 ///
 /// # Errors
 ///
@@ -131,6 +143,7 @@ const MAX_TIER: u128 = 3;
 /// | `country_code == 0`                               | `InvalidPublicInputValue`       |
 /// | `requested_amount == 0`                           | `InvalidPublicInputValue`       |
 /// | `already_used > daily_cap`                        | `InvalidPublicInputValue`       |
+/// | `wallet_address_hash == 0`                        | `InvalidPublicInputValue`       |
 ///
 /// # Examples
 ///
@@ -140,11 +153,12 @@ const MAX_TIER: u128 = 3;
 /// // Correct proof with valid public inputs — structural + semantic passes.
 /// let proof = vec![1u8; PROOF_BYTES]; // non-zero bytes
 /// let inputs: Vec<u128> = vec![
-///     1,           // min_tier = Tier1
-///     0x4E47,      // country_code = "NG"
-///     1_000_000,   // requested_amount > 0
+///     1,             // min_tier = Tier1
+///     0x4E47,        // country_code = "NG"
+///     1_000_000,     // requested_amount > 0
 ///     1_000_000_000, // daily_cap
-///     0,           // already_used
+///     0,             // already_used
+///     0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10, // wallet_address_hash (AZ-032)
 /// ];
 /// assert!(verify_proof(&proof, &inputs).is_ok());
 ///
@@ -181,7 +195,7 @@ pub fn verify_proof(
 
     // Guard 3 (W2-Z-017 fix): public inputs must be exactly PUBLIC_INPUTS_LEN.
     //
-    // The KYC verifier circuit has a fixed number of public inputs (5). Any
+    // The KYC verifier circuit has a fixed number of public inputs (6). Any
     // deviation — whether an oversized slice injected by a malicious caller or
     // an undersized slice from a buggy integration — is rejected here before
     // the inputs are passed to the cryptographic verifier. This prevents
@@ -212,8 +226,74 @@ pub fn verify_proof(
         return Err(VerifierError::InvalidPublicInputValue);
     }
 
+    // Guard 8 (AZ-032 / W10-SEC-015): a zero wallet_address_hash means the
+    // proof is not bound to any on-chain account. The circuit rejects this at
+    // the constraint level, and we mirror that here so an unbound proof can
+    // never pass pre-validation.
+    if public_inputs[PI_WALLET_ADDRESS_HASH] == 0 {
+        return Err(VerifierError::InvalidPublicInputValue);
+    }
+
     // All pre-validation guards passed. Full cryptographic proof verification
     // is delegated to the Soroban contract layer (Barretenberg / Noir verifier).
+    Ok(())
+}
+
+/// Validates a serialised KYC proof **and** binds it to a specific on-chain
+/// account (AZ-032 / W10-SEC-015).
+///
+/// This is the caller-binding variant of [`verify_proof`]. It first runs every
+/// structural and semantic guard of [`verify_proof`], then additionally checks
+/// that the proof's `wallet_address_hash` public input
+/// (`public_inputs[PI_WALLET_ADDRESS_HASH]`) equals `caller_wallet_hash` — the
+/// value the contract independently recomputes from the transaction's signer
+/// (e.g. `sha256(wallet_xdr)[0..16]` as a little-endian `u128`).
+///
+/// Because `wallet_address_hash` is a public input, it is committed to by the
+/// proof. A proof generated for account A therefore cannot be replayed to mark
+/// a different account B as verified: changing the public input invalidates
+/// the proof, and this guard rejects the mismatch before that point.
+///
+/// # Errors
+///
+/// In addition to every error returned by [`verify_proof`]:
+///
+/// | Condition                                        | Error                   |
+/// |--------------------------------------------------|-------------------------|
+/// | `public_inputs[5] != caller_wallet_hash`         | `ProofCallerMismatch`   |
+///
+/// # Examples
+///
+/// ```
+/// use verifier::{verify_proof_for_caller, PROOF_BYTES, VerifierError};
+///
+/// let proof = vec![1u8; PROOF_BYTES];
+/// let caller_hash: u128 = 0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10;
+/// let inputs: Vec<u128> = vec![1, 0x4E47, 1_000_000, 1_000_000_000, 0, caller_hash];
+///
+/// // Bound to this caller — accepted.
+/// assert!(verify_proof_for_caller(&proof, &inputs, caller_hash).is_ok());
+///
+/// // Bound to a different caller — rejected.
+/// assert_eq!(
+///     verify_proof_for_caller(&proof, &inputs, caller_hash + 1).unwrap_err(),
+///     VerifierError::ProofCallerMismatch,
+/// );
+/// ```
+pub fn verify_proof_for_caller(
+    proof_bytes: &[u8],
+    public_inputs: &[u128],
+    caller_wallet_hash: u128,
+) -> Result<(), VerifierError> {
+    // Run the full structural + semantic pre-validation first. This also
+    // ensures `public_inputs` has the expected length before indexing into it.
+    verify_proof(proof_bytes, public_inputs)?;
+
+    // Bind the proof to the submitting account (AZ-032 / W10-SEC-015).
+    if public_inputs[PI_WALLET_ADDRESS_HASH] != caller_wallet_hash {
+        return Err(VerifierError::ProofCallerMismatch);
+    }
+
     Ok(())
 }
 
@@ -300,6 +380,11 @@ pub enum VerifierError {
     /// The proof bytes are all-zero or otherwise trivially invalid (forged /
     /// default-initialised). A valid Barretenberg proof never has this form.
     TriviallyInvalidProof,
+    /// The `wallet_address_hash` encoded in `public_inputs[5]` does not match
+    /// the address that signed and submitted the transaction. Prevents one
+    /// valid proof from being replayed across different on-chain accounts
+    /// (AZ-032 / W10-SEC-015).
+    ProofCallerMismatch,
 }
 
 // ---------------------------------------------------------------------------
@@ -1009,16 +1094,21 @@ mod tests {
     }
 
     /// Returns public inputs that pass every semantic guard:
-    /// valid tier, non-zero country, non-zero amount, cap ≥ already_used.
+    /// valid tier, non-zero country, non-zero amount, cap ≥ already_used,
+    /// and a non-zero wallet_address_hash (AZ-032).
     fn valid_inputs() -> Vec<u128> {
         vec![
-            1,             // min_tier = Tier1
-            0x4E47,        // country_code = "NG" (Nigeria)
-            1_000_000,     // requested_amount > 0
-            1_000_000_000, // daily_cap
-            0,             // already_used
+            1,                 // min_tier = Tier1
+            0x4E47,            // country_code = "NG" (Nigeria)
+            1_000_000,         // requested_amount > 0
+            1_000_000_000,     // daily_cap
+            0,                 // already_used
+            TEST_WALLET_HASH,  // wallet_address_hash (AZ-032)
         ]
     }
+
+    /// A non-zero sentinel wallet address hash used by caller-binding tests.
+    const TEST_WALLET_HASH: u128 = 0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10;
 
     // ── happy path ──────────────────────────────────────────────────────────
 
@@ -1031,11 +1121,12 @@ mod tests {
     fn verify_proof_tier3_unlimited_cap_ok() {
         // Tier 3 encodes daily_cap as u64::MAX (sentinel for unlimited).
         let inputs = vec![
-            3,            // min_tier = Tier3
-            0x4E47,       // country_code = "NG"
-            5_000_000,    // requested_amount
+            3,                // min_tier = Tier3
+            0x4E47,           // country_code = "NG"
+            5_000_000,        // requested_amount
             u64::MAX as u128, // daily_cap = unlimited
-            0,            // already_used
+            0,                // already_used
+            TEST_WALLET_HASH, // wallet_address_hash (AZ-032)
         ];
         assert!(verify_proof(&valid_proof(), &inputs).is_ok());
     }
@@ -1044,7 +1135,7 @@ mod tests {
     fn verify_proof_already_used_equals_cap_ok() {
         // already_used == daily_cap is exactly at the boundary — still valid.
         let cap = 1_000_000_000_u128;
-        let inputs = vec![1, 0x4E47, 1, cap, cap];
+        let inputs = vec![1, 0x4E47, 1, cap, cap, TEST_WALLET_HASH];
         assert!(verify_proof(&valid_proof(), &inputs).is_ok());
     }
 
@@ -1241,9 +1332,74 @@ mod tests {
 
     #[test]
     fn public_inputs_len_constant_matches_circuit() {
-        // The KYC circuit has exactly 5 public inputs: min_tier, country_code,
-        // requested_amount, daily_cap, already_used.
-        assert_eq!(PUBLIC_INPUTS_LEN, 5);
+        // The KYC circuit has exactly 6 public inputs: min_tier, country_code,
+        // requested_amount, daily_cap, already_used, wallet_address_hash.
+        assert_eq!(PUBLIC_INPUTS_LEN, 6);
+    }
+
+    // ── caller binding (AZ-032 / W10-SEC-015) ────────────────────────────────
+
+    #[test]
+    fn verify_proof_zero_wallet_address_hash_rejected() {
+        // A zero wallet_address_hash means the proof is not bound to any
+        // account — reject it during pre-validation.
+        let mut inputs = valid_inputs();
+        inputs[PI_WALLET_ADDRESS_HASH] = 0;
+        assert_eq!(
+            verify_proof(&valid_proof(), &inputs).unwrap_err(),
+            VerifierError::InvalidPublicInputValue
+        );
+    }
+
+    #[test]
+    fn verify_proof_for_caller_accepts_matching_wallet_hash() {
+        let inputs = valid_inputs();
+        assert!(verify_proof_for_caller(&valid_proof(), &inputs, TEST_WALLET_HASH).is_ok());
+    }
+
+    #[test]
+    fn verify_proof_for_caller_rejects_different_wallet_hash() {
+        // The proof was generated for TEST_WALLET_HASH; an attacker replaying it
+        // under a different account (different hash) must be rejected.
+        let inputs = valid_inputs();
+        assert_eq!(
+            verify_proof_for_caller(&valid_proof(), &inputs, TEST_WALLET_HASH + 1).unwrap_err(),
+            VerifierError::ProofCallerMismatch
+        );
+    }
+
+    #[test]
+    fn verify_proof_for_caller_rejects_zero_expected_hash_against_nonzero_input() {
+        // A caller that computes a zero hash (should never happen for a real
+        // address) cannot satisfy a non-zero bound proof.
+        let inputs = valid_inputs();
+        assert_eq!(
+            verify_proof_for_caller(&valid_proof(), &inputs, 0).unwrap_err(),
+            VerifierError::ProofCallerMismatch
+        );
+    }
+
+    #[test]
+    fn verify_proof_for_caller_propagates_pre_validation_errors() {
+        // Pre-validation (proof length) still runs first: a short proof is
+        // rejected with InvalidProofLength even when the binding matches.
+        let short = vec![1u8; 10];
+        let inputs = valid_inputs();
+        assert_eq!(
+            verify_proof_for_caller(&short, &inputs, TEST_WALLET_HASH).unwrap_err(),
+            VerifierError::InvalidProofLength
+        );
+    }
+
+    #[test]
+    fn verify_proof_for_caller_rejects_wrong_length_before_binding() {
+        // A wrong-length input vector must fail with InvalidPublicInputsLength,
+        // never panic on an out-of-bounds index.
+        let inputs = vec![1u128; PUBLIC_INPUTS_LEN - 1];
+        assert_eq!(
+            verify_proof_for_caller(&valid_proof(), &inputs, TEST_WALLET_HASH).unwrap_err(),
+            VerifierError::InvalidPublicInputsLength
+        );
     }
 
     // ── check_pool_access (AZ-010) ───────────────────────────────────────────
