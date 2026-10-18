@@ -482,7 +482,6 @@ impl core::fmt::Display for ContractError {
             ContractError::PolicyNotConfigured => write!(f, "compliance policy not configured: admin must call set_policy before any verification is accepted (AZ-001)"),
             ContractError::KycTierTooLow => write!(f, "KYC tier in public_inputs[0] is below the minimum tier required by the contract compliance policy (AZ-001)"),
             ContractError::CountryNotAllowed => write!(f, "country code in public_inputs[1] is not in the allowed jurisdictions configured by the contract compliance policy (AZ-001)"),
-            ContractError::VaultAllowanceInsufficient => write!(f, "vault allowance insufficient for S-token transfer"),
             ContractError::Unknown => write!(f, "unknown error"),
         }
     }
