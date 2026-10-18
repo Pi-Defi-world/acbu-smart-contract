@@ -330,9 +330,11 @@ async function mintWithCompliance(user: string, amount: string) {
 
 To enable on-chain ZK compliance in the future:
 
-1. Deploy `zk_gate` contract
-2. Configure `zk_gate` with `zk_verifier` address
-3. Update minting/burning contracts to include `zk_gate` address in storage
-4. Add `chk()` calls to sensitive entrypoints
-5. Update contract tests to mock ZK compliance checks
-6. Document the compliance policy and verification flow
+1. Build the Noir circuit and ZK verification key with the pinned toolchain.
+2. Deploy `zk_proof_verifier` with its verification key.
+3. Deploy `zk_verifier`, configure its minimum KYC tier and allowed country,
+   then link the proof-verifier contract with `set_proof_verifier`.
+4. Deploy `zk_gate` with the `zk_verifier` address.
+5. Update minting/burning contracts to include `zk_gate` and call `chk()` at
+   sensitive entrypoints.
+6. Configure the trusted KYC authority to attest approved commitments.

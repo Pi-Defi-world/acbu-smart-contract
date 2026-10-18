@@ -1,8 +1,7 @@
 /**
  * Poseidon2 hash helpers using @aztec/bb.js single-threaded WASM.
  *
- * These compute the same values as the Noir circuit's
- * `poseidon2_hash_2` and `poseidon2_hash_4` functions.
+ * These compute the same Poseidon2 values used by the Noir circuit.
  *
  * The frontend pre-computes commitment and nullifier before
  * feeding them as public inputs into the Noir prover.
@@ -62,13 +61,14 @@ export async function computeCommitment(cred: {
 }
 
 /**
- * Compute the nullifier for a given commitment + salt.
+ * Compute a nullifier bound to a commitment, salt, and wallet hash.
  */
 export async function computeNullifier(
   commitment: bigint,
-  salt: bigint
+  salt: bigint,
+  walletAddressHash: bigint
 ): Promise<bigint> {
-  return poseidon2Hash2(commitment, salt);
+  return poseidon2Hash4(commitment, salt, walletAddressHash, 0n);
 }
 
 /**

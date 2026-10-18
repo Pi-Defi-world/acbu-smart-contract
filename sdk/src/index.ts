@@ -7,5 +7,12 @@
 
 export { computeCommitment, computeNullifier, computeAttestedCredential } from "./poseidon.js";
 export { generateProof, loadCircuit, bigintToBytes32 } from "./prover.js";
-export { submitProof, deployVerifier, deployGate, registerCommitment } from "./contracts.js";
+export {
+  submitProof,
+  deployVerifier,
+  deployGate,
+  deployProofVerifier,
+  setProofVerifier,
+  registerCommitment,
+} from "./contracts.js";
 export type { Credential, ComplianceInput, ProofArtifacts, KycAttestation } from "./types.js";

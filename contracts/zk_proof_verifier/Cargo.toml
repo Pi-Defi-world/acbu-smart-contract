@@ -1,0 +1,19 @@
+[package]
+name = "zk_proof_verifier"
+version = "0.1.0"
+edition = "2021"
+rust-version.workspace = true
+description = "ZK-enabled UltraHonk proof verifier contract"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = "=26.0.1"
+ultrazk-soroban-verifier = { git = "https://github.com/BuidlZone-Labs/zicket-contract.git", rev = "424ebf38ff73848cfedfe4f0a94431425916b866", package = "ultrazk-soroban-verifier" }
+
+[dev-dependencies]
+soroban-sdk = { version = "=26.0.1", features = ["testutils"] }
+
+[lints]
+workspace = true

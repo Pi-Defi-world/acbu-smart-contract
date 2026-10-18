@@ -3,8 +3,12 @@
 Browser UI that:
 
 1. Loads the Noir KYC-compliance circuit
-2. Generates a real UltraHonk ZK proof via `generateProof`
-3. Submits `zk_verifier.verify(wallet, nullifier, commitment)` via `submitProof`
+2. Generates a wallet-bound, ZK-enabled UltraHonk proof via `generateProof`
+3. Submits proof and public inputs to `zk_verifier.verify_proof` via `submitProof`
+
+Before verification can succeed, deploy `zk_proof_verifier` with the circuit's
+ZK verification key, deploy and configure `zk_verifier` with the authoritative
+KYC policy, and link the proof-verifier address.
 
 ## Dev
 

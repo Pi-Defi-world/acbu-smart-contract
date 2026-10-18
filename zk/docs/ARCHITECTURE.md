@@ -1,111 +1,89 @@
 # ZK Architecture
 
-This document describes the zero-knowledge proof architecture used in the ACBU
-protocol. Resolves **AZ-034** — correcting prior misleading claims about native
-crypto support and Stellar protocol versions.
-
----
+This document describes the zero-knowledge KYC verification architecture used
+by the ACBU protocol.
 
 ## Overview
 
-ACBU uses **Noir** circuits to prove KYC compliance constraints off-chain. The
-resulting proof is submitted to a Soroban smart contract (`zk_verifier`) that
-runs a **pure-WASM Rust** verifier — there is no native Stellar precompile
-involved.
+The client generates a ZK-enabled UltraHonk proof from private credential
+inputs. The policy verifier checks its admin-configured policy and caller
+binding, then calls a separate `zk_proof_verifier` Soroban contract to
+cryptographically verify the proof against the configured verification key.
 
-```
-┌──────────────────────────────────────────────────────┐
-│                     Off-chain (client)               │
-│                                                      │
-│   Noir circuit  ──compile──►  ACIR / R1CS            │
-│   (kyc_verifier, zk_comply_circuit)                  │
-│                                                      │
-│   Barretenberg (bb) backend                          │
-│   ├─ prove(witness)  ──►  UltraHonk proof π          │
-│   └─ write_vk()      ──►  verification key VK        │
-└──────────────────────────────────────────────────────┘
-                         │  π + public inputs
-                         ▼
-┌──────────────────────────────────────────────────────┐
-│                  On-chain (Soroban WASM)              │
-│                                                      │
-│   zk_verifier contract                               │
-│   └─ verify(π, public_inputs, VK)                    │
-│       implemented in pure-WASM Rust                  │
-│       (ultrahonk_rust_verifier crate)                │
-└──────────────────────────────────────────────────────┘
+```text
+Client
+  Noir circuit + Barretenberg ZK backend
+      | proof + five public field elements
+      v
+zk_verifier
+  - checks caller-bound wallet hash and proof arguments
+  - enforces stored minimum KYC tier and allowed country
+  - checks KYC attestation and nullifier replay state
+      | verify(proof, public_inputs)
+      v
+zk_proof_verifier
+  - checks fixed proof/input lengths
+  - verifies ZK-enabled UltraHonk proof using the stored VK
 ```
 
----
+Soroban does not provide native BN254 or Poseidon2 precompiles; proof
+verification is performed by the pinned verifier implementation in the
+`zk_proof_verifier` contract.
+
+## Public inputs and policy
+
+The circuit exposes five 32-byte field elements in this order:
+
+| Index | Public input | Contract enforcement |
+|---|---|---|
+| 0 | Credential commitment | Must match the submitted, attested commitment |
+| 1 | `required_kyc` tier | Must be 1–3 and at least the stored policy minimum |
+| 2 | `allowed_country` | Must be 1–999 and equal the stored policy country |
+| 3 | Wallet-bound nullifier | Must match the submitted nullifier and not be spent |
+| 4 | Wallet address hash | Must match the authenticated wallet's XDR hash |
+
+The proof establishes that the private credential meets the public tier and
+country assertions. Those assertions are not policy: the on-chain
+`zk_verifier` requires an admin-configured policy and independently compares
+the proved values against it. The proof-less legacy `verify` entrypoint fails
+closed.
 
 ## Cryptographic primitives
 
-| Primitive       | Role                                     | Where it runs                         |
-|-----------------|------------------------------------------|---------------------------------------|
-| **BN254**       | Noir's default scalar field / proof system curve | Noir compiler, Barretenberg (off-chain); WASM verifier (on-chain) |
-| **Poseidon2**   | ZK-friendly hash (commitment, nullifier) | Noir circuit (off-chain); replicated in pure-WASM Rust for on-chain checks |
-| **UltraHonk**  | PLONK-based proof system                 | Barretenberg (off-chain prove); `ultrahonk_rust_verifier` WASM (on-chain verify) |
+| Primitive | Role | Where it runs |
+|---|---|---|
+| BN254 | Noir scalar field and proof system | Client prover and ZK proof verifier |
+| Poseidon2 | Credential commitment and wallet-bound nullifier | Circuit and client |
+| UltraHonk ZK | Zero-knowledge proof system | Barretenberg client and `zk_proof_verifier` |
+| SHA-256 | Hash authenticated wallet XDR for caller binding | `zk_verifier` and client |
 
-### Important: no Stellar/Soroban precompile
+## Toolchain and verifier pinning
 
-Soroban does **not** provide any native precompile or protocol-level
-acceleration for BN254 elliptic curve operations or Poseidon2 hashing.
-There is no such feature in any Stellar protocol version (25, 26, or later).
+| Tool | Pinned version | Enforced by |
+|---|---|---|
+| Noir (`nargo`) | `1.0.0-beta.9` | Circuit `compiler_version` |
+| Barretenberg (`bb`) | `v0.87.0` | `contracts/zk_verifier/README.md` |
+| `@aztec/bb.js` | `0.87.0` | Frontend package manifest |
+| `@noir-lang/*` | `1.0.0-beta.9` | Frontend package manifest |
+| UltraZK Soroban verifier | `424ebf38ff73848cfedfe4f0a94431425916b866` | Cargo manifest and CI guard |
 
-All cryptographic work happens either:
-- **Off-chain** via the Barretenberg (`bb`) CLI / `@aztec/bb.js` WASM, or
-- **On-chain** via the `zk_verifier` Soroban contract, which executes a
-  pure-WASM Rust implementation compiled to `wasm32-unknown-unknown`.
+Proof generation and verification must use the ZK-enabled flavor (`keccakZK:
+true` in the browser prover). The proof-verifier contract and its verification
+key must be built for the matching Barretenberg serialization. Upgrade these
+pins together and regenerate the key and proof artifacts atomically.
 
-Do not infer special on-chain guarantees from the terms "BN254" or
-"Poseidon2" — they name the algorithm, not a hardware or protocol
-acceleration path.
+## Deployment and proof lifecycle
 
----
+1. Compile the circuit and generate its ZK verification key with the pinned
+   toolchain.
+2. Deploy `zk_proof_verifier` with the administrator and verification key.
+3. Deploy and initialize `zk_verifier`; set its KYC policy and link the
+   deployed proof verifier with `set_proof_verifier`.
+4. Register each approved credential commitment through the trusted KYC
+   authority.
+5. Generate a wallet-bound ZK proof and submit it to `verify_proof`.
+6. Downstream contracts can query the resulting verification state through
+   `is_verified` or the configured gate.
 
-## Toolchain pinning
-
-| Tool                        | Pinned version    | Enforced by                                  |
-|-----------------------------|-------------------|----------------------------------------------|
-| Noir (`nargo`)              | `1.0.0-beta.9`    | `compiler_version` in `Nargo.toml`           |
-| Barretenberg (`bb`)         | `v0.87.0`         | `contracts/zk_verifier/README.md`            |
-| `@aztec/bb.js`              | `0.87.0`          | `frontend/zk-comply-frontend/package.json`   |
-| `@noir-lang/*` packages     | `1.0.0-beta.9`    | `frontend/zk-comply-frontend/package.json`   |
-
-UltraHonk proof and VK serialization formats changed between Noir beta versions.
-Artifacts built with a mismatched toolchain will **not** verify on-chain even if
-the circuit source is unchanged. Always upgrade the entire toolchain atomically.
-
----
-
-## Proof lifecycle
-
-```
-1. Client generates witness (private KYC data + public inputs)
-2. Client calls `bb prove -b circuit.json -w witness.gz -o proof.bin`
-3. Client submits proof.bin + public_inputs[] to zk_verifier.verify(…)
-4. zk_verifier (WASM Rust) re-derives VK hash from stored VK, runs
-   UltraHonk verifier, returns bool
-5. Calling contract (e.g. acbu_minting) gates the transaction on the result
-```
-
----
-
-## Security properties
-
-| Property                | Guarantee                                                        |
-|-------------------------|------------------------------------------------------------------|
-| Soundness               | An invalid proof cannot pass verification (Barretenberg security)|
-| Zero-knowledge          | Private inputs (kyc_score, salt) are not revealed on-chain       |
-| Caller binding (AZ-032) | `wallet_address_hash` public input ties the proof to one wallet  |
-| Nullifier (AZ-032)      | `nullifier = poseidon2(commitment, salt)` prevents proof replay  |
-| VK rotation             | Admin can rotate the verification key via multisig timelock      |
-
----
-
-## Stellar protocol compatibility
-
-The `zk_verifier` contract is a standard Soroban contract compiled to
-`wasm32-unknown-unknown`. It is compatible with any Stellar protocol version
-that supports Soroban (Protocol 20+). No specific protocol version is required
-for BN254 or Poseidon2 operations — those run entirely inside the WASM sandbox.
+If either the policy or proof-verifier address is missing, verification fails
+closed. The KYC policy and verification key are independently administered.

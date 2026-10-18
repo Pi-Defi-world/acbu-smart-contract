@@ -422,7 +422,7 @@ pub enum ContractError {
     /// `MAX_PUBLIC_INPUTS_LEN`. Rejects malformed or oversized inputs before
     /// any proof verification work is performed (zk_verifier, AZ-007).
     InvalidPublicInputsLength = 19,
-    /// The wallet address hash encoded in `public_inputs[5]` (`wallet_address_hash`)
+    /// The wallet address hash encoded in `public_inputs[4]` (`wallet_address_hash`)
     /// does not match the address that signed and submitted this transaction.
     /// Prevents one valid proof from being replayed across different wallets
     /// (zk_verifier, AZ-032).
@@ -430,19 +430,34 @@ pub enum ContractError {
 
     // ── AZ-001: server-side compliance policy enforcement ──────────────────
     /// No compliance policy has been configured by the admin yet.
-    /// `verify()` refuses all proofs until a policy is set, preventing a
+    /// `verify_proof()` refuses all proofs until a policy is set, preventing a
     /// zero-tier / any-country bypass during the window after deployment.
     PolicyNotConfigured = 21,
-    /// The KYC tier encoded in `public_inputs[0]` is below the minimum tier
+    /// The KYC tier encoded in `public_inputs[1]` is below the minimum tier
     /// required by the contract's stored compliance policy.
     /// A prover who sets `required_kyc = 0` in the circuit can no longer
     /// bypass this check because the contract independently enforces the
     /// admin-controlled minimum (AZ-001).
     KycTierTooLow = 22,
-    /// The country code encoded in `public_inputs[1]` is not in the set of
+    /// The country code encoded in `public_inputs[2]` is not in the set of
     /// allowed jurisdictions stored by the contract.  A prover who sets
     /// `allowed_country` to their own value cannot bypass this check (AZ-001).
     CountryNotAllowed = 23,
+    /// The configured compliance policy is outside the supported KYC tier or
+    /// country-code bounds (zk_verifier, W10-SEC-002).
+    InvalidCompliancePolicy = 25,
+    /// The legacy proof-less verification entrypoint is disabled.
+    ProofRequired = 26,
+    /// No on-chain proof-verifier contract has been configured.
+    ProofVerifierNotConfigured = 27,
+    /// The configured proof verifier rejected the proof or its public inputs.
+    ProofVerificationFailed = 28,
+    /// The configured proof verifier cannot be the zk_verifier contract itself.
+    InvalidProofVerifier = 29,
+    /// A KYC proof public input does not fit its expected scalar range.
+    InvalidPublicInputValue = 30,
+    /// Commitment or nullifier arguments differ from the values proven by the circuit.
+    ProofPublicInputMismatch = 31,
 
     /// The vault has not approved the burning contract as a spender with
     /// sufficient allowance for the requested S-token transfer.  Ensure the
@@ -478,10 +493,17 @@ impl core::fmt::Display for ContractError {
             ContractError::CommitmentNotAttested => write!(f, "commitment not attested"),
             ContractError::NullifierAlreadySpent => write!(f, "nullifier already spent"),
             ContractError::InvalidPublicInputsLength => write!(f, "invalid public inputs length"),
-            ContractError::ProofCallerMismatch => write!(f, "proof caller mismatch: public_inputs[5] (wallet_address_hash) does not match submitting address (AZ-032)"),
+            ContractError::ProofCallerMismatch => write!(f, "proof caller mismatch: public_inputs[4] (wallet_address_hash) does not match submitting address (AZ-032)"),
             ContractError::PolicyNotConfigured => write!(f, "compliance policy not configured: admin must call set_policy before any verification is accepted (AZ-001)"),
-            ContractError::KycTierTooLow => write!(f, "KYC tier in public_inputs[0] is below the minimum tier required by the contract compliance policy (AZ-001)"),
-            ContractError::CountryNotAllowed => write!(f, "country code in public_inputs[1] is not in the allowed jurisdictions configured by the contract compliance policy (AZ-001)"),
+            ContractError::KycTierTooLow => write!(f, "KYC tier in public_inputs[1] is below the minimum tier required by the contract compliance policy (AZ-001)"),
+            ContractError::CountryNotAllowed => write!(f, "country code in public_inputs[2] is not in the allowed jurisdictions configured by the contract compliance policy (AZ-001)"),
+            ContractError::InvalidCompliancePolicy => write!(f, "compliance policy must set a KYC tier from 1 to 3 and a country code from 1 to 999"),
+            ContractError::ProofRequired => write!(f, "proof-less verification is disabled; submit a cryptographic proof"),
+            ContractError::ProofVerifierNotConfigured => write!(f, "the on-chain ZK proof verifier has not been configured"),
+            ContractError::ProofVerificationFailed => write!(f, "the on-chain ZK proof verifier rejected the proof"),
+            ContractError::InvalidProofVerifier => write!(f, "the proof verifier address is invalid"),
+            ContractError::InvalidPublicInputValue => write!(f, "a proof public input is outside its supported scalar range"),
+            ContractError::ProofPublicInputMismatch => write!(f, "commitment or nullifier does not match the proof public inputs"),
             ContractError::Unknown => write!(f, "unknown error"),
         }
     }

@@ -3,13 +3,6 @@
 // Proof generation and verification run as pure-WASM Rust (no on-chain precompile).
 // RATE = 3, state size = 4
 
-fn poseidon2_hash_2(a: Field, b: Field) -> Field {
-    let iv: Field = 2 * 18446744073709551616; // 2 << 64
-    let mut state = [a, b, 0, iv];
-    state = std::hash::poseidon2_permutation(state);
-    state[0]
-}
-
 fn poseidon2_hash_4(a: Field, b: Field, c: Field, d: Field) -> Field {
     let iv: Field = 4 * 18446744073709551616; // 4 << 64
     let mut state = [0, 0, 0, iv];
@@ -24,21 +17,20 @@ fn poseidon2_hash_4(a: Field, b: Field, c: Field, d: Field) -> Field {
 
 // AZ-001 — Defence-in-depth note
 //
-// `required_kyc` and `allowed_country` are `pub` inputs: the prover must
-// commit to them inside the proof.  The circuit alone cannot prevent a
-// malicious prover from choosing `required_kyc = 0` and any `allowed_country`,
-// because those are valid inputs that trivially satisfy the assertions below.
+// Public inputs are ordered as commitment, required_kyc, allowed_country,
+// nullifier, and wallet_address_hash. The prover commits to each value, but
+// only the verifier contract's stored policy determines acceptable tier/country.
 //
 // The **on-chain contract** (`contracts/zk_verifier/src/lib.rs`) closes this
 // gap with a second, independent check: it reads its own admin-controlled
 // `PolicyParams` from storage and verifies that
 //
-//   public_inputs[0]  (≡ required_kyc)    ≥  policy.min_tier
-//   public_inputs[1]  (≡ allowed_country) == policy.allowed_country
+//   public_inputs[1]  (≡ required_kyc)    ≥  policy.min_tier
+//   public_inputs[2]  (≡ allowed_country) == policy.allowed_country
 //
 // Because the policy lives in contract storage and is only writable by the
-// admin, the prover cannot influence these values.  Both the circuit proof
-// AND the server-side policy check must pass for `verify()` to succeed.
+// admin, the prover cannot influence these values. Both the circuit proof and
+// the server-side policy check must pass for `verify_proof()` to succeed.
 fn main(
     kyc_level: u64,
     country_code: u64,
@@ -47,12 +39,14 @@ fn main(
     required_kyc: pub u64,
     allowed_country: pub u64,
     nullifier: pub Field,
+    wallet_address_hash: pub Field,
 ) {
     // Keep the credential and policy inputs inside their documented domains.
     // Without these guards, arbitrary u64 values could be committed and
     // compared successfully even though they are not valid KYC levels or ISO
     // 3166-1 numeric country codes.
     assert(kyc_level <= 3);
+    assert(required_kyc >= 1);
     assert(required_kyc <= 3);
     assert(country_code > 0);
     assert(country_code <= 999);
@@ -78,8 +72,13 @@ fn main(
     //    policy.allowed_country, so the prover cannot bypass by choosing freely.
     assert(country_code == allowed_country);
 
-    // 4) Derive nullifier = hash(commitment, salt) to prevent double-use
-    let expected_nullifier = poseidon2_hash_2(commitment, salt);
+    // 4) Bind the nullifier to the wallet to prevent cross-wallet replay.
+    let expected_nullifier = poseidon2_hash_4(
+        commitment,
+        salt,
+        wallet_address_hash,
+        0,
+    );
     assert(nullifier == expected_nullifier);
 }
 
@@ -92,7 +91,8 @@ fn test_valid_basic_kyc_ngn() {
         poseidon2_hash_4(1, 566, 12345, 0),
         1,
         566,
-        poseidon2_hash_2(poseidon2_hash_4(1, 566, 12345, 0), 12345),
+        poseidon2_hash_4(poseidon2_hash_4(1, 566, 12345, 0), 12345, 9876, 0),
+        9876,
     );
 }
 
@@ -105,7 +105,8 @@ fn test_valid_enterprise_kes() {
         poseidon2_hash_4(3, 404, 99999, 0),
         2,
         404,
-        poseidon2_hash_2(poseidon2_hash_4(3, 404, 99999, 0), 99999),
+        poseidon2_hash_4(poseidon2_hash_4(3, 404, 99999, 0), 99999, 8765, 0),
+        8765,
     );
 }
 
@@ -119,7 +120,23 @@ fn test_rejects_kyc_level_outside_documented_range() {
         commitment,
         1,
         566,
-        poseidon2_hash_2(commitment, 12345),
+        poseidon2_hash_4(commitment, 12345, 9876, 0),
+        9876,
+    );
+}
+
+#[test(should_fail)]
+fn test_rejects_zero_required_kyc() {
+    let commitment = poseidon2_hash_4(1, 566, 12345, 0);
+    main(
+        1,
+        566,
+        12345,
+        commitment,
+        0,
+        566,
+        poseidon2_hash_4(commitment, 12345, 9876, 0),
+        9876,
     );
 }
 
@@ -133,7 +150,8 @@ fn test_rejects_country_code_outside_iso_numeric_range() {
         commitment,
         1,
         1000,
-        poseidon2_hash_2(commitment, 12345),
+        poseidon2_hash_4(commitment, 12345, 9876, 0),
+        9876,
     );
 }
 
@@ -147,6 +165,7 @@ fn test_rejects_zero_country_code() {
         commitment,
         1,
         0,
-        poseidon2_hash_2(commitment, 12345),
+        poseidon2_hash_4(commitment, 12345, 9876, 0),
+        9876,
     );
 }

@@ -1,6 +1,7 @@
 /**
  * Soroban submission — mirrors repo `sdk/src/contracts.ts` `submitProof`,
- * aligned with on-chain `verify(wallet, nullifier, commitment)`.
+ * aligned with on-chain `verify_proof(wallet, nullifier, commitment, proof,
+ * public_inputs)`.
  */
 
 import {
@@ -29,6 +30,12 @@ export async function submitProof(
     if (!artifacts.commitment || artifacts.commitment.length !== 32) {
       return { success: false, error: "artifacts.commitment must be 32 bytes" };
     }
+    if (artifacts.proof.length !== 507 * 32) {
+      return { success: false, error: "artifacts.proof has an invalid ZK UltraHonk length" };
+    }
+    if (artifacts.publicInputs.length !== 5 * 32) {
+      return { success: false, error: "artifacts.publicInputs must contain five field elements" };
+    }
 
     const server = new SorobanRpc.Server(TESTNET_RPC);
     const keypair = Keypair.fromSecret(secretKey);
@@ -41,7 +48,7 @@ export async function submitProof(
     })
       .addOperation(
         contract.call(
-          "verify",
+          "verify_proof",
           Address.fromString(keypair.publicKey()).toScVal(),
           nativeToScVal(artifacts.nullifier, {
             type: "bytesN",
@@ -50,7 +57,9 @@ export async function submitProof(
           nativeToScVal(artifacts.commitment, {
             type: "bytesN",
             length: 32,
-          })
+          }),
+          nativeToScVal(artifacts.proof, { type: "bytes" }),
+          nativeToScVal(artifacts.publicInputs, { type: "bytes" })
         )
       )
       .setTimeout(30)

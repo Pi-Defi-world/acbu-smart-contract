@@ -18,7 +18,7 @@ runs:
           exit 1
         fi
 
-        # Scalar value: channel = "1.88.0"
+        # Scalar value: channel = "1.91.0"
         read_scalar() {
           local key="$1" line
           line="$(grep -E "^${key}[[:space:]]*=" "$TOML" | head -n 1 || true)"

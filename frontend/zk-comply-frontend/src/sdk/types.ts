@@ -12,6 +12,7 @@ export interface ComplianceInput {
   credential: Credential;
   requiredKyc: number;
   allowedCountry: number;
+  walletAddress: string;
 }
 
 export interface ProofArtifacts {

@@ -7,13 +7,6 @@ export const ZK_COMPLY_CIRCUIT_SOURCE = `// Poseidon2 hash helpers operating ove
 // Proof generation and verification run as pure-WASM Rust (no on-chain precompile).
 // RATE = 3, state size = 4
 
-fn poseidon2_hash_2(a: Field, b: Field) -> Field {
-    let iv: Field = 2 * 18446744073709551616; // 2 << 64
-    let mut state = [a, b, 0, iv];
-    state = std::hash::poseidon2_permutation(state);
-    state[0]
-}
-
 fn poseidon2_hash_4(a: Field, b: Field, c: Field, d: Field) -> Field {
     let iv: Field = 4 * 18446744073709551616; // 4 << 64
     let mut state = [0, 0, 0, iv];
@@ -34,7 +27,16 @@ fn main(
     required_kyc: pub u64,
     allowed_country: pub u64,
     nullifier: pub Field,
+    wallet_address_hash: pub Field,
 ) {
+    assert(kyc_level <= 3);
+    assert(required_kyc >= 1);
+    assert(required_kyc <= 3);
+    assert(country_code > 0);
+    assert(country_code <= 999);
+    assert(allowed_country > 0);
+    assert(allowed_country <= 999);
+
     // 1) Prove knowledge of the credential behind the commitment
     let computed: Field = poseidon2_hash_4(
         kyc_level as Field,
@@ -50,8 +52,13 @@ fn main(
     // 3) Prove the country matches the allowed jurisdiction
     assert(country_code == allowed_country);
 
-    // 4) Derive nullifier = hash(commitment, salt) to prevent double-use
-    let expected_nullifier = poseidon2_hash_2(commitment, salt);
+    // 4) Bind the nullifier to the wallet to prevent cross-wallet replay.
+    let expected_nullifier = poseidon2_hash_4(
+        commitment,
+        salt,
+        wallet_address_hash,
+        0,
+    );
     assert(nullifier == expected_nullifier);
 }
 `;

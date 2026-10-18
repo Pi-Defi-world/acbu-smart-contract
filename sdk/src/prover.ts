@@ -8,6 +8,7 @@
 import { Noir } from "@noir-lang/noir_js";
 import { UltraHonkBackend } from "@aztec/bb.js";
 import { compile, createFileManager } from "@noir-lang/noir_wasm";
+import { Address, hash } from "@stellar/stellar-sdk";
 import type { ProofArtifacts, ComplianceInput } from "./types.js";
 import {
   computeCommitment,
@@ -39,6 +40,14 @@ function hexToBytes(hex: string): Uint8Array {
     out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
   }
   return out;
+}
+
+function walletAddressHash(walletAddress: string): bigint {
+  const digest = hash(Address.fromString(walletAddress).toScVal().toXDR());
+  return Array.from(digest.subarray(0, 16)).reduce(
+    (value, byte, index) => value | (BigInt(byte) << BigInt(index * 8)),
+    0n
+  );
 }
 
 /**
@@ -75,9 +84,20 @@ export async function generateProof(
   if (!compiled || !backend) {
     throw new Error("Circuit not loaded. Call loadCircuit() first.");
   }
+  if (input.requiredKyc < 1 || input.requiredKyc > 3) {
+    throw new RangeError("requiredKyc must be between 1 and 3");
+  }
+  if (input.allowedCountry < 1 || input.allowedCountry > 999) {
+    throw new RangeError("allowedCountry must be between 1 and 999");
+  }
 
   const commitment = await computeCommitment(input.credential);
-  const nullifier = await computeNullifier(commitment, input.credential.salt);
+  const walletHash = walletAddressHash(input.walletAddress);
+  const nullifier = await computeNullifier(
+    commitment,
+    input.credential.salt,
+    walletHash
+  );
 
   const circuitInputs = {
     kyc_level: input.credential.kycLevel,
@@ -87,12 +107,15 @@ export async function generateProof(
     required_kyc: input.requiredKyc,
     allowed_country: input.allowedCountry,
     nullifier: fieldHex(nullifier),
+    wallet_address_hash: fieldHex(walletHash),
   };
 
   const program = new Noir(compiled as never);
   const { witness } = await program.execute(circuitInputs);
-  const { proof, publicInputs } = await backend.generateProof(witness);
-  const vk = await backend.getVerificationKey();
+  const { proof, publicInputs } = await backend.generateProof(witness, {
+    keccakZK: true,
+  });
+  const vk = await backend.getVerificationKey({ keccakZK: true });
 
   const publicInputsBytes = hexToBytes(
     (publicInputs as string[])

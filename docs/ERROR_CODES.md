@@ -26,12 +26,19 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 16 | `CommitmentAlreadyAttested` | The credential commitment was already attested by the KYC authority (zk_verifier trusted commitment registry, AZ-002). |
 | 17 | `CommitmentNotAttested` | The credential commitment submitted with a proof was never attested by the trusted KYC authority (zk_verifier trusted commitment registry, AZ-002). |
 | 18 | `NullifierAlreadySpent` | The submitted nullifier was already consumed for this credential commitment and cannot be replayed (zk_verifier, AZ-025 / AZ-014). |
-| 19 | `InvalidPublicInputsLength` | The `public_inputs` vector length does not match the expected constant `MAX_PUBLIC_INPUTS_LEN`. Rejects malformed or oversized inputs before any proof verification work is performed (zk_verifier, AZ-007). |
-| 20 | `ProofCallerMismatch` | The wallet address hash encoded in `public_inputs[5]` (`wallet_address_hash`) does not match the address that signed and submitted this transaction. Prevents one valid proof from being replayed across different wallets (zk_verifier, AZ-032). |
-| 21 | `PolicyNotConfigured` | No compliance policy has been configured by the admin yet. `verify()` refuses all proofs until a policy is set, preventing a zero-tier / any-country bypass during the window after deployment. |
-| 22 | `KycTierTooLow` | The KYC tier encoded in `public_inputs[0]` is below the minimum tier required by the contract's stored compliance policy. A prover who sets `required_kyc = 0` in the circuit can no longer bypass this check because the contract independently enforces the admin-controlled minimum (AZ-001). |
-| 23 | `CountryNotAllowed` | The country code encoded in `public_inputs[1]` is not in the set of allowed jurisdictions stored by the contract.  A prover who sets `allowed_country` to their own value cannot bypass this check (AZ-001). |
-| 14 | `VaultAllowanceInsufficient` | The vault has not approved the burning contract as a spender with sufficient allowance for the requested S-token transfer.  Ensure the vault calls `approve(burning_contract, amount, expiry)` on each S-token before redemption. |
+| 19 | `InvalidPublicInputsLength` | The concatenated `public_inputs` byte string or proof length does not match the circuit's fixed expected size (zk_verifier, W10-SEC-002). |
+| 20 | `ProofCallerMismatch` | The wallet address hash encoded in `public_inputs[4]` (`wallet_address_hash`) does not match the address that signed and submitted this transaction. Prevents one valid proof from being replayed across different wallets (zk_verifier, AZ-032). |
+| 21 | `PolicyNotConfigured` | No compliance policy has been configured by the admin yet. `verify_proof()` refuses all proofs until a policy is set, preventing a zero-tier / any-country bypass during the window after deployment. |
+| 22 | `KycTierTooLow` | The KYC tier encoded in `public_inputs[1]` is below the system minimum or the contract's stored compliance policy. |
+| 23 | `CountryNotAllowed` | The country code encoded in `public_inputs[2]` does not match the jurisdiction stored by the contract. |
+| 24 | `VaultAllowanceInsufficient` | The vault has not approved the burning contract as a spender with sufficient allowance for the requested S-token transfer. |
+| 25 | `InvalidCompliancePolicy` | The configured compliance policy uses a KYC tier outside 1–3 or a country code outside 1–999. |
+| 26 | `ProofRequired` | The legacy proof-less `verify` entrypoint has been disabled; callers must submit a cryptographically verified proof. |
+| 27 | `ProofVerifierNotConfigured` | No on-chain ZK proof-verifier contract has been configured. |
+| 28 | `ProofVerificationFailed` | The configured proof verifier rejected the proof or its public inputs. |
+| 29 | `InvalidProofVerifier` | The configured proof verifier address is invalid. |
+| 30 | `InvalidPublicInputValue` | A proof public input is outside its supported scalar range. |
+| 31 | `ProofPublicInputMismatch` | The commitment or nullifier arguments differ from the corresponding proof public inputs. |
 | 9999 | `Unknown` | unknown error |
 
 ## `shared / reentrancy guard` - `ReentrancyError`

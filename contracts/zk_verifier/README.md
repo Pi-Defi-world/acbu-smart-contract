@@ -1,63 +1,41 @@
-# `zk_verifier` — proof artifact toolchain
+# `zk_verifier` — ZK KYC verification
 
-The proof artifacts (UltraHonk proof + verification key + public inputs)
-accepted by this contract and the `sdk`'s on-chain verifier flow must be
-built with **one pinned toolchain**:
+The browser prover and on-chain verifier must use one pinned toolchain:
 
-| Tool                        | Pinned version    |
-|-----------------------------|-------------------|
-| Noir (`nargo`)              | `1.0.0-beta.9`    |
-| Barretenberg (`bb`)         | `v0.87.0`         |
-| `@aztec/bb.js` (JS binding) | `0.87.0`          |
-| `@noir-lang/*` packages     | `1.0.0-beta.9`    |
+| Tool | Version |
+|---|---|
+| Noir (`nargo`) | `1.0.0-beta.9` |
+| Barretenberg (`bb`) | `v0.87.0` |
+| `@aztec/bb.js` | `0.87.0` |
+| `@noir-lang/*` | `1.0.0-beta.9` |
 
-This matches the toolchain of `ultrahonk-soroban-verifier` (see its
-`tests/build_circuits.sh`) and the `ultrahonk_rust_verifier` crate the
-proof format is designed around.
+Proofs must use the ZK-enabled UltraHonk flavor (`keccakZK: true` in the
+browser prover, equivalent to `bb 0.87.0 --scheme ultra_honk
+--oracle_hash keccak --zk`). The proof verifier accepts only this proof format.
 
-## AZ-006 — Canonical `ultrahonk_rust_verifier` revision
+## W10-SEC-002 — on-chain enforcement
 
-The `ultrahonk_rust_verifier` crate is not sourced from crates.io.  It is
-currently NOT added as a direct Cargo dependency of this contract, because
-the workspace supply-chain policy (W2-Z-020, enforced by
-`.github/workflows/deps-guard.yml`) forbids git-sourced entries in the
-committed `Cargo.lock`.  Proof verification is therefore implemented
-natively in `src/lib.rs`.
+`zk_verifier` delegates proof validation to the separate
+`zk_proof_verifier` contract, then enforces its admin-configured minimum KYC
+tier and exact allowed country against the cryptographically verified public
+inputs. Until a policy and proof-verifier address are configured, verification
+fails closed. The legacy proof-less `verify` entrypoint always rejects.
 
-**Canonical revision:** `2a73c4ba11f073f1797d90915ebbb9eb9d09f445`
+The circuit proves the credential commitment and tier/country constraints. Its
+wallet-bound nullifier incorporates the public hash of the submitting
+address. The contract checks that hash against the authenticated caller and
+checks the proof's commitment and nullifier against the invocation arguments.
 
-If the policy is ever relaxed and the crate is re-added as a Cargo
-dependency, every manifest in this workspace that declares the crate MUST
-pin this exact commit:
+## Pinned proof-verifier dependency
 
-```toml
-ultrahonk_rust_verifier = {
-    git = "https://github.com/noir-lang/ultrahonk-soroban-verifier",
-    rev = "2a73c4ba11f073f1797d90915ebbb9eb9d09f445"
-}
-```
+The `zk_proof_verifier` contract depends on `ultrazk-soroban-verifier` from
+`BuidlZone-Labs/zicket-contract` at commit
+`424ebf38ff73848cfedfe4f0a94431425916b866`. The implementation includes the
+UltraZK transcript, Libra sumcheck masking, and hiding-polynomial checks
+required for ZK-enabled proofs. The proof-verifier contract uses Soroban SDK
+26.0.1 independently of the rest of the workspace and is called through the
+Soroban contract interface; SDK Rust types do not cross that boundary.
 
-Using a different `rev` — or omitting `rev` entirely — causes the on-chain
-VK/proof serialization to diverge from the reference implementation, leading
-to silent verification failures in production.  The CI step
-`"Enforce consistent ultrahonk_rust_verifier rev (AZ-006)"` in
-`.github/workflows/deps-guard.yml` will reject any manifest that uses a
-different revision.
-
-## Why the pin matters (AZ-011)
-
-UltraHonk proof/VK serialization and constraint semantics changed between
-Noir `beta.9` and later betas (e.g. `beta.22`). Artifacts generated with a
-different Noir/Barretenberg version than the one the verifier expects will
-**not verify on-chain**, even though the circuit source is identical. Never
-build the circuits with a different toolchain version; upgrade only by
-changing the pin everywhere at once.
-
-```bash
-# Install the pinned toolchain
-curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
-noirup -v 1.0.0-beta.9
-
-curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/master/barretenberg/cpp/installation/install | bash
-bbup -v v0.87.0
-```
+CI allows this single pinned Git source and rejects other Git dependencies or
+revisions. The dependency commit and Noir/Barretenberg pins must be changed
+together only after regenerating the verification key and proof fixtures.

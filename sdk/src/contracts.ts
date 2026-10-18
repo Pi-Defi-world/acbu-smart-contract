@@ -135,6 +135,88 @@ export async function deployGate(
 }
 
 /**
+ * Deploy the proof verifier with its trusted ZK verification key.
+ */
+export async function deployProofVerifier(
+  secretKey: string,
+  wasmHash: Buffer,
+  verificationKey: Uint8Array
+): Promise<string> {
+  if (verificationKey.length === 0 || verificationKey.length > 4096) {
+    throw new RangeError("verificationKey must contain between 1 and 4096 bytes");
+  }
+
+  const rpc = new SorobanRpc.Server(TESTNET_RPC);
+  const keypair = Keypair.fromSecret(secretKey);
+  const source = await rpc.getAccount(keypair.publicKey());
+  const salt = randomSalt();
+  const tx = new TransactionBuilder(source, {
+    fee: "100000",
+    networkPassphrase: TESTNET_PASSPHRASE,
+  })
+    .addOperation(
+      Operation.createCustomContract({
+        address: Address.fromString(keypair.publicKey()),
+        wasmHash,
+        salt,
+        constructorArgs: [
+          Address.fromString(keypair.publicKey()).toScVal(),
+          nativeToScVal(Buffer.from(verificationKey), { type: "bytes" }),
+        ],
+      })
+    )
+    .setTimeout(30)
+    .build();
+
+  const prepared = await rpc.prepareTransaction(tx);
+  prepared.sign(keypair);
+  const result = await rpc.sendTransaction(prepared);
+  if (result.status === "ERROR") {
+    throw new Error(`Proof-verifier deploy failed: ${JSON.stringify(result)}`);
+  }
+  return contractIdFromDeploy(keypair.publicKey(), salt);
+}
+
+/**
+ * Link the cryptographic proof verifier to the policy verifier contract.
+ */
+export async function setProofVerifier(
+  secretKey: string,
+  verifierContractId: string,
+  proofVerifierContractId: string
+): Promise<VerificationResult> {
+  try {
+    const rpc = new SorobanRpc.Server(TESTNET_RPC);
+    const keypair = Keypair.fromSecret(secretKey);
+    const source = await rpc.getAccount(keypair.publicKey());
+    const contract = new Contract(verifierContractId);
+    const tx = new TransactionBuilder(source, {
+      fee: "100000",
+      networkPassphrase: TESTNET_PASSPHRASE,
+    })
+      .addOperation(
+        contract.call(
+          "set_proof_verifier",
+          Address.fromString(proofVerifierContractId).toScVal()
+        )
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await rpc.prepareTransaction(tx);
+    prepared.sign(keypair);
+    const result = await rpc.sendTransaction(prepared);
+    if (result.status === "ERROR") {
+      return { success: false, error: `Status: ${result.status}`, txHash: result.hash };
+    }
+    return { success: true, txHash: result.hash };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { success: false, error: message };
+  }
+}
+
+/**
  * Register a KYC attestation binding on the verifier contract
  * (attester only — AZ-002).
  *
@@ -188,10 +270,8 @@ export async function registerCommitment(
  * Submit a compliance proof result to the verifier contract and mark
  * the calling wallet as verified.
  *
- * On-chain `verify(wallet, nullifier, commitment)` records the spent
- * nullifier after the caller has produced a valid ZK proof off-chain
- * (see `generateProof`). Proof bytes themselves are not posted — the
- * contract enforces attestation + nullifier uniqueness + wallet auth.
+ * On-chain `verify_proof` validates the proof and its public inputs before
+ * enforcing policy, attestation, nullifier, and wallet-binding checks.
  */
 export async function submitProof(
   secretKey: string,
@@ -205,6 +285,12 @@ export async function submitProof(
     if (!artifacts.commitment || artifacts.commitment.length !== 32) {
       return { success: false, error: "artifacts.commitment must be 32 bytes" };
     }
+    if (artifacts.proof.length !== 507 * 32) {
+      return { success: false, error: "artifacts.proof has an invalid ZK UltraHonk length" };
+    }
+    if (artifacts.publicInputs.length !== 5 * 32) {
+      return { success: false, error: "artifacts.publicInputs must contain five field elements" };
+    }
 
     const rpc = new SorobanRpc.Server(TESTNET_RPC);
     const keypair = Keypair.fromSecret(secretKey);
@@ -217,7 +303,7 @@ export async function submitProof(
     })
       .addOperation(
         contract.call(
-          "verify",
+          "verify_proof",
           Address.fromString(keypair.publicKey()).toScVal(),
           nativeToScVal(Buffer.from(artifacts.nullifier), {
             type: "bytesN",
@@ -226,7 +312,9 @@ export async function submitProof(
           nativeToScVal(Buffer.from(artifacts.commitment), {
             type: "bytesN",
             length: 32,
-          })
+          }),
+          nativeToScVal(Buffer.from(artifacts.proof), { type: "bytes" }),
+          nativeToScVal(Buffer.from(artifacts.publicInputs), { type: "bytes" })
         )
       )
       .setTimeout(30)
