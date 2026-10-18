@@ -454,13 +454,7 @@ impl LendingPool {
     /// Meaningful collateral requires a *distinct* asset plus oracle pricing and
     /// a liquidation path; that is a separate feature, and
     /// [`LoanData::collateral_amount`] is reserved for it.
-    pub fn borrow(
-        env: Env,
-        borrower: Address,
-        lender: Address,
-        amount: i128,
-        loan_id: u64,
-    ) {
+    pub fn borrow(env: Env, borrower: Address, lender: Address, amount: i128, loan_id: u64) {
         // Re-entrancy guard
         let _guard = reentrancy_guard::acquire_guard(&env);
 
@@ -638,7 +632,7 @@ impl LendingPool {
         Self::check_paused(&env);
 
         let loan_key = LoanId(borrower.clone(), loan_id);
-        let mut loan_data = env
+        let mut loan_data: LoanData = env
             .storage()
             .persistent()
             .get(&DataKey::Loan(loan_key.clone()))

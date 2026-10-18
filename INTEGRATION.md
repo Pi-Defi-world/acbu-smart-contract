@@ -20,14 +20,14 @@ The backend provides TypeScript services for interacting with deployed contracts
    export STELLAR_NETWORK="testnet"
    export STELLAR_SECRET_KEY="your-secret-key"
    export STELLAR_HORIZON_URL="https://horizon-testnet.stellar.org"
-   export CONTRACT_ORACLE="<oracle-contract-id>"
-   export CONTRACT_RESERVE_TRACKER="<reserve-tracker-contract-id>"
-   export CONTRACT_MINTING="<minting-contract-id>"
-   export CONTRACT_BURNING="<burning-contract-id>"
+   export CONTRACT_ORACLE_TESTNET="<oracle-contract-id>"
+   export CONTRACT_RESERVE_TRACKER_TESTNET="<reserve-tracker-contract-id>"
+   export CONTRACT_MINTING_TESTNET="<minting-contract-id>"
+   export CONTRACT_BURNING_TESTNET="<burning-contract-id>"
    # Optional (segment features):
-   export CONTRACT_SAVINGS_VAULT="<savings-vault-contract-id>"
-   export CONTRACT_LENDING_POOL="<lending-pool-contract-id>"
-   export CONTRACT_ESCROW="<escrow-contract-id>"
+   export CONTRACT_SAVINGS_VAULT_TESTNET="<savings-vault-contract-id>"
+   export CONTRACT_LENDING_POOL_TESTNET="<lending-pool-contract-id>"
+   export CONTRACT_ESCROW_TESTNET="<escrow-contract-id>"
    ```
 
 ### Using Contract Services
@@ -117,7 +117,7 @@ const totalValue = await acbuReserveTrackerService.getTotalReserveValue();
 
 #### Savings, Lending, Escrow (optional)
 
-When `CONTRACT_SAVINGS_VAULT`, `CONTRACT_LENDING_POOL`, or `CONTRACT_ESCROW` are set, the backend exposes `acbuSavingsVaultService`, `acbuLendingPoolService`, and `acbuEscrowService`. Segment routes (`/v1/savings`, `/v1/lending`, `/v1/gateway`) call these services. Event listeners `acbu_savings_vault_event_listener.ts`, `acbu_lending_pool_event_listener.ts`, and `acbu_escrow_event_listener.ts` enqueue events to **ACBU_SAVINGS_VAULT_EVENTS**, **ACBU_LENDING_POOL_EVENTS**, and **ACBU_ESCROW_EVENTS** respectively.
+When the network-specific `CONTRACT_SAVINGS_VAULT_TESTNET`, `CONTRACT_LENDING_POOL_TESTNET`, or `CONTRACT_ESCROW_TESTNET` variables are set (use `_MAINNET` on mainnet), the backend exposes `acbuSavingsVaultService`, `acbuLendingPoolService`, and `acbuEscrowService`. Segment routes (`/v1/savings`, `/v1/lending`, `/v1/gateway`) call these services. Event listeners `acbu_savings_vault_event_listener.ts`, `acbu_lending_pool_event_listener.ts`, and `acbu_escrow_event_listener.ts` enqueue events to **ACBU_SAVINGS_VAULT_EVENTS**, **ACBU_LENDING_POOL_EVENTS**, and **ACBU_ESCROW_EVENTS** respectively.
 
 ### Event Listening
 

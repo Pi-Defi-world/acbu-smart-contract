@@ -389,10 +389,9 @@ impl ZkVerifier {
         }
 
         // Record the nullifier in persistent storage (AZ-014).
-        env.storage().persistent().set(
-            &DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()),
-            &true,
-        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()), &true);
         env.storage().persistent().extend_ttl(
             &DataKey::ScopedNullifier(commitment.clone(), nullifier.clone()),
             NULLIFIER_TTL_THRESHOLD,

@@ -7,14 +7,12 @@ use soroban_sdk::{
 };
 
 use shared::{
-    calculate_amount_after_fee, calculate_fee, check_oracle_freshness, is_account_address,
-    ContractPhase, CurrencyCode, DataKey as SharedDataKey, MintEvent, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION, DECIMALS,
     any_circuit_peer_paused, calculate_amount_after_fee, calculate_fee, check_oracle_freshness,
-    validate_circuit_peers, ContractPhase, CurrencyCode,
-    DataKey as SharedDataKey, MintEvent, reentrancy_guard, BASIS_POINTS, CONTRACT_VERSION, DECIMALS,
-    MAX_MINT_AMOUNT, MAX_TOTAL_SUPPLY, MIN_MINT_AMOUNT, ORACLE_GET_ACBU_RATE_WITH_TS,
-    ORACLE_GET_BASKET_WEIGHT, ORACLE_GET_CURRENCIES, ORACLE_GET_RATE, ORACLE_GET_RATE_WITH_TS,
-    ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT, UPDATE_INTERVAL_SECONDS,
+    is_account_address, reentrancy_guard, validate_circuit_peers, ContractPhase, CurrencyCode,
+    DataKey as SharedDataKey, MintEvent, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MAX_MINT_AMOUNT,
+    MAX_TOTAL_SUPPLY, MIN_MINT_AMOUNT, ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT,
+    ORACLE_GET_CURRENCIES, ORACLE_GET_RATE, ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR,
+    RESERVE_IS_SUFFICIENT, UPDATE_INTERVAL_SECONDS,
 };
 
 #[allow(dead_code)]
@@ -327,7 +325,9 @@ impl MintingContract {
         }
 
         env.storage().instance().set(&DATA_KEY.admin, &config.admin);
-        env.storage().instance().set(&DATA_KEY.oracle, &config.oracle);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.oracle, &config.oracle);
         env.storage()
             .instance()
             .set(&DATA_KEY.reserve_tracker, &config.reserve_tracker);
@@ -338,19 +338,25 @@ impl MintingContract {
             .instance()
             .set(&DATA_KEY.usdc_token, &config.usdc_token);
         env.storage().instance().set(&DATA_KEY.vault, &config.vault);
-        env.storage().instance().set(&DATA_KEY.treasury, &config.treasury);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.treasury, &config.treasury);
         env.storage()
             .instance()
             .set(&DATA_KEY.fee_rate, &config.fee_rate_bps);
         env.storage()
             .instance()
             .set(&DATA_KEY.fee_single, &config.fee_single_bps);
-        env.storage().instance().set(&DATA_KEY.operator, &config.operator);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.operator, &config.operator);
         // AC-038: store the operator's ed25519 public key for fiat-settlement proof verification.
         env.storage()
             .instance()
             .set(&DATA_KEY.operator_pub_key, &config.operator_pub_key);
-        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.phase, &ContractPhase::Active);
         env.storage()
             .instance()
             .set(&DATA_KEY.min_mint_amount, &MIN_MINT_AMOUNT);
@@ -1198,12 +1204,7 @@ impl MintingContract {
     /// `mint_from_fiat`. It requires admin auth (not operator auth), enforces
     /// the reentrancy guard and paused check, and does NOT mint ACBU — it only
     /// moves pre-funded S-tokens from custody to a recipient.
-    pub fn admin_drip_fiat(
-        env: Env,
-        recipient: Address,
-        currency: CurrencyCode,
-        amount: i128,
-    ) {
+    pub fn admin_drip_fiat(env: Env, recipient: Address, currency: CurrencyCode, amount: i128) {
         reentrancy_guard::acquire_guard(&env);
         Self::check_circuit(&env);
 
@@ -1238,7 +1239,6 @@ impl MintingContract {
             env.panic_with_error(MintingError::InsufficientDemoCustody);
         }
         token.transfer(&custody, &recipient, &amount);
-
     }
 
     /// Return the operator address (the key authorized to sign day-to-day mint
@@ -1288,8 +1288,7 @@ impl MintingContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.operator_pub_key, &new_pub_key);
-        env.events()
-            .publish((symbol_short!("op_pk"),), new_pub_key);
+        env.events().publish((symbol_short!("op_pk"),), new_pub_key);
     }
 
     /// AC-038: Return the currently registered operator ed25519 public key.
@@ -1478,7 +1477,9 @@ impl MintingContract {
     pub fn pause(env: Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Paused);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.phase, &ContractPhase::Paused);
         let event = PauseEvent {
             admin,
             timestamp: env.ledger().timestamp(),
@@ -1490,7 +1491,9 @@ impl MintingContract {
     pub fn unpause(env: Env) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
-        env.storage().instance().set(&DATA_KEY.phase, &ContractPhase::Active);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.phase, &ContractPhase::Active);
         let event = PauseEvent {
             admin,
             timestamp: env.ledger().timestamp(),
@@ -1512,9 +1515,10 @@ impl MintingContract {
         if validate_circuit_peers(&env, &peers).is_err() {
             env.panic_with_error(MintingError::InvalidCircuitPeer);
         }
-        env.storage().instance().set(&DATA_KEY.circuit_peers, &peers);
-        env.events()
-            .publish((symbol_short!("cb_peers"),), peers);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.circuit_peers, &peers);
+        env.events().publish((symbol_short!("cb_peers"),), peers);
     }
 
     /// Return the linked circuit-breaker peers (empty if none).
@@ -1556,8 +1560,7 @@ impl MintingContract {
             new_fee_rate_bps: fee_rate_bps,
             timestamp: env.ledger().timestamp(),
         };
-        env.events()
-            .publish((symbol_short!("fee_upd"),), event);
+        env.events().publish((symbol_short!("fee_upd"),), event);
     }
 
     /// Set the single-currency mint fee in basis points (admin only).
@@ -1584,8 +1587,7 @@ impl MintingContract {
             new_fee_rate_bps: fee_single_bps,
             timestamp: env.ledger().timestamp(),
         };
-        env.events()
-            .publish((symbol_short!("fee_sgl"),), event);
+        env.events().publish((symbol_short!("fee_sgl"),), event);
     }
 
     /// Return the basket/USDC mint fee in basis points.
@@ -1729,10 +1731,8 @@ impl MintingContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.pending_admin_eligible_at, &eligible_at);
-        env.events().publish(
-            (symbol_short!("adm_init"),),
-            (admin, new_admin, eligible_at),
-        );
+        env.events()
+            .publish((symbol_short!("adm_init"),), (admin, new_admin, eligible_at));
     }
 
     /// Step 2 — the nominated address claims ownership after the timelock.
@@ -1754,7 +1754,9 @@ impl MintingContract {
         }
 
         let old_admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
-        env.storage().instance().set(&DATA_KEY.admin, &pending_admin);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.admin, &pending_admin);
         env.storage().instance().remove(&DATA_KEY.pending_admin);
         env.storage()
             .instance()
@@ -1790,7 +1792,7 @@ impl MintingContract {
         env.storage().instance().get(&DATA_KEY.admin).unwrap()
     }
 
-/// Check if the contract has been initialized.
+    /// Check if the contract has been initialized.
     ///
     /// Backend services can call this before invoking other functions to avoid
     /// cryptic storage-not-found errors from uninitialized contracts.
@@ -1806,24 +1808,9 @@ impl MintingContract {
 
     fn assert_recipient_is_account(address: &Address) {
         if !is_account_address(address) {
-            address.env().panic_with_error(MintingError::InvalidRecipient);
-        let env = address.env();
-        let strkey = address.to_string();
-        let len = strkey.len();
-        if len == 56 {
-            let mut buf = [0u8; 56];
-            strkey.copy_into_slice(&mut buf);
-            if buf[0] != b'G' {
-                env.panic_with_error(MintingError::InvalidRecipient);
-            }
-        } else if len == 69 {
-            let mut buf = [0u8; 69];
-            strkey.copy_into_slice(&mut buf);
-            if buf[0] != b'M' {
-                env.panic_with_error(MintingError::InvalidRecipient);
-            }
-        } else {
-            env.panic_with_error(MintingError::InvalidRecipient);
+            address
+                .env()
+                .panic_with_error(MintingError::InvalidRecipient);
         }
     }
 
@@ -1944,10 +1931,10 @@ fn verify_fiat_settlement_proof(
 
     // Build the canonical commitment preimage.
     let mut preimage = Bytes::new(env);
-    preimage.append(&fintech_tx_id.to_xdr(env));
+    preimage.append(&fintech_tx_id.clone().to_xdr(env));
     preimage.append(&recipient.to_xdr(env));
     preimage.append(&fiat_amount.to_xdr(env));
-    preimage.append(&currency.to_xdr(env));
+    preimage.append(&currency.clone().to_xdr(env));
     preimage.append(&env.ledger().timestamp().to_xdr(env));
 
     // Hash the preimage; this is the message the operator signed off-chain.
@@ -2061,7 +2048,9 @@ fn is_fintech_tx_id_processed(env: &Env, tx_id: &SorobanString) -> bool {
 fn mark_fintech_tx_id_processed(env: &Env, tx_id: &SorobanString) {
     let key = (DATA_KEY.processed_fintech_tx_ids, tx_id.clone());
     env.storage().persistent().set(&key, &true);
-    env.storage().persistent().extend_ttl(&key, 5184000, 5184000);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, 5184000, 5184000);
 }
 
 // ---------------------------------------------------------------------------
