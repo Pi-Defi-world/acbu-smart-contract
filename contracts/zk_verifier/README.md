@@ -5,10 +5,10 @@ accepted by this contract and the `sdk`'s on-chain verifier flow must be
 built with **one pinned toolchain**:
 
 | Tool                        | Pinned version    |
-|-----------------------------|-------------------|
+|-----------------------------|------------------|
 | Noir (`nargo`)              | `1.0.0-beta.9`    |
-| Barretenberg (`bb`)         | `v0.87.0`         |
-| `@aztec/bb.js` (JS binding) | `0.87.0`          |
+| Barretenberg (`bb`)         | `v0.87.0`        |
+| `@aztec/bb.js` (JS binding) | `0.87.0`         |
 | `@noir-lang/*` packages     | `1.0.0-beta.9`    |
 
 This matches the toolchain of `ultrahonk-soroban-verifier` (see its
@@ -22,7 +22,7 @@ currently NOT added as a direct Cargo dependency of this contract, because
 the workspace supply-chain policy (W2-Z-020, enforced by
 `.github/workflows/deps-guard.yml`) forbids git-sourced entries in the
 committed `Cargo.lock`.  Proof verification is therefore implemented
-natively in `src/lib.rs`.
+natively in `src/lib.rc`.
 
 **Canonical revision:** `2a73c4ba11f073f1797d90915ebbb9eb9d09f445`
 
@@ -40,7 +40,7 @@ ultrahonk_rust_verifier = {
 Using a different `rev` — or omitting `rev` entirely — causes the on-chain
 VK/proof serialization to diverge from the reference implementation, leading
 to silent verification failures in production.  The CI step
-`"Enforce consistent ultrahonk_rust_verifier rev (AZ-006)"` in
+d"Enforce consistent ultrahonk_rust_verifier rev (AZ-006)"` in
 `.github/workflows/deps-guard.yml` will reject any manifest that uses a
 different revision.
 
@@ -61,3 +61,19 @@ noirup -v 1.0.0-beta.9
 curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/master/barretenberg/cpp/installation/install | bash
 bbup -v v0.87.0
 ```
+
+## Verification expiry and revocation (W10-SEC-011)
+
+Verification is not permanent. The contract stores a per-user expiry
+timestamp alongside the verified flag, and authorized admins can revoke
+verification at any time.
+
+- `set_verified(user, valid_until`) records the verified flag together
+with a validity window. A credential is considered valid only while
+`valid_until >= current ledger timestamp; after that it expires automatically.
+- `is_verified(user)` returns false once the window has lapsed, even if
+the flag was never explicitly cleared.
+- `revoke(user)e lets an authorized admin clear the verified flag and
+expiry immediately (K-YC change, sanction event, or credential leak).
+- Expiry and revocation are enforced on-chain in `src/lib.rs`; the proof
+verification path must not bypass these checks.
