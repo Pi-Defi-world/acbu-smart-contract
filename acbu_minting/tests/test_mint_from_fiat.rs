@@ -214,10 +214,10 @@ fn make_fiat_proof(
     currency: &CurrencyCode,
 ) -> FiatSettlementProof {
     let mut preimage = Bytes::new(env);
-    preimage.append(&fintech_tx_id.to_xdr(env));
+    preimage.append(&fintech_tx_id.clone().to_xdr(env));
     preimage.append(&recipient.to_xdr(env));
     preimage.append(&fiat_amount.to_xdr(env));
-    preimage.append(&currency.to_xdr(env));
+    preimage.append(&currency.clone().to_xdr(env));
     preimage.append(&env.ledger().timestamp().to_xdr(env));
 
     let digest = env.crypto().sha256(&preimage);
@@ -860,3 +860,304 @@ fn test_mint_from_fiat_rejects_contract_recipient() {
         &proof,
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// W10-SEC-004 regression suite
+//
+// The Wave 10 audit flagged that `mint_from_fiat` was authorized by a single
+// operator key, with no independent fintech-partner confirmation. The
+// mitigation (AC-038) requires an ed25519 `FiatSettlementProof` attestation,
+// verified on-chain against a registered key that is independent of the
+// Stellar operator key. A compromised Stellar operator key alone can therefore
+// no longer mint. The tests below lock that guarantee in.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Initialize a fiat-mint-ready contract: registered ed25519 attestation key and a
+/// distinct `operator` address, so the two authorization factors can be exercised
+/// independently.
+fn setup_fiat_ready(
+    env: &Env,
+) -> (Address, Address, Address, SigningKey, MintingContractClient) {
+    let (admin, oracle, reserve_tracker, acbu_token_id, usdc_token_id, client) = setup_test(env);
+    let operator = Address::generate(env);
+    let recipient = account(env);
+
+    // The minting contract is pre-funded with demo S-token custody (harmless for
+    // the fiat path, but mirrors the other fiat tests).
+    let stoken_id = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    soroban_sdk::token::StellarAssetClient::new(env, &stoken_id)
+        .mint(&client.address, &(100 * DECIMALS));
+    oracle_mock_client(env, &oracle).seed_stoken(&stoken_id);
+
+    let signing_key = init_mint_client(
+        env,
+        &client,
+        &admin,
+        &oracle,
+        &reserve_tracker,
+        &acbu_token_id,
+        &usdc_token_id,
+        &admin,
+        &admin,
+        50,
+        100,
+    );
+    client.set_operator(&operator);
+
+    (admin, operator, recipient, signing_key, client)
+}
+
+/// The core W10-SEC-004 claim: possession of the genuine Stellar operator key is
+/// not sufficient — an authorized mint also requires a valid ed25519 attestation.
+#[test]
+fn test_w10_sec_004_operator_key_alone_cannot_mint() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, operator, recipient, _signing_key, client) = setup_fiat_ready(&env);
+
+    let currency = CurrencyCode::new(&env, "NGN");
+    let fiat_amount = 50 * DECIMALS;
+    let fintech_tx_id = SorobanString::from_str(&env, "w10sec004_operator_only");
+
+    // Correct, authorized operator address — but no valid attestation.
+    let result = client.try_mint_from_fiat(
+        &operator,
+        &recipient,
+        &currency,
+        &fiat_amount,
+        &fintech_tx_id,
+        &dummy_proof(&env),
+    );
+
+    assert!(
+        result.is_err(),
+        "the operator key alone must not authorize a fiat mint"
+    );
+    assert_eq!(
+        client.get_total_supply(),
+        0,
+        "no ACBU may be minted without a valid attestation"
+    );
+}
+
+/// An attestation signed by a key that is *not* the registered partner key is rejected
+/// (`InvalidFiatSettlementProof`), even if the signature itself is well-formed.
+#[test]
+#[should_panic(expected = "#5032")]
+fn test_w10_sec_004_attestation_from_unregistered_key_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, operator, recipient, _signing_key, client) = setup_fiat_ready(&env);
+
+    let currency = CurrencyCode::new(&env, "NGN");
+    let fiat_amount = 50 * DECIMALS;
+    let fintech_tx_id = SorobanString::from_str(&env, "w10sec004_wrong_key");
+
+    let attacker_key = SigningKey::generate(&mut OsRng);
+    let forged = make_fiat_proof(
+        &env,
+        &attacker_key,
+        &fintech_tx_id,
+        &recipient,
+        fiat_amount,
+        &currency,
+    );
+
+    client.mint_from_fiat(
+        &operator,
+        &recipient,
+        &currency,
+        &fiat_amount,
+        &fintech_tx_id,
+        &forged,
+    );
+}
+
+/// A tampered signature under the *registered* public key is rejected: the attestation
+/// must actually verify, not merely carry the right `pub_key`.
+#[test]
+fn test_w10_sec_004_tampered_signature_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, operator, recipient, signing_key, client) = setup_fiat_ready(&env);
+
+    let currency = CurrencyCode::new(&env, "NGN");
+    let fiat_amount = 50 * DECIMALS;
+    let fintech_tx_id = SorobanString::from_str(&env, "w10sec004_tampered");
+
+    let mut proof = make_fiat_proof(
+        &env,
+        &signing_key,
+        &fintech_tx_id,
+        &recipient,
+        fiat_amount,
+        &currency,
+    );
+    // Keep the registered public key but corrupt the signature bytes.
+    proof.signature = BytesN::from_array(&env, &[0u8; 64]);
+
+    let result = client.try_mint_from_fiat(
+        &operator,
+        &recipient,
+        &currency,
+        &fiat_amount,
+        &fintech_tx_id,
+        &proof,
+    );
+
+    assert!(result.is_err(), "a corrupted signature must not authorize a mint");
+    assert_eq!(client.get_total_supply(), 0);
+}
+
+/// The attestation is bound to the full commitment (tx id, recipient, amount, currency,
+/// ledger timestamp): a proof valid for one mint cannot be replayed for a different one.
+#[test]
+fn test_w10_sec_004_attestation_is_bound_to_commitment() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, operator, recipient, signing_key, client) = setup_fiat_ready(&env);
+
+    let currency = CurrencyCode::new(&env, "NGN");
+    let fiat_amount = 50 * DECIMALS;
+    let fintech_tx_id = SorobanString::from_str(&env, "w10sec004_binding");
+
+    // Valid proof for `fiat_amount`.
+    let proof = make_fiat_proof(
+        &env,
+        &signing_key,
+        &fintech_tx_id,
+        &recipient,
+        fiat_amount,
+        &currency,
+    );
+
+    // Reusing it for a larger amount must fail: the commitment digest differs.
+    let result = client.try_mint_from_fiat(
+        &operator,
+        &recipient,
+        &currency,
+        &(fiat_amount + DECIMALS),
+        &fintech_tx_id,
+        &proof,
+    );
+
+    assert!(
+        result.is_err(),
+        "an attestation must not be reusable for a different amount"
+    );
+    assert_eq!(client.get_total_supply(), 0);
+}
+
+/// Rotating the attestation key invalidates previously issued attestations; the new
+/// key authorizes subsequent mints. Rotation is admin-gated (see `set_operator_pub_key`).
+#[test]
+fn test_w10_sec_004_key_rotation_invalidates_prior_attestations() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, operator, recipient, old_key, client) = setup_fiat_ready(&env);
+
+    let currency = CurrencyCode::new(&env, "NGN");
+    let fiat_amount = 50 * DECIMALS;
+
+    // Rotate to a fresh partner key.
+    let new_key = SigningKey::generate(&mut OsRng);
+    let new_pub_key = BytesN::from_array(&env, &new_key.verifying_key().to_bytes());
+    client.set_operator_pub_key(&new_pub_key);
+    assert_eq!(client.get_operator_pub_key(), new_pub_key);
+
+    // A proof from the retired key no longer authorizes a mint.
+    let old_tx_id = SorobanString::from_str(&env, "w10sec004_rot_old");
+    let old_proof = make_fiat_proof(
+        &env,
+        &old_key,
+        &old_tx_id,
+        &recipient,
+        fiat_amount,
+        &currency,
+    );
+    assert!(
+        client
+            .try_mint_from_fiat(
+                &operator,
+                &recipient,
+                &currency,
+                &fiat_amount,
+                &old_tx_id,
+                &old_proof,
+            )
+            .is_err(),
+        "attestations from a rotated-out key must be rejected"
+    );
+
+    // A proof from the new key authorizes a mint.
+    let new_tx_id = SorobanString::from_str(&env, "w10sec004_rot_new");
+    let new_proof = make_fiat_proof(
+        &env,
+        &new_key,
+        &new_tx_id,
+        &recipient,
+        fiat_amount,
+        &currency,
+    );
+    let minted = client.mint_from_fiat(
+        &operator,
+        &recipient,
+        &currency,
+        &fiat_amount,
+        &new_tx_id,
+        &new_proof,
+    );
+    assert!(minted > 0, "the rotated-in key must authorize minting");
+}
+
+/// A settled fiat transaction id cannot be minted twice, even with a valid attestation.
+#[test]
+fn test_w10_sec_004_settled_attestation_cannot_be_replayed() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, operator, recipient, signing_key, client) = setup_fiat_ready(&env);
+
+    let currency = CurrencyCode::new(&env, "NGN");
+    let fiat_amount = 50 * DECIMALS;
+    let fintech_tx_id = SorobanString::from_str(&env, "w10sec004_replay");
+    let proof = make_fiat_proof(
+        &env,
+        &signing_key,
+        &fintech_tx_id,
+        &recipient,
+        fiat_amount,
+        &currency,
+    );
+
+    let first = client.mint_from_fiat(
+        &operator,
+        &recipient,
+        &currency,
+        &fiat_amount,
+        &fintech_tx_id,
+        &proof,
+    );
+    assert!(first > 0);
+
+    let replay = client.try_mint_from_fiat(
+        &operator,
+        &recipient,
+        &currency,
+        &fiat_amount,
+        &fintech_tx_id,
+        &proof,
+    );
+    assert!(
+        replay.is_err(),
+        "a settled fiat transaction id must not mint twice"
+    );
+}
+
