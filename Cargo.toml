@@ -29,10 +29,13 @@ rust-version = "1.88.0"
 # To upgrade: bump *both* fields below (and run `cargo update` to regenerate
 # Cargo.lock), then rebuild + re-test every contract before deploying.
 #
-# Supply chain (W2-Z-020): no dependency — the Soroban SDK, the ledger-snapshot
-# verifier lib, or anything transitive — may be sourced from a git URL. Every
-# crate must resolve from a registry with a checksum recorded in the committed
-# Cargo.lock, so `cargo build --locked` resolves without live GitHub access.
+# Supply chain (W2-Z-020, W10-Z-009): no dependency — the Soroban SDK, any
+# ZK verifier library, or anything transitive — may be sourced from a git URL
+# without an exact revision pin. Every crate must resolve from a registry with
+# a checksum recorded in the committed Cargo.lock, so `cargo build --locked`
+# resolves without live GitHub access. If a git dependency is unavoidable, it
+# MUST specify `rev = "<commit-hash>"` (not branch or tag). See
+# `docs/zk-verifier-supply-chain.md` for ZK verifier integration requirements.
 # `.github/workflows/deps-guard.yml` fails the build if this regresses.
 # ---------------------------------------------------------------------------
 [workspace.dependencies]

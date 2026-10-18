@@ -316,6 +316,15 @@ impl ZkVerifier {
     ///
     /// `public_inputs[5]` must equal the first 16 bytes of `sha256(wallet_xdr)`
     /// interpreted as a little-endian `u128`.
+    ///
+    /// # W10-Z-009 — On-chain verification
+    ///
+    /// This implementation does NOT perform cryptographic proof verification.
+    /// It assumes proofs are validated off-chain or that the commitment
+    /// attestation model provides sufficient security (trusted KYC authority
+    /// attests commitments; users prove knowledge; nullifiers prevent reuse).
+    /// If on-chain verification is required, integrate a verifier library
+    /// pinned to an exact revision. See `docs/zk-verifier-supply-chain.md`.
     pub fn verify(
         env: Env,
         wallet: Address,

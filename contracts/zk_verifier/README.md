@@ -11,9 +11,12 @@ built with **one pinned toolchain**:
 | `@aztec/bb.js` (JS binding) | `0.87.0`          |
 | `@noir-lang/*` packages     | `1.0.0-beta.9`    |
 
-This matches the toolchain of `ultrahonk-soroban-verifier` (see its
-`tests/build_circuits.sh`) and the `ultrahonk_rust_verifier` crate the
-proof format is designed around.
+**Note (W10-Z-009):** The current contract implementation performs nullifier
+tracking and commitment attestation but does not execute on-chain cryptographic
+proof verification. If integrating an external verifier library (such as
+`ultrahonk_rust_verifier`), it must be pinned to an exact revision compatible
+with the above toolchain. See `docs/zk-verifier-supply-chain.md` for supply
+chain security requirements.
 
 ## AZ-006 — Canonical `ultrahonk_rust_verifier` revision
 
