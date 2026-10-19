@@ -1,0 +1,24 @@
+[package]
+name = "acbu-smart-contract"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Soroban SDK is pinned to one exact, verified line shared by every contract
+# crate in this repo (core, ZK gate/verifier, ultrahonk verifier). Do not
+# switch to a floating git rev here without updating the other crates and
+# the SDK provenance guard (scripts/check-soroban-sdk-pins.sh).
+soroban-sdk = "=21.7.7"
+
+[dev-dependencies]
+soroban-sdk = { version = "=21.7.7", features = ["testutils"] }
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false

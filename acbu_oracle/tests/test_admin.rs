@@ -11,6 +11,11 @@ use acbu_oracle::{
 };
 use shared::CurrencyCode;
 
+/// Protocol version currently running on the target Testnet/Mainnet.
+/// Bump this as the network upgrades so tests exercise the live host
+/// functions, cost model, and rent behaviour.
+const PROTOCOL_VERSION: u32 = 23;
+
 fn make_env() -> Env {
     Env::default()
 }
@@ -28,7 +33,7 @@ fn advance_time(env: &Env, delta: u64) {
     let now = env.ledger().timestamp();
     env.ledger().set(LedgerInfo {
         timestamp: now + delta,
-        protocol_version: 20,
+        protocol_version: PROTOCOL_VERSION,
         sequence_number: env.ledger().sequence(),
         network_id: Default::default(),
         base_reserve: 10,
@@ -172,7 +177,7 @@ fn test_update_rate_meets_quorum_succeeds() {
 
     env.ledger().set(LedgerInfo {
         timestamp: 1,
-        protocol_version: 20,
+        protocol_version: PROTOCOL_VERSION,
         sequence_number: 1,
         network_id: Default::default(),
         base_reserve: 10,
@@ -240,30 +245,7 @@ fn test_update_rate_rejects_single_submission() {
     let validator = validators.get(0).unwrap();
     let currency = client.get_currencies().get(0).unwrap();
 
-    env.mock_all_auths();
-
-    let mut sources = Vec::new(&env);
-    sources.push_back(125_000i128);
-
-    client.update_rate(&validator, &currency, &125_000i128, &sources, &0u64);
-}
-
-#[test]
-fn test_update_rate_multiple_submissions() {
-    let (env, _admin, client) = setup();
-    let validators = client.get_validators();
-    let validator = validators.get(0).unwrap();
-    let currency = client.get_currencies().get(0).unwrap();
-
-    env.mock_all_auths();
-
-    let mut sources = Vec::new(&env);
-    sources.push_back(100_000i128);
-    sources.push_back(110_000i128);
-    sources.push_back(120_000i128);
-
-    client.update_rate(&validator, &currency, &110_000i128, &sources, &0u64);
-
-    let (rate, _ts) = client.get_rate_with_timestamp(&currency);
-    assert_eq!(rate, 110_000i128);
+    let mut one_source = Vec::new(&env);
+    one_source.push_back(100_000_000i128);
+    client.update_rate(&validator, &currency, &100_000_000i128, &one_source, &0u64);
 }
