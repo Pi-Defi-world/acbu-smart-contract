@@ -31,7 +31,7 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 21 | `PolicyNotConfigured` | No compliance policy has been configured by the admin yet. `verify()` refuses all proofs until a policy is set, preventing a zero-tier / any-country bypass during the window after deployment. |
 | 22 | `KycTierTooLow` | The KYC tier encoded in `public_inputs[0]` is below the minimum tier required by the contract's stored compliance policy. A prover who sets `required_kyc = 0` in the circuit can no longer bypass this check because the contract independently enforces the admin-controlled minimum (AZ-001). |
 | 23 | `CountryNotAllowed` | The country code encoded in `public_inputs[1]` is not in the set of allowed jurisdictions stored by the contract.  A prover who sets `allowed_country` to their own value cannot bypass this check (AZ-001). |
-| 14 | `VaultAllowanceInsufficient` | The vault has not approved the burning contract as a spender with sufficient allowance for the requested S-token transfer.  Ensure the vault calls `approve(burning_contract, amount, expiry)` on each S-token before redemption. |
+| 24 | `VaultAllowanceInsufficient` | The vault has not approved the burning contract as a spender with sufficient allowance for the requested S-token transfer.  Ensure the vault calls `approve(burning_contract, amount, expiry)` on each S-token before redemption. |
 | 9999 | `Unknown` | unknown error |
 
 ## `shared / reentrancy guard` - `ReentrancyError`
