@@ -103,6 +103,31 @@ const RATE_DECIMALS: u32 = 7;
 const INSTANCE_TTL_THRESHOLD: u32 = 5_184_000;
 const INSTANCE_TTL_EXTEND_TO: u32 = 5_184_000;
 
+/// Time-weighted averaging window used by mint/burn conversions: 24 hours
+/// (W10-SEC-012).
+pub const TWAP_WINDOW_SECONDS: u64 = 86_400;
+
+/// Hard cap on retained TWAP checkpoints per currency. Regular updates are
+/// spaced [`UPDATE_INTERVAL_SECONDS`] apart (6 h), so a 24 h window needs only
+/// about four checkpoints; the cap instead bounds bursts of emergency updates.
+pub const MAX_TWAP_OBSERVATIONS: u32 = 32;
+
+/// Instance-storage key holding `Map<CurrencyCode, Vec<TwapObservation>>`.
+const TWAP_SERIES_KEY: Symbol = symbol_short!("TWAP");
+
+/// One checkpoint of a currency's price accumulator.
+///
+/// `cumulative` is the integral `Σ rate · Δt` (rate in 7-decimal USD,
+/// `timestamp` in seconds) up to `timestamp`; `rate` is the rate that took
+/// effect at `timestamp` and applies until the next checkpoint.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TwapObservation {
+    pub timestamp: u64,
+    pub cumulative: i128,
+    pub rate: i128,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataKey {
@@ -727,6 +752,9 @@ impl OracleContract {
             .set(&DATA_KEY.last_update, &current_time);
         Self::extend_instance_ttl(&env);
 
+        // Accrue the 24 h TWAP accumulator at the committed rate (W10-SEC-012).
+        Self::record_twap(&env, &currency, consensus_rate, current_time);
+
         let event = RateUpdateEvent {
             currency: currency.clone(),
             rate: consensus_rate,
@@ -912,6 +940,9 @@ impl OracleContract {
             .set(&DATA_KEY.last_update, &current_time);
         Self::extend_instance_ttl(&env);
 
+        // Accrue the 24 h TWAP accumulator at the admin-overridden rate.
+        Self::record_twap(&env, &currency, rate, current_time);
+
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         let event = RateUpdateEvent {
             currency,
@@ -948,6 +979,32 @@ impl OracleContract {
         }
     }
 
+    /// Time-weighted average USD rate (7 decimals) for `currency` over the last
+    /// [`TWAP_WINDOW_SECONDS`] (24 h).
+    ///
+    /// Until enough checkpoints accrue the average spans the whole retained
+    /// history; before the first update it falls back to the spot rate. Panics
+    /// under the same conditions as [`Self::get_rate`].
+    pub fn get_twap(env: Env, currency: CurrencyCode) -> i128 {
+        Self::get_twap_with_timestamp(env, currency).0
+    }
+
+    /// Like [`Self::get_twap`] but also returns the latest spot timestamp, as
+    /// `(twap, timestamp)`, so consumers can still enforce feed freshness.
+    pub fn get_twap_with_timestamp(env: Env, currency: CurrencyCode) -> (i128, u64) {
+        Self::assert_currency_registered(&env, &currency);
+        if let Some(rate_data) = Self::get_rate_internal(&env, &currency) {
+            Self::assert_rate_fresh(&env, &rate_data, &currency);
+            let now = env.ledger().timestamp();
+            let twap = Self::compute_twap(&env, &currency, now)
+                .map(|(rate, _)| rate)
+                .unwrap_or(rate_data.rate_usd);
+            (twap, rate_data.timestamp)
+        } else {
+            env.panic_with_error(OracleError::RateNotInitialized);
+        }
+    }
+
     /// Compute the basket-weighted ACBU/USD rate together with the oldest
     /// contributing rate timestamp, as `(rate, oldest_timestamp)`.
     ///
@@ -964,6 +1021,18 @@ impl OracleContract {
     /// contribute.
     pub fn get_acbu_usd_rate(env: Env) -> i128 {
         Self::compute_basket_rate(&env).0
+    }
+
+    /// Basket-weighted ACBU/USD time-weighted average (7 decimals) over the last
+    /// 24 h — the conversion rate used by mint/burn (W10-SEC-012).
+    pub fn get_acbu_usd_twap(env: Env) -> i128 {
+        Self::compute_basket_rate_twap(&env).0
+    }
+
+    /// Like [`Self::get_acbu_usd_twap`] but also returns the oldest contributing
+    /// spot timestamp, as `(twap, oldest_timestamp)`.
+    pub fn get_acbu_usd_twap_with_timestamp(env: Env) -> (i128, u64) {
+        Self::compute_basket_rate_twap(&env)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1201,6 +1270,11 @@ impl OracleContract {
             let empty_rates: Map<CurrencyCode, RateData> = Map::new(&env);
             env.storage().instance().set(&DATA_KEY.rates, &empty_rates);
             env.storage().instance().set(&DATA_KEY.last_update, &0u64);
+
+            // Discard the TWAP accumulator too, so no rate from the removed
+            // validator can survive in a time-weighted average.
+            let empty_twap: Map<CurrencyCode, Vec<TwapObservation>> = Map::new(&env);
+            env.storage().instance().set(&TWAP_SERIES_KEY, &empty_twap);
         }
     }
 
@@ -1284,6 +1358,8 @@ impl OracleContract {
                 let rates_empty: Map<CurrencyCode, RateData> = Map::new(&env);
                 env.storage().instance().set(&DATA_KEY.rates, &rates_empty);
                 env.storage().instance().set(&DATA_KEY.last_update, &0u64);
+                let twap_empty: Map<CurrencyCode, Vec<TwapObservation>> = Map::new(&env);
+                env.storage().instance().set(&TWAP_SERIES_KEY, &twap_empty);
             }
             if stored_version < 6 {
                 let currencies_empty: Vec<CurrencyCode> = Vec::new(&env);
@@ -1298,6 +1374,9 @@ impl OracleContract {
                 let rates_empty: Map<CurrencyCode, RateData> = Map::new(&env);
                 env.storage().instance().set(&DATA_KEY.rates, &rates_empty);
                 env.storage().instance().set(&DATA_KEY.last_update, &0u64);
+
+                let twap_empty: Map<CurrencyCode, Vec<TwapObservation>> = Map::new(&env);
+                env.storage().instance().set(&TWAP_SERIES_KEY, &twap_empty);
 
                 let s_tokens_empty: Map<CurrencyCode, Address> = Map::new(&env);
                 env.storage()
@@ -1454,7 +1533,63 @@ impl OracleContract {
             env.panic_with_error(OracleError::RateNotInitialized);
         }
 
-        let rate = weighted_sum / total_weight;
+        let rate = (weighted_sum * BASIS_POINTS) / total_weight;
+        let oldest_timestamp = if oldest_timestamp == u64::MAX {
+            0
+        } else {
+            oldest_timestamp
+        };
+        (rate, oldest_timestamp)
+    }
+
+    /// Basket-weighted ACBU/USD rate using each currency's 24 h time-weighted
+    /// average instead of its spot rate (W10-SEC-012).
+    ///
+    /// Mirrors [`Self::compute_basket_rate`], including its freshness and
+    /// oldest-timestamp semantics, but substitutes the per-currency TWAP for the
+    /// instantaneous rate so a brief spot manipulation cannot move the basket.
+    fn compute_basket_rate_twap(env: &Env) -> (i128, u64) {
+        let basket_weights: Map<CurrencyCode, i128> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.basket_weights)
+            .unwrap_or(Map::new(env));
+        let currencies: Vec<CurrencyCode> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.currencies)
+            .unwrap_or(Vec::new(env));
+        if currencies.is_empty() {
+            env.panic_with_error(OracleError::RateNotInitialized);
+        }
+
+        let now = env.ledger().timestamp();
+        let mut weighted_sum = 0i128;
+        let mut total_weight = 0i128;
+        let mut oldest_timestamp = u64::MAX;
+
+        for currency in currencies.iter() {
+            if let Some(weight) = basket_weights.get(currency.clone()) {
+                if let Some(rate_data) = Self::get_rate_internal(env, &currency) {
+                    Self::assert_rate_fresh(env, &rate_data, &currency);
+                    let rate = Self::compute_twap(env, &currency, now)
+                        .map(|(rate, _)| rate)
+                        .unwrap_or(rate_data.rate_usd);
+                    let contribution = (rate * weight) / BASIS_POINTS;
+                    weighted_sum += contribution;
+                    total_weight += weight;
+                    if rate_data.timestamp < oldest_timestamp {
+                        oldest_timestamp = rate_data.timestamp;
+                    }
+                }
+            }
+        }
+
+        if total_weight == 0 {
+            env.panic_with_error(OracleError::RateNotInitialized);
+        }
+
+        let rate = (weighted_sum * BASIS_POINTS) / total_weight;
         let oldest_timestamp = if oldest_timestamp == u64::MAX {
             0
         } else {
@@ -1471,6 +1606,104 @@ impl OracleContract {
             .get(&DATA_KEY.rates)
             .unwrap_or(Map::new(env));
         rates.get(currency.clone())
+    }
+
+    /// Append a TWAP checkpoint for `currency` at `timestamp` with new `rate`.
+    ///
+    /// The interval since the previous checkpoint is accrued at the previous
+    /// rate, then the oldest checkpoints are trimmed to [`MAX_TWAP_OBSERVATIONS`].
+    fn record_twap(env: &Env, currency: &CurrencyCode, rate: i128, timestamp: u64) {
+        let mut series: Map<CurrencyCode, Vec<TwapObservation>> = env
+            .storage()
+            .instance()
+            .get(&TWAP_SERIES_KEY)
+            .unwrap_or(Map::new(env));
+        let mut observations: Vec<TwapObservation> =
+            series.get(currency.clone()).unwrap_or(Vec::new(env));
+
+        let checkpoint = match observations.len() {
+            0 => TwapObservation {
+                timestamp,
+                cumulative: 0,
+                rate,
+            },
+            n => {
+                let last = observations.get(n - 1).unwrap();
+                let elapsed = timestamp.saturating_sub(last.timestamp) as i128;
+                TwapObservation {
+                    timestamp,
+                    cumulative: last.cumulative.saturating_add(last.rate.saturating_mul(elapsed)),
+                    rate,
+                }
+            }
+        };
+        observations.push_back(checkpoint);
+
+        while observations.len() > MAX_TWAP_OBSERVATIONS {
+            let mut trimmed = Vec::new(env);
+            for i in 1..observations.len() {
+                trimmed.push_back(observations.get(i).unwrap());
+            }
+            observations = trimmed;
+        }
+
+        series.set(currency.clone(), observations);
+        env.storage().instance().set(&TWAP_SERIES_KEY, &series);
+    }
+
+    /// Time-weighted average rate for `currency` over [`TWAP_WINDOW_SECONDS`]
+    /// as `(average, window_start_timestamp)`.
+    ///
+    /// `None` when no checkpoint exists. When the retained history is shorter
+    /// than the window the average spans the whole retained history.
+    fn compute_twap(env: &Env, currency: &CurrencyCode, now: u64) -> Option<(i128, u64)> {
+        let series: Map<CurrencyCode, Vec<TwapObservation>> = env
+            .storage()
+            .instance()
+            .get(&TWAP_SERIES_KEY)
+            .unwrap_or(Map::new(env));
+        let observations = series.get(currency.clone())?;
+        let len = observations.len();
+        if len == 0 {
+            return None;
+        }
+
+        let first = observations.get(0).unwrap();
+        let last = observations.get(len - 1).unwrap();
+
+        // Extrapolate the open-ended final segment to `now`.
+        let tail = now.saturating_sub(last.timestamp) as i128;
+        let cumulative_now = last.cumulative.saturating_add(last.rate.saturating_mul(tail));
+
+        // Locate the window start, clamped to the retained history.
+        let window_start = now.saturating_sub(TWAP_WINDOW_SECONDS);
+        let (start_timestamp, cumulative_start) = if window_start <= first.timestamp {
+            (first.timestamp, first.cumulative)
+        } else if window_start >= last.timestamp {
+            (last.timestamp, last.cumulative)
+        } else {
+            let mut start = (last.timestamp, last.cumulative);
+            for i in 0..len - 1 {
+                let a = observations.get(i).unwrap();
+                let b = observations.get(i + 1).unwrap();
+                if window_start >= a.timestamp && window_start < b.timestamp {
+                    let elapsed = (window_start - a.timestamp) as i128;
+                    start = (
+                        window_start,
+                        a.cumulative.saturating_add(a.rate.saturating_mul(elapsed)),
+                    );
+                    break;
+                }
+            }
+            start
+        };
+
+        let span = now.saturating_sub(start_timestamp) as i128;
+        if span <= 0 {
+            return Some((last.rate, start_timestamp));
+        }
+        let average = cumulative_now.saturating_sub(cumulative_start) / span;
+        Some((average, start_timestamp))
     }
 
     fn extend_instance_ttl(env: &Env) {

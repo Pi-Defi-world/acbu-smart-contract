@@ -33,6 +33,17 @@ impl MockOracle {
         (rate, ts)
     }
 
+    pub fn get_acbu_usd_twap(env: Env) -> i128 {
+        Self::get_acbu_usd_twap_with_timestamp(env).0
+    }
+
+    pub fn get_acbu_usd_twap_with_timestamp(env: Env) -> (i128, u64) {
+        // W10-SEC-012: mocks have no TWAP history, so the 24 h average
+        // equals the mocked spot rate (the real contract's single-
+        // observation fallback).
+        Self::get_acbu_usd_rate_with_timestamp(env)
+    }
+
     pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
         env.storage()
             .instance()
@@ -77,6 +88,14 @@ impl MockOracle {
             .unwrap_or_else(|| Map::new(&env));
         let ts = ts_map.get(c).unwrap_or(0); // Default to 0 for stale test
         (rate, ts)
+    }
+
+    pub fn get_twap(env: Env, currency: CurrencyCode) -> i128 {
+        Self::get_twap_with_timestamp(env, currency).0
+    }
+
+    pub fn get_twap_with_timestamp(env: Env, currency: CurrencyCode) -> (i128, u64) {
+        Self::get_rate_with_timestamp(env, currency)
     }
 
     pub fn get_s_token_address(env: Env, c: CurrencyCode) -> Address {

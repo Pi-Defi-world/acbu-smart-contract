@@ -10,8 +10,8 @@ use shared::{
     any_circuit_peer_paused, calculate_amount_after_fee, calculate_fee, check_oracle_freshness,
     is_account_address, reentrancy_guard, validate_circuit_peers, ContractPhase, CurrencyCode,
     DataKey as SharedDataKey, MintEvent, BASIS_POINTS, CONTRACT_VERSION, DECIMALS, MAX_MINT_AMOUNT,
-    MAX_TOTAL_SUPPLY, MIN_MINT_AMOUNT, ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT,
-    ORACLE_GET_CURRENCIES, ORACLE_GET_RATE, ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR,
+    MAX_TOTAL_SUPPLY, MIN_MINT_AMOUNT, ORACLE_GET_ACBU_TWAP_WITH_TS, ORACLE_GET_BASKET_WEIGHT,
+    ORACLE_GET_CURRENCIES, ORACLE_GET_S_TOKEN_ADDR, ORACLE_GET_TWAP, ORACLE_GET_TWAP_WITH_TS,
     RESERVE_IS_SUFFICIENT, UPDATE_INTERVAL_SECONDS,
 };
 
@@ -431,7 +431,7 @@ impl MintingContract {
         // Get ACBU rate with timestamp and validate oracle freshness
         let (acbu_rate, oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
+            &Symbol::new(&env, ORACLE_GET_ACBU_TWAP_WITH_TS),
             vec![&env],
         );
         if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
@@ -570,7 +570,7 @@ impl MintingContract {
         // Get ACBU rate with timestamp and validate oracle freshness
         let (acbu_rate, oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
+            &Symbol::new(&env, ORACLE_GET_ACBU_TWAP_WITH_TS),
             vec![&env],
         );
         if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
@@ -631,7 +631,7 @@ impl MintingContract {
 
             let rate: i128 = env.invoke_contract(
                 &oracle_addr,
-                &Symbol::new(&env, ORACLE_GET_RATE),
+                &Symbol::new(&env, ORACLE_GET_TWAP),
                 vec![&env, currency.clone().into_val(&env)],
             );
             if rate == 0 {
@@ -750,7 +750,7 @@ impl MintingContract {
         // Get ACBU rate with timestamp and validate oracle freshness
         let (acbu_rate, oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
+            &Symbol::new(&env, ORACLE_GET_ACBU_TWAP_WITH_TS),
             vec![&env],
         );
         if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
@@ -759,7 +759,7 @@ impl MintingContract {
 
         let (rate, rate_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
+            &Symbol::new(&env, ORACLE_GET_TWAP_WITH_TS),
             vec![&env, currency.clone().into_val(&env)],
         );
         if !check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS) {
@@ -908,7 +908,7 @@ impl MintingContract {
         // Get ACBU rate with timestamp and validate oracle freshness
         let (acbu_rate, oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
+            &Symbol::new(&env, ORACLE_GET_ACBU_TWAP_WITH_TS),
             vec![&env],
         );
         if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
@@ -917,7 +917,7 @@ impl MintingContract {
 
         let (rate, rate_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
+            &Symbol::new(&env, ORACLE_GET_TWAP_WITH_TS),
             vec![&env, currency.clone().into_val(&env)],
         );
         if !check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS) {
@@ -1096,7 +1096,7 @@ impl MintingContract {
         // ACBU at an incorrect price.
         let (acbu_rate, acbu_oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
+            &Symbol::new(&env, ORACLE_GET_ACBU_TWAP_WITH_TS),
             vec![&env],
         );
         if !check_oracle_freshness(&env, acbu_oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
@@ -1105,7 +1105,7 @@ impl MintingContract {
 
         let (rate, rate_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
+            &Symbol::new(&env, ORACLE_GET_TWAP_WITH_TS),
             vec![&env, currency.clone().into_val(&env)],
         );
         if !check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS) {
