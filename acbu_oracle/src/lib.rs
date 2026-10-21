@@ -1,4 +1,8 @@
 #![no_std]
+#![allow(
+    clippy::declare_interior_mutable_const,
+    clippy::borrow_interior_mutable_const
+)]
 use core::fmt::{self, Display};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address,

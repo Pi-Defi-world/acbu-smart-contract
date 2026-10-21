@@ -1,3 +1,7 @@
+#![allow(
+    clippy::declare_interior_mutable_const,
+    clippy::borrow_interior_mutable_const
+)]
 //! # `verifier`
 //!
 //! Host-side wrapper logic for KYC tier validation and transaction rate-gate

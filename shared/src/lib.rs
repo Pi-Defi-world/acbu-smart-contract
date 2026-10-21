@@ -1,4 +1,8 @@
 #![no_std]
+#![allow(
+    clippy::declare_interior_mutable_const,
+    clippy::borrow_interior_mutable_const
+)]
 
 use soroban_sdk::{
     contracterror, contracttype, Address, BytesN, Env, IntoVal, String as SorobanString, Symbol,
