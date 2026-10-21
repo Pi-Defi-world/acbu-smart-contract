@@ -1,7 +1,6 @@
 #![cfg(test)]
 
 use acbu_minting::{MintingContract, MintingContractClient};
-use shared::DECIMALS;
 use soroban_sdk::{
     testutils::Address as _,
     Address, BytesN, Env,
@@ -108,7 +107,7 @@ proptest! {
         
         let max_mint = 1_000_000_000_000;
         
-        let res = client.try_mint_from_usdc(&user, &amount, &user);
+        let res = client.try_mint_from_usdc(&user, &amount, &user, &None);
         
         if amount > max_mint {
             assert!(res.is_err());
