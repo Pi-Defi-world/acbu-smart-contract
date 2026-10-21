@@ -1,7 +1,7 @@
 // SC-035: Tests for sync_supply — negative value rejection and token cross-check.
 #![cfg(test)]
 
-use acbu_minting::{MintingContract, MintingContractClient};
+use acbu_minting::{MintingConfig, MintingContract, MintingContractClient};
 use shared::{CurrencyCode, DECIMALS};
 use soroban_sdk::{
     contract, contractimpl, symbol_short,
@@ -107,18 +107,19 @@ fn setup(env: &Env) -> (Address, Address, Address, MintingContractClient) {
         .address();
 
     let client = MintingContractClient::new(env, &contract_id);
-    client.initialize(
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token,
-        &usdc_token,
-        &admin, // vault
-        &admin, // treasury
-        &300i128,
-        &100i128,
-        &operator,
-    );
+    client.initialize(&MintingConfig {
+        admin: admin.clone(),
+        oracle: oracle.clone(),
+        reserve_tracker: reserve_tracker.clone(),
+        acbu_token: acbu_token.clone(),
+        usdc_token: usdc_token.clone(),
+        vault: admin.clone(),
+        treasury: admin.clone(),
+        fee_rate_bps: 300,
+        fee_single_bps: 100,
+        operator: operator.clone(),
+        operator_pub_key: soroban_sdk::BytesN::from_array(env, &[0u8; 32]),
+    });
 
     (admin, operator, acbu_token, client)
 }
