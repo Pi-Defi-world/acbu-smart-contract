@@ -3,9 +3,8 @@
 use acbu_minting::{MintingContract, MintingContractClient};
 use shared::{CurrencyCode, DECIMALS};
 use soroban_sdk::{
-    contract, contractimpl, symbol_short,
     testutils::Address as _,
-    Address, BytesN, Env, Vec,
+    Address, BytesN, Env,
 };
 
 mod oracle_mock {
@@ -85,7 +84,7 @@ mod reserve_mock {
 }
 
 fn init_mint_client(
-    _env: &Env,
+    env: &Env,
     client: &MintingContractClient,
     admin: &Address,
     oracle: &Address,
