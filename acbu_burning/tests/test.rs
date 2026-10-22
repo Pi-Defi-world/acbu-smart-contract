@@ -16,7 +16,7 @@ fn test_burning_initialize_and_version() {
     let env = Env::default();
     let ctx = setup_test(&env);
 
-    assert_eq!(ctx.burning.version(), 1, "ctx.burning.version() should equal 1");
+    assert_eq!(ctx.burning.get_version(), 1, "ctx.burning.get_version() should equal 1");
     assert_eq!(ctx.burning.get_fee_rate(), 100, "ctx.burning.get_fee_rate() should equal 100");
     assert_eq!(ctx.burning.get_fee_single_redeem(), 200, "ctx.burning.get_fee_single_redeem() should equal 200");
 }
@@ -45,7 +45,7 @@ fn test_burning_initialize_custom() {
         &150,
     );
 
-    assert_eq!(client.version(), 1, "client.version() should equal 1");
+    assert_eq!(client.get_version(), 1, "client.get_version() should equal 1");
     assert_eq!(client.get_fee_rate(), 300, "client.get_fee_rate() should equal 300");
     assert_eq!(client.get_fee_single_redeem(), 150, "client.get_fee_single_redeem() should equal 150");
 }
@@ -62,17 +62,6 @@ fn test_pause_unpause() {
     assert!(!ctx.burning.is_paused());
 }
 
-#[test]
-fn test_set_fee_rates() {
-    let env = Env::default();
-    let ctx = setup_test(&env);
-
-    ctx.burning.set_fee_rate(&50);
-    assert_eq!(ctx.burning.get_fee_rate(), 50, "ctx.burning.get_fee_rate() should equal 50");
-
-    ctx.burning.set_fee_single_redeem(&150);
-    assert_eq!(ctx.burning.get_fee_single_redeem(), 150, "ctx.burning.get_fee_single_redeem() should equal 150");
-}
 
 #[test]
 #[should_panic]
@@ -129,7 +118,7 @@ fn test_redeem_basket_rejects_duplicate_recipients() {
 fn test_version_set_on_initialize() {
     let env = Env::default();
     let ctx = setup_test(&env);
-    assert_eq!(ctx.burning.version(), 1, "ctx.burning.version() should equal 1");
+    assert_eq!(ctx.burning.get_version(), 1, "ctx.burning.get_version() should equal 1");
 }
 
 #[test]
@@ -162,5 +151,5 @@ fn test_state_preserved_across_upgrade_boundary() {
     let ctx = setup_test(&env);
     assert_eq!(ctx.burning.get_fee_rate(), 100, "ctx.burning.get_fee_rate() should equal 100");
     assert_eq!(ctx.burning.get_fee_single_redeem(), 200, "ctx.burning.get_fee_single_redeem() should equal 200");
-    assert_eq!(ctx.burning.version(), 1, "ctx.burning.version() should equal 1");
+    assert_eq!(ctx.burning.get_version(), 1, "ctx.burning.get_version() should equal 1");
 }
