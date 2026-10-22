@@ -311,9 +311,9 @@ fn test_mint_from_fiat_success() {
     let acbu = client.mint_from_fiat(
         &operator,
         &recipient,
-        &currency,
+        currency.clone(),
         &fiat_amount,
-        &fintech_tx_id,
+        fintech_tx_id.clone(),
         &proof,
     );
 
@@ -378,9 +378,9 @@ fn test_mint_from_fiat_unauthorized_caller() {
     client.mint_from_fiat(
         &attacker,
         &recipient,
-        &CurrencyCode::new(&env, "NGN"),
+        CurrencyCode::new(&env, "NGN"),
         &fiat_amount,
-        &fintech_tx_id,
+        fintech_tx_id.clone(),
         &dummy_proof(&env),
     );
 }
@@ -426,9 +426,9 @@ fn test_mint_from_fiat_recipient_self_mint() {
     client.mint_from_fiat(
         &recipient,
         &recipient,
-        &CurrencyCode::new(&env, "NGN"),
+        CurrencyCode::new(&env, "NGN"),
         &fiat_amount,
-        &fintech_tx_id,
+        fintech_tx_id.clone(),
         &dummy_proof(&env),
     );
 }
@@ -474,9 +474,9 @@ fn test_mint_from_fiat_empty_tx_id() {
     client.mint_from_fiat(
         &operator,
         &recipient,
-        &CurrencyCode::new(&env, "NGN"),
+        CurrencyCode::new(&env, "NGN"),
         &fiat_amount,
-        &fintech_tx_id,
+        fintech_tx_id.clone(),
         &dummy_proof(&env),
     );
 }
@@ -524,9 +524,9 @@ fn test_mint_from_fiat_duplicate_tx_id() {
     client.mint_from_fiat(
         &operator,
         &recipient,
-        &currency,
+        currency.clone(),
         &fiat_amount,
-        &fintech_tx_id,
+        fintech_tx_id.clone(),
         &proof1,
     );
 
@@ -535,9 +535,9 @@ fn test_mint_from_fiat_duplicate_tx_id() {
     client.mint_from_fiat(
         &operator,
         &recipient,
-        &currency,
+        currency.clone(),
         &fiat_amount,
-        &fintech_tx_id,
+        fintech_tx_id.clone(),
         &proof2,
     );
 }
@@ -585,9 +585,9 @@ fn test_mint_from_fiat_below_min_amount() {
     client.mint_from_fiat(
         &operator,
         &recipient,
-        &currency,
+        currency.clone(),
         &fiat_amount,
-        &fintech_tx_id,
+        fintech_tx_id.clone(),
         &proof,
     );
 }
@@ -634,9 +634,9 @@ fn test_mint_from_fiat_above_max_amount() {
     client.mint_from_fiat(
         &operator,
         &recipient,
-        &currency,
+        currency.clone(),
         &fiat_amount,
-        &fintech_tx_id,
+        fintech_tx_id.clone(),
         &proof,
     );
 }
@@ -684,9 +684,9 @@ fn test_mint_from_fiat_admin_not_default_operator() {
     let acbu = client.mint_from_fiat(
         &operator,
         &recipient,
-        &currency,
+        currency.clone(),
         &fiat_amount,
-        &fintech_tx_id,
+        fintech_tx_id.clone(),
         &proof,
     );
     assert!(acbu > 0);
@@ -734,9 +734,9 @@ fn test_mint_from_fiat_admin_when_operator_set() {
     client.mint_from_fiat(
         &admin,
         &recipient,
-        &CurrencyCode::new(&env, "NGN"),
+        CurrencyCode::new(&env, "NGN"),
         &fiat_amount,
-        &fintech_tx_id,
+        fintech_tx_id.clone(),
         &dummy_proof(&env),
     );
 }
@@ -873,9 +873,9 @@ fn test_mint_from_fiat_rejects_contract_recipient() {
     client.mint_from_fiat(
         &operator,
         &contract_recipient,
-        &currency,
+        currency.clone(),
         &fiat_amount,
-        &fintech_tx_id,
+        fintech_tx_id.clone(),
         &proof,
     );
 }
