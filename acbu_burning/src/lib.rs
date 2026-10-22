@@ -1,4 +1,8 @@
 #![no_std]
+#![allow(
+    clippy::declare_interior_mutable_const,
+    clippy::borrow_interior_mutable_const
+)]
 use soroban_sdk::{
     contract, contractimpl, contractmeta, contracttype, symbol_short, vec, Address, BytesN, Env,
     IntoVal, String as SorobanString, Symbol, Vec,
@@ -8,8 +12,8 @@ use shared::{
     any_circuit_peer_paused, calculate_fee, check_oracle_freshness, is_account_address,
     reentrancy_guard, validate_circuit_peers, BurnEvent, ContractError, ContractPhase,
     CurrencyCode, DataKey as SharedDataKey, BASIS_POINTS, CONTRACT_VERSION, DECIMALS,
-    MINTING_RECORD_BURN, MIN_BURN_AMOUNT, ORACLE_GET_ACBU_RATE_WITH_TS, ORACLE_GET_BASKET_WEIGHT,
-    ORACLE_GET_CURRENCIES, ORACLE_GET_RATE_WITH_TS, ORACLE_GET_S_TOKEN_ADDR, RESERVE_IS_SUFFICIENT,
+    MINTING_RECORD_BURN, MIN_BURN_AMOUNT, ORACLE_GET_ACBU_TWAP_WITH_TS, ORACLE_GET_BASKET_WEIGHT,
+    ORACLE_GET_CURRENCIES, ORACLE_GET_S_TOKEN_ADDR, ORACLE_GET_TWAP_WITH_TS, RESERVE_IS_SUFFICIENT,
     TOKEN_GET_TOTAL_SUPPLY, UPDATE_INTERVAL_SECONDS,
 };
 
@@ -182,7 +186,7 @@ impl BurningContract {
 
         let (acbu_rate, oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
+            &Symbol::new(&env, ORACLE_GET_ACBU_TWAP_WITH_TS),
             vec![&env],
         );
         if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
@@ -191,7 +195,7 @@ impl BurningContract {
 
         let (rate, rate_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
+            &Symbol::new(&env, ORACLE_GET_TWAP_WITH_TS),
             vec![&env, currency.clone().into_val(&env)],
         );
         if !check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS) {
@@ -316,7 +320,7 @@ impl BurningContract {
 
         let (acbu_rate, oracle_timestamp): (i128, u64) = env.invoke_contract(
             &oracle_addr,
-            &Symbol::new(&env, ORACLE_GET_ACBU_RATE_WITH_TS),
+            &Symbol::new(&env, ORACLE_GET_ACBU_TWAP_WITH_TS),
             vec![&env],
         );
         if !check_oracle_freshness(&env, oracle_timestamp, UPDATE_INTERVAL_SECONDS) {
@@ -387,7 +391,7 @@ impl BurningContract {
                 }
                 let (rate, _): (i128, u64) = env.invoke_contract(
                     &oracle_addr,
-                    &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
+                    &Symbol::new(&env, ORACLE_GET_TWAP_WITH_TS),
                     vec![&env, currency.clone().into_val(&env)],
                 );
                 if rate <= 0 {
@@ -461,7 +465,7 @@ impl BurningContract {
 
             let (rate, rate_timestamp): (i128, u64) = env.invoke_contract(
                 &oracle_addr,
-                &Symbol::new(&env, ORACLE_GET_RATE_WITH_TS),
+                &Symbol::new(&env, ORACLE_GET_TWAP_WITH_TS),
                 vec![&env, currency.clone().into_val(&env)],
             );
             if !check_oracle_freshness(&env, rate_timestamp, UPDATE_INTERVAL_SECONDS) {

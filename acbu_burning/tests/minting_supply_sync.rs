@@ -26,6 +26,7 @@ fn link_minting(ctx: &TestContext) -> MintingContractClient<'static> {
         fee_rate_bps: 30,
         fee_single_bps: 100,
         operator: Address::generate(env),
+        operator_pub_key: soroban_sdk::BytesN::from_array(env, &[0u8; 32]),
     });
     minting.set_burning_contract(&ctx.burning_id);
     ctx.burning.set_minting_contract(&minting.address);

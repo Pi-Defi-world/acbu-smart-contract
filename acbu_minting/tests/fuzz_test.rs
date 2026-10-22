@@ -1,7 +1,6 @@
 #![cfg(test)]
 
 use acbu_minting::{MintingContract, MintingContractClient};
-use shared::DECIMALS;
 use soroban_sdk::{
     testutils::Address as _,
     Address, BytesN, Env,
@@ -22,6 +21,17 @@ mod mocks {
         pub fn get_acbu_usd_rate_with_timestamp(env: Env) -> (i128, u64) {
             (DECIMALS, env.ledger().timestamp())
         }
+
+        pub fn get_acbu_usd_twap(env: Env) -> i128 {
+            Self::get_acbu_usd_twap_with_timestamp(env).0
+        }
+
+        pub fn get_acbu_usd_twap_with_timestamp(env: Env) -> (i128, u64) {
+            // W10-SEC-012: mocks have no TWAP history, so the 24 h average
+            // equals the mocked spot rate (the real contract's single-
+            // observation fallback).
+            Self::get_acbu_usd_rate_with_timestamp(env)
+        }
         pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
             let mut v = Vec::new(&env);
             v.push_back(CurrencyCode::new(&env, "NGN"));
@@ -31,6 +41,14 @@ mod mocks {
         pub fn get_rate(_env: Env, _c: CurrencyCode) -> i128 { DECIMALS }
         pub fn get_rate_with_timestamp(env: Env, _c: CurrencyCode) -> (i128, u64) {
             (DECIMALS, env.ledger().timestamp())
+        }
+
+        pub fn get_twap(env: Env, currency: CurrencyCode) -> i128 {
+            Self::get_twap_with_timestamp(env, currency).0
+        }
+
+        pub fn get_twap_with_timestamp(env: Env, currency: CurrencyCode) -> (i128, u64) {
+            Self::get_rate_with_timestamp(env, currency)
         }
         pub fn get_s_token_address(env: Env, _c: CurrencyCode) -> Address {
             env.storage().instance().get(&soroban_sdk::symbol_short!("STK")).unwrap()
@@ -89,7 +107,7 @@ proptest! {
         
         let max_mint = 1_000_000_000_000;
         
-        let res = client.try_mint_from_usdc(&user, &amount, &user);
+        let res = client.try_mint_from_usdc(&user, &amount, &user, &None);
         
         if amount > max_mint {
             assert!(res.is_err());

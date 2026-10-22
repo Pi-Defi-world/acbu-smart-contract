@@ -11,7 +11,9 @@ fn constructor_stores_owner_and_leaves_vrf_unconfigured() {
     let client = ZkGateClient::new(&env, &contract_id);
     let owner = Address::generate(&env);
 
-    client.__constructor(&owner);
+    env.as_contract(&contract_id, || {
+        ZkGate::__constructor(env.clone(), owner.clone());
+    });
 
     assert_eq!(client.get_vrf(), None);
 }
@@ -25,7 +27,9 @@ fn owner_can_configure_a_verifier_contract() {
     let owner = Address::generate(&env);
     let verifier = Address::generate(&env);
 
-    client.__constructor(&owner);
+    env.as_contract(&contract_id, || {
+        ZkGate::__constructor(env.clone(), owner.clone());
+    });
     client.set_vrf(&owner, &verifier);
 
     assert_eq!(client.get_vrf(), Some(verifier));
@@ -40,6 +44,8 @@ fn self_verifier_is_rejected() {
     let client = ZkGateClient::new(&env, &contract_id);
     let owner = Address::generate(&env);
 
-    client.__constructor(&owner);
+    env.as_contract(&contract_id, || {
+        ZkGate::__constructor(env.clone(), owner.clone());
+    });
     client.set_vrf(&owner, &contract_id);
 }

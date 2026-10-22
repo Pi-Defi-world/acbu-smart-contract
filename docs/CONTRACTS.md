@@ -49,7 +49,8 @@ Handles conversion of USDC and fiat deposits into ACBU tokens.
 
 ### Integration
 
-- Oracle Contract: ACBU/USD and currency/USD rates
+- Oracle Contract: 24-hour TWAP of the ACBU/USD and currency/USD rates
+  (`get_acbu_usd_twap_with_timestamp`, `get_twap_with_timestamp`)
 - Reserve Tracker: Reserve verification
 - ACBU Token: Minting tokens
 - USDC Token: Receiving deposits
@@ -95,6 +96,8 @@ Aggregates exchange rates from multiple validators and provides rate data.
 - `update_rate`: Update exchange rate (validator function)
 - `get_rate`: Get current rate for a currency
 - `get_acbu_usd_rate`: Get ACBU/USD rate (basket-weighted)
+- `get_twap` / `get_twap_with_timestamp`: 24-hour time-weighted average rate for a currency
+- `get_acbu_usd_twap` / `get_acbu_usd_twap_with_timestamp`: 24-hour time-weighted basket ACBU/USD rate
 - `add_validator/remove_validator`: Manage validators
 
 ### Rate Calculation
@@ -103,6 +106,13 @@ Aggregates exchange rates from multiple validators and provides rate data.
 - Outlier detection (>3% deviation)
 - Emergency updates (>5% moves)
 - Basket-weighted ACBU/USD rate
+- 24-hour time-weighted average (TWAP) built from committed rates. The
+  accumulator is updated on every `update_rate` / `set_rate_admin` and is
+  bounded to a fixed number of checkpoints per currency. Mint and burn
+  conversions use the TWAP getters (W10-SEC-012) so a transient spot
+  manipulation cannot move the conversion rate; the `*_with_timestamp`
+  variants still return the latest spot timestamp so feed-freshness checks
+  are unaffected.
 
 ### Access Control
 

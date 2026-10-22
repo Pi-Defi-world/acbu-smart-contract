@@ -22,6 +22,14 @@ mod mocks {
             (DECIMALS, env.ledger().timestamp())
         }
 
+        pub fn get_twap(env: Env, currency: CurrencyCode) -> i128 {
+            Self::get_twap_with_timestamp(env, currency).0
+        }
+
+        pub fn get_twap_with_timestamp(env: Env, currency: CurrencyCode) -> (i128, u64) {
+            Self::get_rate_with_timestamp(env, currency)
+        }
+
         pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
             let mut v = Vec::new(&env);
             v.push_back(CurrencyCode::new(&env, "NGN"));
