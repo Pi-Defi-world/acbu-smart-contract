@@ -1,3 +1,7 @@
+#![allow(
+    clippy::declare_interior_mutable_const,
+    clippy::borrow_interior_mutable_const
+)]
 #![no_std]
 
 use soroban_sdk::{

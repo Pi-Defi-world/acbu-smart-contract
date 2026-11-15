@@ -1,3 +1,7 @@
+#![allow(
+    clippy::declare_interior_mutable_const,
+    clippy::borrow_interior_mutable_const
+)]
 //! # C-043 — Emergency Multisig for Admin Operations
 //!
 //! This contract implements an M-of-N multisig guard for admin operations

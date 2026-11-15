@@ -1,4 +1,8 @@
 #![no_std]
+#![allow(
+    clippy::declare_interior_mutable_const,
+    clippy::borrow_interior_mutable_const
+)]
 
 use soroban_sdk::{
     contracterror, contracttype, Address, BytesN, Env, IntoVal, String as SorobanString, Symbol,
@@ -518,6 +522,13 @@ pub const ORACLE_GET_ACBU_RATE: &str = "get_acbu_usd_rate";
 pub const ORACLE_GET_ACBU_RATE_WITH_TS: &str = "get_acbu_usd_rate_with_timestamp";
 pub const ORACLE_GET_RATE: &str = "get_rate";
 pub const ORACLE_GET_RATE_WITH_TS: &str = "get_rate_with_timestamp";
+/// 24-hour time-weighted average variants. Mint/burn conversions use these
+/// instead of the spot getters so a brief spot manipulation cannot move the
+/// conversion (W10-SEC-012).
+pub const ORACLE_GET_TWAP: &str = "get_twap";
+pub const ORACLE_GET_TWAP_WITH_TS: &str = "get_twap_with_timestamp";
+pub const ORACLE_GET_ACBU_TWAP: &str = "get_acbu_usd_twap";
+pub const ORACLE_GET_ACBU_TWAP_WITH_TS: &str = "get_acbu_usd_twap_with_timestamp";
 pub const ORACLE_GET_CURRENCIES: &str = "get_currencies";
 pub const ORACLE_GET_BASKET_WEIGHT: &str = "get_basket_weight";
 pub const ORACLE_GET_S_TOKEN_ADDR: &str = "get_s_token_address";

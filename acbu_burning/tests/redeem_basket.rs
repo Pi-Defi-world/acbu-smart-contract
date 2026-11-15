@@ -48,7 +48,7 @@ fn test_redeem_basket_success() {
 
     let amounts = ctx
         .burning
-        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+        .redeem_basket(&ctx.user, &recipients, &burn_amount, &None);
 
     // Fee for basket is 1% (100 bps)
     let expected_total_fee = (burn_amount * 100) / BASIS_POINTS;
@@ -114,7 +114,7 @@ fn test_redeem_basket_allocates_weighted_remainder() {
 
     let amounts = ctx
         .burning
-        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+        .redeem_basket(&ctx.user, &recipients, &burn_amount, &None);
 
     let expected_fee = (burn_amount * 100) / BASIS_POINTS;
     let expected_net = burn_amount - expected_fee;
@@ -142,7 +142,7 @@ fn test_redeem_basket_duplicate_recipients() {
     ctx.oracle.set_stoken(&c2, &st2_id);
 
     ctx.burning
-        .redeem_basket(&ctx.user, &recipients, &(100 * DECIMALS));
+        .redeem_basket(&ctx.user, &recipients, &(100 * DECIMALS), &None);
 }
 
 #[test]
@@ -176,7 +176,7 @@ fn test_redeem_basket_insufficient_recipients() {
     ctx.oracle.set_timestamp(&c2, &ts);
 
     ctx.burning
-        .redeem_basket(&ctx.user, &recipients, &(100 * DECIMALS));
+        .redeem_basket(&ctx.user, &recipients, &(100 * DECIMALS), &None);
 }
 
 #[test]
@@ -217,7 +217,7 @@ fn test_redeem_basket_zero_weight_leg() {
     let recipients = vec![&env, Address::generate(&env), Address::generate(&env)];
     let amounts = ctx
         .burning
-        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+        .redeem_basket(&ctx.user, &recipients, &burn_amount, &None);
 
     assert!(amounts.get(0).unwrap() > 0);
     assert_eq!(amounts.get(1).unwrap(), 0, "amounts.get(1).unwrap() should equal 0");
@@ -255,7 +255,7 @@ fn test_redeem_basket_exact_min_amount() {
     let recipients = vec![&env, recipient.clone()];
     let amounts = ctx
         .burning
-        .redeem_basket(&ctx.user, &recipients, &min_amount);
+        .redeem_basket(&ctx.user, &recipients, &min_amount, &None);
 
     assert!(amounts.get(0).unwrap() > 0);
     assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
@@ -275,7 +275,7 @@ fn test_redeem_basket_zero_amount() {
     ctx.oracle.set_weights(&weights);
 
     let recipients = vec![&env, Address::generate(&env)];
-    ctx.burning.redeem_basket(&ctx.user, &recipients, &0);
+    ctx.burning.redeem_basket(&ctx.user, &recipients, &0, &None);
 }
 
 #[test]
@@ -289,7 +289,7 @@ fn test_redeem_basket_empty_currencies() {
 
     let recipients = vec![&env, Address::generate(&env)];
     ctx.burning
-        .redeem_basket(&ctx.user, &recipients, &(100 * DECIMALS));
+        .redeem_basket(&ctx.user, &recipients, &(100 * DECIMALS), &None);
 }
 
 #[test]
@@ -321,7 +321,7 @@ fn test_redeem_basket_insufficient_reserves() {
 
     let recipients = vec![&env, Address::generate(&env), Address::generate(&env)];
     ctx.burning
-        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+        .redeem_basket(&ctx.user, &recipients, &burn_amount, &None);
 }
 
 #[test]
@@ -354,7 +354,7 @@ fn test_redeem_basket_self_redeem() {
     let recipients = vec![&env, ctx.user.clone()];
     let amounts = ctx
         .burning
-        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+        .redeem_basket(&ctx.user, &recipients, &burn_amount, &None);
     assert!(amounts.get(0).unwrap() > 0);
 }
 
@@ -391,14 +391,14 @@ fn test_redeem_basket_multiple_calls() {
     // First redemption
     let amounts1 = ctx
         .burning
-        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+        .redeem_basket(&ctx.user, &recipients, &burn_amount, &None);
     let out1 = amounts1.get(0).unwrap();
     assert!(out1 > 0);
 
     // Second redemption
     let amounts2 = ctx
         .burning
-        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+        .redeem_basket(&ctx.user, &recipients, &burn_amount, &None);
     let out2 = amounts2.get(0).unwrap();
     assert!(out2 > 0);
 
@@ -464,7 +464,7 @@ fn test_redeem_basket_prime_amount_preserves_total() {
 
     let amounts = ctx
         .burning
-        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+        .redeem_basket(&ctx.user, &recipients, &burn_amount, &None);
 
     let expected_fee = (burn_amount * 100) / BASIS_POINTS;
     let expected_net = burn_amount - expected_fee;
@@ -520,7 +520,7 @@ fn test_redeem_basket_small_amount_no_dust_loss() {
 
     let amounts = ctx
         .burning
-        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+        .redeem_basket(&ctx.user, &recipients, &burn_amount, &None);
 
     let expected_fee = (burn_amount * 100) / BASIS_POINTS;
     let expected_net = burn_amount - expected_fee;
@@ -586,7 +586,7 @@ fn test_redeem_basket_uneven_weights_no_precision_loss() {
 
     let amounts = ctx
         .burning
-        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+        .redeem_basket(&ctx.user, &recipients, &burn_amount, &None);
 
     let total_out = amounts.get(0).unwrap() + amounts.get(1).unwrap() + amounts.get(2).unwrap();
     let expected_fee = (burn_amount * 100) / BASIS_POINTS;
@@ -634,7 +634,7 @@ fn test_redeem_basket_fee_exact_divisibility() {
 
     let amounts = ctx
         .burning
-        .redeem_basket(&ctx.user, &recipients, &burn_amount);
+        .redeem_basket(&ctx.user, &recipients, &burn_amount, &None);
 
     // Fee = 1%, net = 99 * DECIMALS
     // With single currency and weight = 10000, amounts[0] must be exactly 99 * DECIMALS

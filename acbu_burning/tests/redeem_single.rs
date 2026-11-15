@@ -33,6 +33,7 @@ fn test_redeem_single_success() {
     let out = ctx
         .burning
         .redeem_single(&ctx.user, &recipient, &burn_amount, &currency, &None);
+    let expected_fee = (burn_amount * 200) / BASIS_POINTS;
     let net_acbu = burn_amount - expected_fee;
     let expected_out = (net_acbu * acbu_rate) / ngn_rate;
 
@@ -65,7 +66,7 @@ fn test_redeem_single_fee_calculation() {
     let recipient = Address::generate(&env);
     let out = ctx
         .burning
-        .redeem_single(&ctx.user, &recipient, &burn_amount, &currency);
+        .redeem_single(&ctx.user, &recipient, &burn_amount, &currency, &None);
 
     // Verify fee: 2% of 100 * DECIMALS = 2 * DECIMALS
     let expected_out = 98 * DECIMALS;
@@ -97,7 +98,7 @@ fn test_redeem_single_self_redeem() {
     // User redeems to themselves
     let out = ctx
         .burning
-        .redeem_single(&ctx.user, &ctx.user, &burn_amount, &currency);
+        .redeem_single(&ctx.user, &ctx.user, &burn_amount, &currency, &None);
     assert!(out > 0);
     assert_eq!(stoken_client.balance(&ctx.user), out, "stoken_client.balance(&ctx.user) should equal out");
 }
@@ -118,7 +119,7 @@ fn test_redeem_single_zero_amount() {
     ctx.oracle.set_timestamp(&currency, &ts);
 
     ctx.burning
-        .redeem_single(&ctx.user, &recipient, &0, &currency);
+        .redeem_single(&ctx.user, &recipient, &0, &currency, &None);
 }
 
 #[test]
@@ -137,7 +138,7 @@ fn test_redeem_single_below_min_amount() {
 
     let invalid_amount = 5_000_000; // Below MIN_BURN_AMOUNT (10_000_000)
     ctx.burning
-        .redeem_single(&ctx.user, &recipient, &invalid_amount, &currency);
+        .redeem_single(&ctx.user, &recipient, &invalid_amount, &currency, &None);
 }
 
 #[test]
@@ -164,7 +165,7 @@ fn test_redeem_single_zero_rate() {
     ctx.oracle.set_timestamp(&currency, &ts);
 
     ctx.burning
-        .redeem_single(&ctx.user, &recipient, &burn_amount, &currency);
+        .redeem_single(&ctx.user, &recipient, &burn_amount, &currency, &None);
 }
 
 #[test]
@@ -189,7 +190,7 @@ fn test_redeem_single_insufficient_reserves() {
     ctx.reserve_tracker.set_reserve_ok(&false);
 
     ctx.burning
-        .redeem_single(&ctx.user, &recipient, &(100 * DECIMALS), &currency);
+        .redeem_single(&ctx.user, &recipient, &(100 * DECIMALS), &currency, &None);
 }
 
 #[test]
@@ -218,13 +219,13 @@ fn test_redeem_single_multiple_calls() {
     // First redemption
     let out1 = ctx
         .burning
-        .redeem_single(&ctx.user, &recipient, &burn_amount, &currency);
+        .redeem_single(&ctx.user, &recipient, &burn_amount, &currency, &None);
     assert!(out1 > 0);
 
     // Second redemption
     let out2 = ctx
         .burning
-        .redeem_single(&ctx.user, &recipient, &burn_amount, &currency);
+        .redeem_single(&ctx.user, &recipient, &burn_amount, &currency, &None);
     assert!(out2 > 0);
 
     // Total stoken received
@@ -258,7 +259,7 @@ fn test_redeem_single_exact_min_amount() {
     let recipient = Address::generate(&env);
     let out = ctx
         .burning
-        .redeem_single(&ctx.user, &recipient, &min_amount, &currency);
+        .redeem_single(&ctx.user, &recipient, &min_amount, &currency, &None);
 
     assert!(out > 0);
     assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
@@ -289,7 +290,7 @@ fn test_redeem_single_large_amount() {
     let recipient = Address::generate(&env);
     let out = ctx
         .burning
-        .redeem_single(&ctx.user, &recipient, &burn_amount, &currency);
+        .redeem_single(&ctx.user, &recipient, &burn_amount, &currency, &None);
 
     assert!(out > 0);
     assert_eq!(ctx.acbu_token.balance(&ctx.user), 0, "ctx.acbu_token.balance(&ctx.user) should equal 0");
@@ -311,7 +312,7 @@ fn test_redeem_single_stale_acbu_rate() {
 
     let recipient = Address::generate(&env);
     ctx.burning
-        .redeem_single(&ctx.user, &recipient, &(100 * DECIMALS), &currency);
+        .redeem_single(&ctx.user, &recipient, &(100 * DECIMALS), &currency, &None);
 }
 
 #[test]
@@ -331,7 +332,7 @@ fn test_redeem_single_stale_currency_rate() {
     // Currency rate timestamp is unset → defaults to 0 in mock → stale
     let recipient = Address::generate(&env);
     ctx.burning
-        .redeem_single(&ctx.user, &recipient, &(100 * DECIMALS), &currency);
+        .redeem_single(&ctx.user, &recipient, &(100 * DECIMALS), &currency, &None);
 }
 
 #[test]

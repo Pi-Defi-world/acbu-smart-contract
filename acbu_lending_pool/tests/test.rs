@@ -183,6 +183,7 @@ fn test_borrow_basic() {
     client.initialize(&admin, &acbu_token, &0);
 
     let token_admin = StellarAssetClient::new(&env, &acbu_token);
+    let token_client = TokenClient::new(&env, &acbu_token);
 
     // Lender deposits liquidity into the pool
     let lender = Address::generate(&env);

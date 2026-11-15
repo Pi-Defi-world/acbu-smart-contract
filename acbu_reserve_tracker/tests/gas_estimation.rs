@@ -1,7 +1,7 @@
 //! # Gas / Budget Regression Tests — Reserve Tracker (W2-Z-022)
 //!
 //! Covers adversarial inputs to `verify_merkle_proof`, `is_reserve_sufficient`,
-//! `verify_reserves_manual`, `submit_attestation`, and `get_all_reserves`.
+//! `is_reserve_sufficient`, `submit_attestation`, and `get_all_reserves`.
 //!
 //! Each test follows the same pattern as `acbu_oracle/tests/gas_estimation.rs`:
 //!   1. Reset the budget tracker to zero.
@@ -17,7 +17,7 @@
 #![cfg(test)]
 
 use acbu_reserve_tracker::{AttestationLeaf, ReserveTrackerContract, ReserveTrackerContractClient};
-use shared::{CurrencyCode, ReserveData, DECIMALS};
+use shared::{CurrencyCode, DECIMALS};
 use soroban_sdk::{
     testutils::{budget::Budget, Address as _, Ledger},
     Address, Bytes, BytesN, Env, Vec,
@@ -530,10 +530,10 @@ fn gas_verify_merkle_proof_max_value_leaf_stays_under_budget() {
     );
 }
 
-// ── is_reserve_sufficient / verify_reserves_manual budget tests ───────────────
+// ── is_reserve_sufficient / is_reserve_sufficient budget tests ───────────────
 
 /// Populates 20 currencies and checks that `is_reserve_sufficient` (called via
-/// `verify_reserves_manual`) iterates the full map without blowing the budget.
+/// `is_reserve_sufficient`) iterates the full map without blowing the budget.
 #[test]
 fn gas_is_reserve_sufficient_20_currencies_stays_under_budget() {
     let env = Env::default();
@@ -570,7 +570,7 @@ fn gas_is_reserve_sufficient_20_currencies_stays_under_budget() {
     budget.reset_unlimited();
     budget.reset_tracker();
 
-    let result = client.verify_reserves_manual(&supply);
+    let result = client.is_reserve_sufficient(&supply);
 
     let cpu = budget.cpu_instruction_cost();
     let mem = budget.memory_bytes_cost();
@@ -622,7 +622,7 @@ fn gas_is_reserve_sufficient_max_i128_supply_stays_under_budget() {
     //   total_acbu_usd = supply * DECIMALS / DECIMALS = supply
     // which would overflow checked_mul for i128::MAX/2 * DECIMALS.
     // The contract panics via expect() on overflow, so we use try_ to capture it.
-    let result = client.try_verify_reserves_manual(&supply);
+    let result = client.try_is_reserve_sufficient(&supply);
 
     let cpu = budget.cpu_instruction_cost();
     let mem = budget.memory_bytes_cost();
@@ -668,7 +668,7 @@ fn gas_is_reserve_sufficient_one_over_threshold_stays_under_budget() {
     budget.reset_unlimited();
     budget.reset_tracker();
 
-    let result = client.verify_reserves_manual(&supply);
+    let result = client.is_reserve_sufficient(&supply);
 
     let cpu = budget.cpu_instruction_cost();
     let mem = budget.memory_bytes_cost();
@@ -700,7 +700,7 @@ fn gas_is_reserve_sufficient_zero_supply_early_exit_stays_under_budget() {
     budget.reset_unlimited();
     budget.reset_tracker();
 
-    let result = client.verify_reserves_manual(&supply);
+    let result = client.is_reserve_sufficient(&supply);
 
     let cpu = budget.cpu_instruction_cost();
     let mem = budget.memory_bytes_cost();

@@ -1,7 +1,7 @@
 // SC-035: Tests for sync_supply — negative value rejection and token cross-check.
 #![cfg(test)]
 
-use acbu_minting::{MintingContract, MintingContractClient};
+use acbu_minting::{MintingConfig, MintingContract, MintingContractClient};
 use shared::{CurrencyCode, DECIMALS};
 use soroban_sdk::{
     contract, contractimpl, symbol_short,
@@ -27,6 +27,17 @@ mod oracle_mock {
         pub fn get_acbu_usd_rate_with_timestamp(env: Env) -> (i128, u64) {
             (DECIMALS, env.ledger().timestamp())
         }
+
+        pub fn get_acbu_usd_twap(env: Env) -> i128 {
+            Self::get_acbu_usd_twap_with_timestamp(env).0
+        }
+
+        pub fn get_acbu_usd_twap_with_timestamp(env: Env) -> (i128, u64) {
+            // W10-SEC-012: mocks have no TWAP history, so the 24 h average
+            // equals the mocked spot rate (the real contract's single-
+            // observation fallback).
+            Self::get_acbu_usd_rate_with_timestamp(env)
+        }
         pub fn get_currencies(env: Env) -> Vec<CurrencyCode> {
             let mut v = Vec::new(&env);
             v.push_back(CurrencyCode::new(&env, "NGN"));
@@ -40,6 +51,14 @@ mod oracle_mock {
         }
         pub fn get_rate_with_timestamp(env: Env, _c: CurrencyCode) -> (i128, u64) {
             (DECIMALS, env.ledger().timestamp())
+        }
+
+        pub fn get_twap(env: Env, currency: CurrencyCode) -> i128 {
+            Self::get_twap_with_timestamp(env, currency).0
+        }
+
+        pub fn get_twap_with_timestamp(env: Env, currency: CurrencyCode) -> (i128, u64) {
+            Self::get_rate_with_timestamp(env, currency)
         }
         pub fn get_s_token_address(env: Env, _c: CurrencyCode) -> Address {
             env.storage()
@@ -88,18 +107,19 @@ fn setup(env: &Env) -> (Address, Address, Address, MintingContractClient) {
         .address();
 
     let client = MintingContractClient::new(env, &contract_id);
-    client.initialize(
-        &admin,
-        &oracle,
-        &reserve_tracker,
-        &acbu_token,
-        &usdc_token,
-        &admin, // vault
-        &admin, // treasury
-        &300i128,
-        &100i128,
-        &operator,
-    );
+    client.initialize(&MintingConfig {
+        admin: admin.clone(),
+        oracle: oracle.clone(),
+        reserve_tracker: reserve_tracker.clone(),
+        acbu_token: acbu_token.clone(),
+        usdc_token: usdc_token.clone(),
+        vault: admin.clone(),
+        treasury: admin.clone(),
+        fee_rate_bps: 300,
+        fee_single_bps: 100,
+        operator: operator.clone(),
+        operator_pub_key: soroban_sdk::BytesN::from_array(env, &[0u8; 32]),
+    });
 
     (admin, operator, acbu_token, client)
 }
