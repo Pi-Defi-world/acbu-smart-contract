@@ -232,6 +232,17 @@ No auth is required on the read-only oracle call. The chain is safe as long as b
 **Scenario:** An attacker passes `operator = legitimate_operator_address` but does not hold the operator key.  
 **Mitigation:** The contract checks `operator == expected_operator` (stored at init) AND calls `operator.require_auth()`. Both checks must pass.
 
+### 4.3a Unbacked Minting by a Compromised Admin or Operator (W11-CAR-021)
+
+**Scenario:** An attacker holding the admin key (and possibly the operator key) mints ACBU with no real fiat deposit behind it.
+**Mitigation:** `mint_from_fiat` requires a `FiatSettlementProof`: an ed25519 signature by the licensed fintech partner's attestation key over the tx id, recipient, amount, currency and ledger timestamp. That key is held by the partner, not by the ACBU backend:
+- it must not be the ed25519 key of the operator or admin account (`PartnerKeyNotIndependent`, checked at `initialize`, `set_operator`, `set_operator_pub_key` and `transfer_admin`);
+- rotating it with `set_operator_pub_key(new_key, consent)` needs the admin's auth **and** `consent`, a signature by the current partner key over `sha256("ACBU partner attestation key rotation v1" ++ XDR(contract) ++ new_key ++ XDR(nonce))`. The message is returned by `get_partner_key_rotation_message`, the nonce by `get_partner_key_rotation_nonce`, and it increases on every rotation, so a consent works once, for one key, on one contract.
+
+Before this change the admin could call `set_operator_pub_key` alone, install a key it controlled, and mint.
+
+**Residual risk:** `upgrade` (admin only) can still replace the contract code; that is covered by the upgrade runbook, not by this check.
+
 ### 4.4 Stale Oracle Rate Exploitation
 
 **Scenario:** An attacker waits for oracle rates to go stale, then calls a mint/burn function to exploit the outdated price.  

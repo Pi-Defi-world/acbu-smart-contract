@@ -34,7 +34,7 @@ pub struct SettlementProof {
 /// AC-038: Cryptographic fiat-settlement attestation.
 ///
 /// Before `mint_from_fiat` mints any ACBU, the caller must supply an ed25519
-/// signature produced by the operator's off-chain key over the canonical
+/// signature produced by the fintech partner's attestation key over the canonical
 /// commitment message.  The contract verifies the signature on-chain using
 /// `env.crypto().ed25519_verify`, so a compromised *Stellar* operator key
 /// alone is insufficient — the attacker would also need the separate ed25519
@@ -44,9 +44,13 @@ pub struct SettlementProof {
 ///   sha256( XDR(fintech_tx_id) ++ XDR(recipient) ++ XDR(fiat_amount)
 ///           ++ XDR(currency)   ++ XDR(ledger_timestamp) )
 ///
-/// The operator registers their ed25519 public key during `initialize` (via
-/// `MintingConfig.operator_pub_key`) and may rotate it later via
-/// `set_operator_pub_key` (admin-only, with full auth).
+/// The key is the licensed fintech partner's attestation key (W11-CAR-021).
+/// It is registered at `initialize` (via `MintingConfig.operator_pub_key`) and
+/// must not be the ed25519 key behind the operator or admin account, so neither
+/// Stellar key can produce a settlement proof on its own. Rotating it via
+/// `set_operator_pub_key` needs the admin's auth *and* a consent signature from
+/// the current partner key, so a compromised admin cannot swap in a key it
+/// controls.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FiatSettlementProof {
@@ -94,6 +98,9 @@ pub struct DataKey {
     /// AC-038: ed25519 public key used to verify fiat-settlement attestations in
     /// `mint_from_fiat`.  Stored as `BytesN<32>`; rotatable by admin only.
     pub operator_pub_key: Symbol,
+    /// W11-CAR-021: number of partner-key rotations so far. Bound into each
+    /// rotation consent so a consent signature can only be used once.
+    pub partner_key_nonce: Symbol,
 }
 
 const DATA_KEY: DataKey = DataKey {
@@ -122,6 +129,7 @@ const DATA_KEY: DataKey = DataKey {
     circuit_peers: symbol_short!("CB_PEERS"),
     burning_contract: symbol_short!("BURN_CTR"),
     operator_pub_key: symbol_short!("OP_PUBKY"),
+    partner_key_nonce: symbol_short!("PK_NONCE"),
 };
 
 /// Admin rotation timelock: the pending admin must wait this long before
@@ -176,12 +184,16 @@ pub enum MintingError {
     /// `record_burn` called with a non-positive amount (AC-005).
     InvalidBurnAmount = 5031,
     /// AC-038: The ed25519 attestation signature on the fiat-settlement proof
-    /// does not verify against the stored operator public key.  This means the
+    /// does not verify against the stored partner attestation key.  This means the
     /// mint was not backed by a cryptographically attested off-chain settlement.
     InvalidFiatSettlementProof = 5032,
     /// AC-038: No operator ed25519 public key has been registered; call
     /// `set_operator_pub_key` (admin only) before using `mint_from_fiat`.
     OperatorPubKeyNotSet = 5033,
+    /// W11-CAR-021: the fintech partner's attestation key is the ed25519 key of
+    /// the operator or admin account, so that Stellar key could attest its own
+    /// mints. The attestation key must be held independently.
+    PartnerKeyNotIndependent = 5034,
     Unknown = 5999,
 }
 
@@ -221,6 +233,9 @@ impl Display for MintingError {
             Self::InvalidBurnAmount => "invalid burn amount",
             Self::InvalidFiatSettlementProof => "fiat settlement proof signature is invalid",
             Self::OperatorPubKeyNotSet => "operator ed25519 public key not set",
+            Self::PartnerKeyNotIndependent => {
+                "partner attestation key must differ from the operator and admin account keys"
+            }
             Self::Unknown => "unknown minting error",
         };
         f.write_str(message)
@@ -240,9 +255,10 @@ pub struct MintingConfig {
     pub fee_rate_bps: i128,
     pub fee_single_bps: i128,
     pub operator: Address,
-    /// AC-038: ed25519 public key (32 bytes) corresponding to the operator's
-    /// off-chain signing key.  Every `mint_from_fiat` call must supply a valid
-    /// ed25519 attestation signed by this key.
+    /// AC-038 / W11-CAR-021: the fintech partner's ed25519 attestation key (32 bytes),
+    /// held independently of the operator and admin accounts (the field keeps its
+    /// original name for compatibility).  Every `mint_from_fiat` call must supply
+    /// a valid ed25519 attestation signed by this key.
     pub operator_pub_key: BytesN<32>,
 }
 
@@ -317,6 +333,14 @@ impl MintingContract {
         if config.admin == config.operator {
             env.panic_with_error(MintingError::InvalidRoleSeparation);
         }
+        // W11-CAR-021: the partner's attestation key must not be the key behind
+        // either Stellar account, or that account could attest its own mints.
+        assert_partner_key_independent(
+            &env,
+            &config.operator_pub_key,
+            &config.operator,
+            &config.admin,
+        );
 
         if !(0..=BASIS_POINTS).contains(&config.fee_rate_bps)
             || !(0..=BASIS_POINTS).contains(&config.fee_single_bps)
@@ -350,7 +374,7 @@ impl MintingContract {
         env.storage()
             .instance()
             .set(&DATA_KEY.operator, &config.operator);
-        // AC-038: store the operator's ed25519 public key for fiat-settlement proof verification.
+        // AC-038: store the partner's ed25519 attestation key for fiat-settlement proof verification.
         env.storage()
             .instance()
             .set(&DATA_KEY.operator_pub_key, &config.operator_pub_key);
@@ -1006,7 +1030,7 @@ impl MintingContract {
     /// This function enforces strict access control: only the operator (fintech partner) can call it.
     ///
     /// AC-038: Also requires a valid `FiatSettlementProof` — an ed25519 attestation signed by the
-    /// operator's registered off-chain key — proving that the corresponding fiat deposit was settled
+    /// fintech partner's registered attestation key (independent of the operator, W11-CAR-021) — proving that the corresponding fiat deposit was settled
     /// before any ACBU is minted.  A compromised Stellar operator key alone is insufficient; the
     /// attacker must also forge the ed25519 proof.
     pub fn mint_from_fiat(
@@ -1016,7 +1040,7 @@ impl MintingContract {
         currency: CurrencyCode,
         fiat_amount: i128,
         fintech_tx_id: SorobanString,
-        // AC-038: Cryptographic fiat-settlement attestation signed by the operator's ed25519 key.
+        // AC-038: Cryptographic fiat-settlement attestation signed by the partner's ed25519 key.
         proof: FiatSettlementProof,
     ) -> i128 {
         // Re-entrancy guard
@@ -1048,7 +1072,7 @@ impl MintingContract {
 
         // AC-038: Verify the fiat-settlement attestation.
         //
-        // The operator's ed25519 key must be registered (stored at init or via
+        // The partner's ed25519 attestation key must be registered (stored at init or via
         // `set_operator_pub_key`).  We hash the canonical commitment fields and
         // check the supplied signature against the stored public key.  A panicking
         // `ed25519_verify` maps directly to `InvalidFiatSettlementProof`.
@@ -1260,6 +1284,16 @@ impl MintingContract {
         if admin == new_operator {
             env.panic_with_error(MintingError::InvalidRoleSeparation);
         }
+        // W11-CAR-021: an operator whose account key is the partner key could
+        // both authorize and attest a mint, which is the single-key mint the
+        // partner signature exists to prevent.
+        if let Some(partner_key) = env
+            .storage()
+            .instance()
+            .get::<_, BytesN<32>>(&DATA_KEY.operator_pub_key)
+        {
+            assert_partner_key_independent(&env, &partner_key, &new_operator, &admin);
+        }
         let old_operator: Address = env
             .storage()
             .instance()
@@ -1276,19 +1310,64 @@ impl MintingContract {
         env.events().publish((symbol_short!("op_upd"),), event);
     }
 
-    /// AC-038: Register or rotate the operator's ed25519 public key (admin only).
+    /// AC-038 / W11-CAR-021: Rotate the fintech partner's ed25519 attestation key.
     ///
-    /// This key is used to verify `FiatSettlementProof` attestations inside
-    /// `mint_from_fiat`.  The key must be a 32-byte ed25519 public key.
-    /// Only the admin may update it; the function panics if paused.
-    pub fn set_operator_pub_key(env: Env, new_pub_key: BytesN<32>) {
+    /// Needs both the admin's auth and `consent`, an ed25519 signature by the
+    /// **current** partner key over [`partner_key_rotation_message`] for
+    /// `new_pub_key`. The admin alone can no longer replace the partner key, so a
+    /// compromised admin (or admin + operator) cannot install a key it controls
+    /// and then mint without a real partner attestation.
+    ///
+    /// The consent is bound to this contract and to the rotation nonce, so it
+    /// cannot be replayed on another deployment or used for a second rotation.
+    /// The new key must not be the ed25519 key of the operator or admin account
+    /// (`PartnerKeyNotIndependent`). Panics if paused.
+    pub fn set_operator_pub_key(env: Env, new_pub_key: BytesN<32>, consent: BytesN<64>) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
         Self::check_paused(&env);
+
+        let current_key: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.operator_pub_key)
+            .unwrap_or_else(|| env.panic_with_error(MintingError::OperatorPubKeyNotSet));
+        let nonce: u64 = env
+            .storage()
+            .instance()
+            .get(&DATA_KEY.partner_key_nonce)
+            .unwrap_or(0);
+
+        // Panics (host error) unless the current partner key signed this rotation.
+        let message = partner_key_rotation_message(&env, &new_pub_key, nonce);
+        env.crypto().ed25519_verify(&current_key, &message, &consent);
+
+        let operator: Address = Self::get_operator(env.clone());
+        assert_partner_key_independent(&env, &new_pub_key, &operator, &admin);
+
         env.storage()
             .instance()
             .set(&DATA_KEY.operator_pub_key, &new_pub_key);
+        env.storage()
+            .instance()
+            .set(&DATA_KEY.partner_key_nonce, &(nonce + 1));
         env.events().publish((symbol_short!("op_pk"),), new_pub_key);
+    }
+
+    /// W11-CAR-021: The rotation nonce the next `set_operator_pub_key` consent
+    /// must be signed over (number of rotations so far).
+    pub fn get_partner_key_rotation_nonce(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DATA_KEY.partner_key_nonce)
+            .unwrap_or(0)
+    }
+
+    /// W11-CAR-021: The exact bytes the current partner key signs to consent to
+    /// rotating to `new_pub_key` at `nonce`. Exposed so the partner can build the
+    /// consent off-chain from the same definition the contract checks.
+    pub fn get_partner_key_rotation_message(env: Env, new_pub_key: BytesN<32>, nonce: u64) -> Bytes {
+        partner_key_rotation_message(&env, &new_pub_key, nonce)
     }
 
     /// AC-038: Return the currently registered operator ed25519 public key.
@@ -1724,6 +1803,16 @@ impl MintingContract {
     pub fn transfer_admin(env: Env, new_admin: Address) {
         let admin: Address = env.storage().instance().get(&DATA_KEY.admin).unwrap();
         admin.require_auth();
+        // W11-CAR-021: an admin holding the partner key could appoint itself an
+        // operator account and attest its own mints.
+        if let Some(partner_key) = env
+            .storage()
+            .instance()
+            .get::<_, BytesN<32>>(&DATA_KEY.operator_pub_key)
+        {
+            let operator: Address = Self::get_operator(env.clone());
+            assert_partner_key_independent(&env, &partner_key, &operator, &new_admin);
+        }
         let eligible_at = env.ledger().timestamp() + ADMIN_TIMELOCK_SECONDS;
         env.storage()
             .instance()
@@ -1899,10 +1988,58 @@ impl MintingContract {
 
 // Helper functions for proof tracking and validation
 
+/// Domain tag for partner-key rotation consents (W11-CAR-021).
+const PARTNER_KEY_ROTATION_DOMAIN: &[u8] = b"ACBU partner attestation key rotation v1";
+
+/// sha256( domain ++ XDR(this contract) ++ new_pub_key ++ XDR(nonce) )
+fn partner_key_rotation_message(env: &Env, new_pub_key: &BytesN<32>, nonce: u64) -> Bytes {
+    let mut preimage = Bytes::from_slice(env, PARTNER_KEY_ROTATION_DOMAIN);
+    preimage.append(&env.current_contract_address().to_xdr(env));
+    preimage.append(&Bytes::from_slice(env, &new_pub_key.to_array()));
+    preimage.append(&nonce.to_xdr(env));
+    let digest = env.crypto().sha256(&preimage);
+    Bytes::from_slice(env, &digest.to_array())
+}
+
+/// The ed25519 public key behind a `G…` account address, or `None` for a
+/// contract address. `Address::to_xdr` is an `ScVal::Address`:
+/// 4 bytes ScVal tag, 4 bytes ScAddress tag (0 = account), 4 bytes PublicKey
+/// tag (0 = ed25519), then the 32-byte key.
+fn account_ed25519_key(env: &Env, address: &Address) -> Option<BytesN<32>> {
+    let xdr = address.clone().to_xdr(env);
+    if xdr.len() != 44 {
+        return None;
+    }
+    let mut buf = [0u8; 44];
+    xdr.copy_into_slice(&mut buf);
+    if buf[4..12] != [0u8; 8] {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&buf[12..44]);
+    Some(BytesN::from_array(env, &key))
+}
+
+/// W11-CAR-021: the partner's attestation key must not be the ed25519 key of
+/// the operator or admin account. Otherwise one Stellar key could both
+/// authorize a mint and sign the "independent" settlement proof for it.
+fn assert_partner_key_independent(
+    env: &Env,
+    partner_key: &BytesN<32>,
+    operator: &Address,
+    admin: &Address,
+) {
+    for account in [operator, admin] {
+        if account_ed25519_key(env, account).as_ref() == Some(partner_key) {
+            env.panic_with_error(MintingError::PartnerKeyNotIndependent);
+        }
+    }
+}
+
 /// AC-038: Verify a `FiatSettlementProof` attestation.
 ///
 /// Constructs the canonical commitment message from the mint call's parameters
-/// and verifies the ed25519 signature against the operator's registered public
+/// and verifies the ed25519 signature against the partner's registered public
 /// key stored in instance storage.
 ///
 /// Message layout (XDR-serialised, concatenated, then SHA-256 hashed):
@@ -1922,7 +2059,7 @@ fn verify_fiat_settlement_proof(
     fiat_amount: i128,
     currency: &CurrencyCode,
 ) {
-    // Retrieve the registered operator public key.
+    // Retrieve the registered partner attestation key.
     let stored_pub_key: BytesN<32> = env
         .storage()
         .instance()

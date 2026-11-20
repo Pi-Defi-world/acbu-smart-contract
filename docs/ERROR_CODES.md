@@ -167,8 +167,9 @@ Clients map `invoke_contract` / simulation failures using the contract error `u3
 | 5029 | `InvalidCircuitPeer` | The circuit-breaker peer list is invalid (too long, duplicate, or self). |
 | 5030 | `BurningContractNotSet` | `record_burn` called while no burning contract is linked (AC-005). |
 | 5031 | `InvalidBurnAmount` | `record_burn` called with a non-positive amount (AC-005). |
-| 5032 | `InvalidFiatSettlementProof` | AC-038: The ed25519 attestation signature on the fiat-settlement proof does not verify against the stored operator public key.  This means the mint was not backed by a cryptographically attested off-chain settlement. |
+| 5032 | `InvalidFiatSettlementProof` | AC-038: The ed25519 attestation signature on the fiat-settlement proof does not verify against the stored fintech-partner attestation key.  This means the mint was not backed by a cryptographically attested off-chain settlement. |
 | 5033 | `OperatorPubKeyNotSet` | AC-038: No operator ed25519 public key has been registered; call `set_operator_pub_key` (admin only) before using `mint_from_fiat`. |
+| 5034 | `PartnerKeyNotIndependent` | W11-CAR-021: The fintech-partner attestation key is the ed25519 key behind the operator or admin account, so that one Stellar key could attest its own mints. Raised by `initialize`, `set_operator`, `set_operator_pub_key` and `transfer_admin`. |
 | 5999 | `Unknown` | unknown minting error |
 
 ## `acbu_oracle` - `OracleError`
