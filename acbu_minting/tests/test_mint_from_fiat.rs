@@ -214,10 +214,10 @@ fn make_fiat_proof(
     currency: &CurrencyCode,
 ) -> FiatSettlementProof {
     let mut preimage = Bytes::new(env);
-    preimage.append(&fintech_tx_id.to_xdr(env));
+    preimage.append(&fintech_tx_id.clone().to_xdr(env));
     preimage.append(&recipient.to_xdr(env));
     preimage.append(&fiat_amount.to_xdr(env));
-    preimage.append(&currency.to_xdr(env));
+    preimage.append(&currency.clone().to_xdr(env));
     preimage.append(&env.ledger().timestamp().to_xdr(env));
 
     let digest = env.crypto().sha256(&preimage);
@@ -859,4 +859,281 @@ fn test_mint_from_fiat_rejects_contract_recipient() {
         &fintech_tx_id,
         &proof,
     );
+}
+
+// --- W11-CAR-021: independent fintech-partner attestation key ---
+
+/// A `G…` account address whose ed25519 key is `key`.
+/// `ScVal::Address(ScAddress::Account(PublicKeyTypeEd25519(key)))` as XDR.
+fn account_for_key(env: &Env, key: &[u8; 32]) -> Address {
+    use soroban_sdk::xdr::FromXdr;
+    let mut raw = [0u8; 44];
+    raw[3] = 18; // SCV_ADDRESS; the ScAddress and PublicKey tags stay 0
+    raw[12..].copy_from_slice(key);
+    Address::from_xdr(env, &Bytes::from_slice(env, &raw)).unwrap()
+}
+
+/// Off-chain rebuild of the rotation consent the partner signs:
+/// sha256("ACBU partner attestation key rotation v1" ++ XDR(contract) ++ new_key ++ XDR(nonce))
+fn rotation_message(env: &Env, contract: &Address, new_key: &[u8; 32], nonce: u64) -> std::vec::Vec<u8> {
+    let mut preimage = Bytes::from_slice(env, b"ACBU partner attestation key rotation v1");
+    preimage.append(&contract.clone().to_xdr(env));
+    preimage.append(&Bytes::from_slice(env, new_key));
+    preimage.append(&nonce.to_xdr(env));
+    env.crypto().sha256(&preimage).to_array().to_vec()
+}
+
+fn consent(env: &Env, signer: &SigningKey, contract: &Address, new_key: &[u8; 32], nonce: u64) -> BytesN<64> {
+    let sig = signer.sign(&rotation_message(env, contract, new_key, nonce));
+    BytesN::from_array(env, &sig.to_bytes())
+}
+
+fn pk(env: &Env, key: &SigningKey) -> BytesN<32> {
+    BytesN::from_array(env, &key.verifying_key().to_bytes())
+}
+
+/// Sets up an initialized contract with a seeded oracle and an operator, and
+/// returns (client, admin, operator, partner signing key, acbu token).
+fn partner_setup(env: &Env) -> (MintingContractClient<'_>, Address, Address, SigningKey, Address) {
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(env);
+    let stoken_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    oracle_mock_client(env, &oracle).seed_stoken(&stoken_id);
+    let partner = init_mint_client(
+        env, &client, &admin, &oracle, &reserve_tracker, &acbu_token, &usdc_token, &admin, &admin, 50, 100,
+    );
+    let operator = Address::generate(env);
+    client.set_operator(&operator);
+    (client, admin, operator, partner, acbu_token)
+}
+
+fn fiat_mint(
+    env: &Env,
+    client: &MintingContractClient,
+    operator: &Address,
+    signer: &SigningKey,
+    tx: &str,
+) -> i128 {
+    let recipient = account(env);
+    let currency = CurrencyCode::new(env, "NGN");
+    let amount = 50 * DECIMALS;
+    let tx_id = SorobanString::from_str(env, tx);
+    let proof = make_fiat_proof(env, signer, &tx_id, &recipient, amount, &currency);
+    client.mint_from_fiat(operator, &recipient, &currency, &amount, &tx_id, &proof)
+}
+
+/// The attack from the finding: a compromised admin installs a key it holds
+/// and mints with it. Before this change `set_operator_pub_key(attacker)` was
+/// enough; now the current partner key has to consent, so it is refused.
+#[test]
+#[should_panic(expected = "Error(Crypto, InvalidInput)")]
+fn admin_alone_cannot_replace_the_partner_key() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _operator, _partner, _) = partner_setup(&env);
+
+    let attacker = SigningKey::generate(&mut OsRng);
+    let attacker_pk = attacker.verifying_key().to_bytes();
+    // The attacker can sign "consent" with its own key, but not with the partner's.
+    let forged = consent(&env, &attacker, &client.address, &attacker_pk, 0);
+    client.set_operator_pub_key(&BytesN::from_array(&env, &attacker_pk), &forged);
+}
+
+/// Without a successful rotation, a proof signed by anyone but the partner
+/// still cannot mint, even with full admin and operator auth.
+#[test]
+#[should_panic(expected = "#5032")]
+fn admin_and_operator_cannot_mint_without_the_partner_signature() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, operator, _partner, _) = partner_setup(&env);
+    let attacker = SigningKey::generate(&mut OsRng);
+    fiat_mint(&env, &client, &operator, &attacker, "attacker_tx_1");
+}
+
+#[test]
+fn partner_consented_rotation_moves_minting_to_the_new_key() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, operator, partner, _) = partner_setup(&env);
+    assert_eq!(client.get_partner_key_rotation_nonce(), 0);
+
+    let next = SigningKey::generate(&mut OsRng);
+    let next_pk = next.verifying_key().to_bytes();
+    // The contract exposes the exact message, and it matches the off-chain rebuild.
+    assert_eq!(
+        client
+            .get_partner_key_rotation_message(&BytesN::from_array(&env, &next_pk), &0)
+            .to_buffer::<32>()
+            .as_slice(),
+        rotation_message(&env, &client.address, &next_pk, 0).as_slice()
+    );
+
+    let sig = consent(&env, &partner, &client.address, &next_pk, 0);
+    client.set_operator_pub_key(&pk(&env, &next), &sig);
+
+    assert_eq!(client.get_operator_pub_key(), pk(&env, &next));
+    assert_eq!(client.get_partner_key_rotation_nonce(), 1);
+    assert!(fiat_mint(&env, &client, &operator, &next, "after_rotation_1") > 0);
+}
+
+#[test]
+#[should_panic(expected = "#5032")]
+fn the_old_partner_key_stops_attesting_after_rotation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, operator, partner, _) = partner_setup(&env);
+    let next = SigningKey::generate(&mut OsRng);
+    let next_pk = next.verifying_key().to_bytes();
+    client.set_operator_pub_key(&pk(&env, &next), &consent(&env, &partner, &client.address, &next_pk, 0));
+    fiat_mint(&env, &client, &operator, &partner, "old_key_tx_1");
+}
+
+/// A consent is good for one rotation: replaying it after the nonce moved fails.
+#[test]
+#[should_panic(expected = "Error(Crypto, InvalidInput)")]
+fn a_rotation_consent_cannot_be_replayed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _operator, partner, _) = partner_setup(&env);
+
+    let a = SigningKey::generate(&mut OsRng);
+    let a_pk = a.verifying_key().to_bytes();
+    let to_a = consent(&env, &partner, &client.address, &a_pk, 0);
+    client.set_operator_pub_key(&pk(&env, &a), &to_a);
+
+    // Rotate back to the partner key with the partner-signed consent for nonce 1...
+    let partner_pk = partner.verifying_key().to_bytes();
+    client.set_operator_pub_key(&pk(&env, &partner), &consent(&env, &a, &client.address, &partner_pk, 1));
+    // ...then try the old nonce-0 consent again.
+    client.set_operator_pub_key(&pk(&env, &a), &to_a);
+}
+
+/// A consent names its new key: it cannot install a different one.
+#[test]
+#[should_panic(expected = "Error(Crypto, InvalidInput)")]
+fn a_rotation_consent_only_covers_the_key_it_names() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _operator, partner, _) = partner_setup(&env);
+    let intended = SigningKey::generate(&mut OsRng).verifying_key().to_bytes();
+    let other = SigningKey::generate(&mut OsRng).verifying_key().to_bytes();
+    let sig = consent(&env, &partner, &client.address, &intended, 0);
+    client.set_operator_pub_key(&BytesN::from_array(&env, &other), &sig);
+}
+
+/// A consent is bound to one contract instance.
+#[test]
+#[should_panic(expected = "Error(Crypto, InvalidInput)")]
+fn a_rotation_consent_for_another_contract_is_refused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _operator, partner, _) = partner_setup(&env);
+    let next = SigningKey::generate(&mut OsRng).verifying_key().to_bytes();
+    let elsewhere = Address::generate(&env);
+    let sig = consent(&env, &partner, &elsewhere, &next, 0);
+    client.set_operator_pub_key(&BytesN::from_array(&env, &next), &sig);
+}
+
+#[test]
+#[should_panic(expected = "#5034")]
+fn initialize_refuses_a_partner_key_that_is_the_operator_account_key() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    let shared_key = SigningKey::generate(&mut OsRng);
+    let config = acbu_minting::MintingConfig {
+        admin: admin.clone(),
+        oracle,
+        reserve_tracker,
+        acbu_token,
+        usdc_token,
+        vault: admin.clone(),
+        treasury: admin,
+        fee_rate_bps: 50,
+        fee_single_bps: 100,
+        operator: account_for_key(&env, &shared_key.verifying_key().to_bytes()),
+        operator_pub_key: pk(&env, &shared_key),
+    };
+    client.initialize(&config);
+}
+
+#[test]
+#[should_panic(expected = "#5034")]
+fn initialize_refuses_a_partner_key_that_is_the_admin_account_key() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, oracle, reserve_tracker, acbu_token, usdc_token, client) = setup_test(&env);
+    let shared_key = SigningKey::generate(&mut OsRng);
+    let admin = account_for_key(&env, &shared_key.verifying_key().to_bytes());
+    let config = acbu_minting::MintingConfig {
+        admin: admin.clone(),
+        oracle,
+        reserve_tracker,
+        acbu_token,
+        usdc_token,
+        vault: admin.clone(),
+        treasury: admin,
+        fee_rate_bps: 50,
+        fee_single_bps: 100,
+        operator: Address::generate(&env),
+        operator_pub_key: pk(&env, &shared_key),
+    };
+    client.initialize(&config);
+}
+
+/// Boundary: an operator that is a `G…` account with a *different* key is
+/// fine, so the independence check only refuses the same key.
+#[test]
+fn an_account_operator_with_its_own_key_can_mint() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _operator, partner, _) = partner_setup(&env);
+    let op_key = SigningKey::generate(&mut OsRng).verifying_key().to_bytes();
+    let account_operator = account_for_key(&env, &op_key);
+    client.set_operator(&account_operator);
+    assert!(fiat_mint(&env, &client, &account_operator, &partner, "account_op_tx_1") > 0);
+}
+
+#[test]
+#[should_panic(expected = "#5034")]
+fn set_operator_refuses_the_partner_key_account() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _operator, partner, _) = partner_setup(&env);
+    client.set_operator(&account_for_key(&env, &partner.verifying_key().to_bytes()));
+}
+
+#[test]
+#[should_panic(expected = "#5034")]
+fn rotation_refuses_the_operator_account_key_even_with_consent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _operator, partner, _) = partner_setup(&env);
+    let op = SigningKey::generate(&mut OsRng);
+    let op_pk = op.verifying_key().to_bytes();
+    client.set_operator(&account_for_key(&env, &op_pk));
+    let sig = consent(&env, &partner, &client.address, &op_pk, 0);
+    client.set_operator_pub_key(&pk(&env, &op), &sig);
+}
+
+#[test]
+#[should_panic(expected = "#5034")]
+fn transfer_admin_refuses_the_partner_key_account() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _operator, partner, _) = partner_setup(&env);
+    client.transfer_admin(&account_for_key(&env, &partner.verifying_key().to_bytes()));
+}
+
+/// The rotation still needs the admin's own auth.
+#[test]
+#[should_panic(expected = "Error(Auth, InvalidAction)")]
+fn rotation_still_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _operator, partner, _) = partner_setup(&env);
+    let next = SigningKey::generate(&mut OsRng).verifying_key().to_bytes();
+    let sig = consent(&env, &partner, &client.address, &next, 0);
+    env.set_auths(&[]);
+    client.set_operator_pub_key(&BytesN::from_array(&env, &next), &sig);
 }
